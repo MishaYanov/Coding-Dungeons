@@ -35,6 +35,68 @@ const attempt = {
   code: 'submitted Rust', verdict: 'pass', output: 'completed test report', passed: 3, failed: 0,
 };
 
+test('Workbench examples cannot clear a creature and replayed submissions award Forge once', async t => {
+  const file = await fixture(t);
+  const store = await openStore({ file });
+  const second = await openStore({ file });
+  try {
+    const hero = store.createHero({ id: randomUUID(), name: 'Unaided' });
+    store.setWorkbenchMode(hero.id, 1, 'hard');
+    assert.deepEqual(second.workbenchMode(hero.id, 1), { mode: 'hard', assisted: false });
+    assert.equal(second.revealWorkbenchAid(hero.id, 1), false);
+    const example = { ...attempt, purpose: 'examples', mode: 'hard', runId: randomUUID() };
+    assert.deepEqual(store.recordAttempt(hero.id, example), { newClear: false, hardClear: false });
+    assert.deepEqual(second.progress(hero.id).levels, []);
+    const full = { ...example, purpose: 'submit', runId: randomUUID() };
+    assert.deepEqual(second.recordAttempt(hero.id, full), { newClear: true, hardClear: true });
+    assert.deepEqual(store.recordAttempt(hero.id, full), { newClear: false, hardClear: true });
+    assert.deepEqual(store.recordAttempt(hero.id, { ...full, runId: randomUUID() }), { newClear: false, hardClear: true });
+    assert.equal(second.progress(hero.id).levels[0].forge, true);
+    assert.equal(second.progress(hero.id).attempts.length, 2);
+    assert.deepEqual(second.workbenchState(hero.id).hardClears, [1]);
+  } finally {
+    second.close();
+    store.close();
+  }
+});
+
+test('viewing a hint makes a later Hard win ineligible for a Hard Clear badge', async t => {
+  const store = await openStore({ file: await fixture(t) });
+  try {
+    const hero = store.createHero({ id: randomUUID(), name: 'Apprentice' });
+    assert.deepEqual(store.workbenchMode(hero.id, 1), { mode: 'guided', assisted: false });
+    assert.equal(store.revealWorkbenchAid(hero.id, 1), true);
+    store.setWorkbenchMode(hero.id, 1, 'hard');
+    assert.deepEqual(store.workbenchMode(hero.id, 1), { mode: 'hard', assisted: true });
+    assert.deepEqual(store.recordAttempt(hero.id, { ...attempt, mode: 'hard', runId: randomUUID() }),
+      { newClear: true, hardClear: false });
+    assert.equal(store.progress(hero.id).levels[0].forge, true);
+    assert.deepEqual(store.workbenchState(hero.id).hardClears, []);
+  } finally {
+    store.close();
+  }
+});
+
+test('written assessment is attached only to the current answer revision', async t => {
+  const store = await openStore({ file: await fixture(t) });
+  try {
+    const hero = store.createHero({ id: randomUUID(), name: 'Archivist' });
+    const first = store.startAssessment(hero.id, 25, 'training-1-3', 'first answer');
+    const second = store.startAssessment(hero.id, 25, 'training-1-3', 'current answer');
+    const assessment = { status: 'scored', score: 60, rubricVersion: 1 };
+    assert.equal(store.completeAssessment(hero.id, 25, 'training-1-3', first, assessment), false);
+    assert.equal(store.completeAssessment(hero.id, 25, 'training-1-3', second, assessment), true);
+    assert.deepEqual(store.progress(hero.id).responses[0].assessment, assessment);
+    assert.equal(store.progress(hero.id).responses[0].value, 'current answer');
+    assert.equal(store.progress(hero.id).responses[0].correct, null);
+    store.saveResponse(hero.id, 25, 'training-1-3', 'edited draft', 'Saved');
+    assert.equal(store.completeAssessment(hero.id, 25, 'training-1-3', second, assessment), false);
+    assert.equal(store.progress(hero.id).responses[0].assessment, undefined);
+  } finally {
+    store.close();
+  }
+});
+
 test('separate SQLite connections preserve partial upserts and isolate hero records', async t => {
   const file = await fixture(t);
   const store = await openStore({ file });
