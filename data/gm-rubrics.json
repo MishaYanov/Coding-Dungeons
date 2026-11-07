@@ -1,0 +1,176 @@
+[
+  {
+    "worldId": "rust",
+    "promptId": "training-1-1",
+    "question": "A message parser returns three borrowed strings. A queue must retain those strings after the original network buffer is reused. Describe two ownership designs and the memory cost each implies.",
+    "reference": "Copy just the selected strings into queue-owned values, paying for the bytes retained while allowing immediate reuse of the input buffer. Alternatively, move the backing buffer into the queue and retain ranges into it. An Arc can share that backing allocation. That avoids per-field copies but retains the complete backing buffer and requires a different buffer for new input.",
+    "criteria": [
+      { "id": "own-selected-fields", "points": 30, "claim": "Copy the selected fields into independently owned values so the original buffer can be reused." },
+      { "id": "selected-bytes-cost", "points": 30, "claim": "The copies allocate and retain space proportional to the selected data." },
+      { "id": "retain-backing-store", "points": 25, "claim": "Move or share ownership of the original backing buffer and store ranges or an owning equivalent." },
+      { "id": "whole-buffer-cost", "points": 15, "claim": "This retains the whole backing allocation without copying each field, so it cannot immediately reuse those same bytes for new input." }
+    ]
+  },
+  {
+    "worldId": "rust",
+    "promptId": "training-1-3",
+    "question": "A method fn current(&self) -> &Entry is followed by a call to fn refresh(&mut self). Explain why the second call can compile when the result of current is no longer used, and why preallocating storage does not generally change the answer when it is used afterward.",
+    "reference": "The shared borrow can end after the returned entry's last relevant use. If the entry is used after refresh, its shared borrow overlaps the exclusive borrow required by &mut self. Reserving capacity does not narrow that method's exclusive access contract.",
+    "criteria": [
+      { "id": "last-use", "points": 20, "claim": "The shared borrow may end after the returned entry's last relevant use." },
+      { "id": "exclusive-overlap", "points": 40, "claim": "Using the entry after refresh overlaps the shared borrow with the exclusive borrow required by &mut self." },
+      { "id": "capacity-contract", "points": 40, "claim": "Preallocation does not remove or narrow the exclusive-access contract of refresh." }
+    ]
+  },
+  {
+    "worldId": "rust",
+    "promptId": "training-2-1",
+    "question": "A struct contains two String fields and has no custom destructor. One field moves into a function. Which remaining operations on the original variable are legal, and what will cleanup destroy?",
+    "reference": "You can still use or move the field left behind, but you cannot use the partially moved struct as a whole value. The original scope drops initialized fields still there. The new owner is responsible for dropping the moved string.",
+    "criteria": [
+      { "id": "remaining-field", "points": 30, "claim": "The unmoved field remains accessible and can be moved independently." },
+      { "id": "whole-value", "points": 30, "claim": "The original struct is partially moved and cannot be used as a whole value until repaired." },
+      { "id": "cleanup", "points": 40, "claim": "Cleanup drops fields still owned by the original value, and the new owner handles the moved field." }
+    ]
+  },
+  {
+    "worldId": "rust",
+    "promptId": "training-4-3",
+    "question": "A task API requires T: 'static. Does passing an owned String require leaking it? Explain why moving a reference to a local string is a different operation.",
+    "reference": "An owned String satisfies T: 'static without leaking. It carries no short-lived borrow, and the task can drop it normally. Moving a reference transfers only the borrowed handle. The referent is still local and may go away before the task completes.",
+    "criteria": [
+      { "id": "no-leak", "points": 30, "claim": "An owned String can satisfy the bound and be dropped normally without leaking." },
+      { "id": "ownership", "points": 35, "claim": "The owned String transfers ownership and carries no borrow of short-lived external storage." },
+      { "id": "local-reference", "points": 35, "claim": "Moving a reference moves only the handle and does not extend the lifetime of its local referent." }
+    ]
+  },
+  {
+    "worldId": "javascript",
+    "promptId": "side-1",
+    "question": "Call makeBadge twice with the same name. Increment the visits property on the first result and check that the second stays at zero.",
+    "reference": "Each call creates its own object. With a starting count of zero, incrementing the first badge changes its visits to one. The second object's count remains zero, even when the names match.",
+    "criteria": [
+      { "id": "fresh-object", "points": 40, "claim": "The two calls return separate objects even when given the same name." },
+      { "id": "first-increment", "points": 30, "claim": "The first object's visits becomes one after incrementing from zero." },
+      { "id": "second-zero", "points": 30, "claim": "The second object's visits remains zero." }
+    ]
+  },
+  {
+    "worldId": "javascript",
+    "promptId": "side-2",
+    "question": "Try the string '0x10'. If only decimal digits are allowed, add a digit-only check before Number and describe the changed contract.",
+    "reference": "Number('0x10') is 16, so Number alone accepts hexadecimal syntax. Validate that the input consists only of one or more decimal digits, for example with /^[0-9]+$/, before conversion. The decimal-only contract rejects 0x10. Any existing range and safety checks still apply to the converted number.",
+    "criteria": [
+      { "id": "hex-conversion", "points": 35, "claim": "Number accepts 0x10 as hexadecimal and produces 16." },
+      { "id": "digits-first", "points": 35, "claim": "Check the complete input for one or more decimal digits before conversion." },
+      { "id": "hex-rejected", "points": 30, "claim": "The new decimal-only contract rejects 0x10 or other non-decimal syntax." }
+    ]
+  },
+  {
+    "worldId": "javascript",
+    "promptId": "side-3",
+    "question": "Add a separate lookup that returns the first matching record or null. Explain why it should stop at the first match.",
+    "reference": "Visit records in order. Return immediately when the predicate succeeds and return null after exhausting the collection. The first match satisfies the contract, so scanning further adds work and could accidentally choose a later match.",
+    "criteria": [
+      { "id": "first-match", "points": 35, "claim": "Traverse in order and return the first record whose predicate matches." },
+      { "id": "missing-null", "points": 30, "claim": "Return null if no record matches." },
+      { "id": "early-stop", "points": 35, "claim": "Stopping preserves the first-match contract and avoids unnecessary later checks." }
+    ]
+  },
+  {
+    "worldId": "javascript",
+    "promptId": "side-8",
+    "question": "Return the next function by itself and invoke it as a callback. Explain how it still reaches its own count.",
+    "reference": "The returned function is a closure over the count binding in its creation scope. Invoking it later or passing it as a callback does not change that lexical environment. Each creation of the counter gives its function a separate count binding.",
+    "criteria": [
+      { "id": "closure", "points": 45, "claim": "The returned function closes over the count binding in its lexical creation scope." },
+      { "id": "later-call", "points": 30, "claim": "Passing it as a callback and calling it later preserves access to that binding." },
+      { "id": "separate-counts", "points": 25, "claim": "Each counter creation gives the returned function a separate count binding." }
+    ]
+  },
+  {
+    "worldId": "typescript",
+    "promptId": "side-2",
+    "question": "Design a grouped report whose results can be read but cannot be edited through the type returned to a consumer.",
+    "reference": "Expose read-only properties or a read-only map for group access, and read-only arrays and read-only result shapes wherever the type permits nested writes. That prevents mutations through the exposed TypeScript view. It does not freeze the underlying JavaScript object or prevent writes through other mutable aliases.",
+    "criteria": [
+      { "id": "readonly-groups", "points": 45, "claim": "Give consumers a readable but read-only view of the group map or group properties." },
+      { "id": "readonly-contents", "points": 55, "claim": "Use read-only arrays and result types for nested objects or equivalent interfaces that do not permit mutation through the view." }
+    ]
+  },
+  {
+    "worldId": "typescript",
+    "promptId": "side-4",
+    "question": "Add a test callback that throws on its second call. Explain what the caller observes and whether the partial result ever escapes.",
+    "reference": "With no catch inside the operation, the second callback's exception propagates to the caller. The function does not return the partial result. Any side effects already performed by a callback can still be observable.",
+    "criteria": [
+      { "id": "throw-propagates", "points": 50, "claim": "The exception from the second callback propagates to the caller." },
+      { "id": "no-partial-return", "points": 50, "claim": "The failed call does not return the partial result it was constructing." }
+    ]
+  },
+  {
+    "worldId": "typescript",
+    "promptId": "side-6",
+    "question": "Preserve a safe diagnostic string on the offline result without assuming every rejected value is an Error.",
+    "reference": "Treat the caught value as unknown. Narrow to Error before reading its message. Handle another explicitly permitted form, such as a string, after checking its type, or use a safe generic message. Keep the diagnostic on the offline result.",
+    "criteria": [
+      { "id": "unknown-rejection", "points": 35, "claim": "Treat a rejection as unknown because thrown values need not be Error objects." },
+      { "id": "narrow-before-read", "points": 35, "claim": "Narrow the value before accessing an Error message or accepting another diagnostic type." },
+      { "id": "offline-diagnostic", "points": 30, "claim": "Include a safely obtained diagnostic or fallback string on the offline result." }
+    ]
+  },
+  {
+    "worldId": "typescript",
+    "promptId": "side-8",
+    "question": "Accept an allowlisted field name from a text input and explain where the runtime narrowing occurs before calling pluck.",
+    "reference": "Text input starts as a string. Check it against an allowlist of permitted keys at runtime and reject the rest. Use a type predicate or equivalent narrowing to give the validated value the allowed-key union, then pass it to pluck. A type assertion by itself would not validate the input.",
+    "criteria": [
+      { "id": "runtime-allowlist", "points": 40, "claim": "Check the untrusted string against an explicit allowlist at runtime." },
+      { "id": "reject-invalid", "points": 25, "claim": "Reject or handle invalid input without calling pluck with it." },
+      { "id": "validated-key", "points": 35, "claim": "Only the successfully narrowed or otherwise proven allowed key is passed to pluck." }
+    ]
+  },
+  {
+    "worldId": "go",
+    "promptId": "side-1",
+    "question": "Print len(\"é\") and the value from a range loop over the same string. Explain the difference.",
+    "reference": "len(\"é\") is 2 because Go counts bytes in strings. Ranging over it yields one rune with value U+00E9 (decimal 233), at byte index 0, because the loop decodes UTF-8.",
+    "criteria": [
+      { "id": "length-two", "points": 30, "claim": "len returns 2 for the composed character é in this string." },
+      { "id": "one-rune", "points": 35, "claim": "Range yields one rune, é or U+00E9 or 233." },
+      { "id": "bytes-vs-runes", "points": 35, "claim": "len counts bytes while range decodes UTF-8 into runes." }
+    ]
+  },
+  {
+    "worldId": "go",
+    "promptId": "side-2",
+    "question": "Compare parseCount(\"+2\") with parseCount(\"2.0\") and trace which inputs reach the domain check.",
+    "reference": "The integer conversion accepts +2 and yields 2, so it reaches the domain check. The conversion rejects 2.0 as invalid integer syntax. The domain check runs only after successful parsing.",
+    "criteria": [
+      { "id": "sign-accepted", "points": 35, "claim": "+2 parses as the integer 2 and reaches the domain check." },
+      { "id": "decimal-rejected", "points": 35, "claim": "2.0 fails integer conversion and does not reach the domain check." },
+      { "id": "parse-before-domain", "points": 30, "claim": "Integer syntax is checked before domain validity." }
+    ]
+  },
+  {
+    "worldId": "go",
+    "promptId": "side-4",
+    "question": "Append to stock[:1:1] and explain what the third index changes. Compare the result with editing front[0] before the append.",
+    "reference": "The full slice expression gives front length one and capacity one. A nonempty append exceeds that capacity, so the returned slice has a new backing array. Before that append, writing front[0] still changes stock[0] because the original slice shares the array.",
+    "criteria": [
+      { "id": "capacity-one", "points": 35, "claim": "The third index limits front's capacity to one, matching its length." },
+      { "id": "append-allocates", "points": 35, "claim": "Appending at least one value exceeds that capacity and allocates new backing storage." },
+      { "id": "before-append-shared", "points": 30, "claim": "Writing front[0] before appending still changes stock[0] through the shared backing array." }
+    ]
+  },
+  {
+    "worldId": "go",
+    "promptId": "side-6",
+    "question": "Copy a Hero with a slice of tags. Change a tag through the copy and trace why the original can see it.",
+    "reference": "Copying the struct copies the slice header, so both headers still refer to the same backing array. Assigning an element through one slice changes the shared array and is visible through the other. To change tags independently, copy the backing elements into separate storage.",
+    "criteria": [
+      { "id": "header-copy", "points": 45, "claim": "The struct copy copies the slice header, not the underlying elements." },
+      { "id": "shared-array", "points": 55, "claim": "Both slices share the backing array, so the original observes an element write through the copy." }
+    ]
+  }
+]
