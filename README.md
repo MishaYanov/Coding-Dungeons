@@ -45,4 +45,15 @@ The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go re
 
 On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1`. Stage the native toolchains using [the native runner build instructions](native/README.md). Then run `npm run desktop:make`. The setup is under `out/make/squirrel.windows/x64/`. Runtime files and generated installers stay outside Git.
 
+If the Squirrel maker reports `PathTooLongException`, point `TEMP`, `TMP`, and `SQUIRREL_TEMP` at a short writable folder in the build shell. To make the installer from an existing app package, run the maker with `--skip-package`.
+
+```powershell
+$installerTemp = Join-Path $env:USERPROFILE 'cdtmp'
+New-Item -ItemType Directory -Path $installerTemp -Force | Out-Null
+$env:TEMP = $installerTemp
+$env:TMP = $installerTemp
+$env:SQUIRREL_TEMP = $installerTemp
+.\node_modules\.bin\electron-forge.cmd make --skip-package --platform=win32 --arch=x64
+```
+
 See [book sources and rebuild instructions](docs/BOOK-BUILD.md), [the four-world audit](docs/BOOK-AUDIT.md), and [findings from the follow-up review](docs/REVIEW-FINDINGS.md).
