@@ -38,6 +38,7 @@ const selectedHeroKey = "ferrum-selected-hero-v1";
 
 function readLocal(key) {
   try {
+    if (window.codingDungeonsStorage) return window.codingDungeonsStorage.get(key);
     return localStorage.getItem(key);
   } catch {
     return null;
@@ -46,6 +47,7 @@ function readLocal(key) {
 
 function writeLocal(key, value) {
   try {
+    if (window.codingDungeonsStorage) return window.codingDungeonsStorage.set(key, value);
     localStorage.setItem(key, value);
     return true;
   } catch {
@@ -78,10 +80,11 @@ const state = {
   levels: new Map(),
   responses: new Map(),
   attempts: [],
+  workbenchModes: new Map(),
+  hardClears: new Set(),
   creature: null,
   specialEncounter: null,
   drafts: new Map(),
-  reveals: new Map(),
   runner: "",
   storage: "",
   progressError: "",
@@ -103,7 +106,7 @@ async function api(path, options = {}) {
     headers["X-Ferrum-Request"] = "1";
     headers["Content-Type"] = "application/json";
   }
-  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers$|grade$|encounters\/)/.test(path)) {
+  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/)/.test(path)) {
     const hero = options.hero || state.hero;
     if (!hero) throw new Error("Choose a hero to save your expedition.");
     headers["X-Ferrum-Hero"] = hero.id;
@@ -114,6 +117,7 @@ async function api(path, options = {}) {
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     credentials: "same-origin",
     cache: "no-store",
+    signal: options.signal,
   });
   if (response.status === 204) return {};
   let data;
@@ -206,6 +210,8 @@ function applyProgress(progress) {
     responseKey(response.page, response.promptId), response,
   ]));
   state.attempts = list(progress.attempts);
+  state.workbenchModes = new Map(list(progress.workbench?.modes).map((mode) => [mode.level, mode]));
+  state.hardClears = new Set(list(progress.workbench?.hardClears));
   $("header-callsign").textContent = state.profile.callsign;
   $("open-profile").title = `Edit ${state.profile.callsign}`;
 }
@@ -231,7 +237,7 @@ async function refreshProgress({ animateForgeLevel = null } = {}) {
 
 function renderRunnerStatus() {
   const pill = $("runner-status");
-  if (state.world.id !== "rust") {
+  if (!list(state.campaign.exercises).length && state.world.id !== "rust") {
     pill.dataset.state = "ready";
     pill.lastElementChild.textContent = "Guided practice";
     pill.title = "Save your code and check it against the encounter debrief";
@@ -239,9 +245,13 @@ function renderRunnerStatus() {
   }
   const available = state.runner.toLowerCase() === "available";
   pill.dataset.state = available ? "ready" : state.runner ? "limited" : "unknown";
-  pill.lastElementChild.textContent = available ? "Rust runner ready"
-    : state.runner ? "Rust runner offline" : "Runner status unknown";
-  pill.title = [state.storage, state.runner && `Rust runner ${state.runner}`].filter(Boolean).join(" · ");
+  pill.lastElementChild.textContent = available ? `${state.world.name} runner ready`
+    : state.runner ? `${state.world.name} runner offline` : "Runner status unknown";
+  pill.title = [state.storage, state.runner && `${state.world.name} runner ${state.runner}`].filter(Boolean).join(" · ");
+}
+
+function hardMode(level) {
+  return state.workbenchModes.get(Number(level))?.mode === "hard";
 }
 
 function hashPage() {
@@ -478,6 +488,33 @@ function answerFeedback(container, response, data, prompt) {
     container.hidden = true;
     return;
   }
+  if (prompt?.assessment) {
+    const assessment = response.assessment;
+    const scored = assessment?.status === "scored" && Number.isInteger(assessment.score);
+    container.dataset.verdict = scored ? "correct" : "saved";
+    container.append(make("strong", "feedback-heading", scored ? `${assessment.score}% of rubric points verified` : "Response saved"));
+    if (text(assessment?.feedback)) container.append(make("p", "", assessment.feedback));
+    if (!hardMode(data.level) || assessment?.score === 100) {
+      const hero = state.hero;
+      const reveal = button("Show example answer", "button button-quiet");
+      reveal.addEventListener("click", async () => {
+        reveal.disabled = true;
+        try {
+          const result = await api("/api/answers/reveal", {hero, method:"POST", body:{page:data.page, promptId:prompt.id}});
+          if (hero === state.hero && container.isConnected && (!hardMode(data.level) || assessment?.score === 100)) {
+            reveal.replaceWith(make("p", "example-answer", text(result.text)));
+          }
+        } catch (error) {
+          if (hero === state.hero && container.isConnected) toast(error.message);
+        } finally {
+          reveal.disabled = false;
+        }
+      });
+      container.append(reveal);
+    }
+    container.hidden = false;
+    return;
+  }
   const correct = response.correct == null ? null : enabled(response.correct);
   container.dataset.verdict = correct === null ? "saved" : correct ? "correct" : "incorrect";
   container.append(make("strong", "feedback-heading", correct === null ? "Response saved" : correct ? "Correct" : "Revisit this choice"));
@@ -507,11 +544,31 @@ function testFeedback(container, result, data) {
   const recorded = testRecorded(result);
   const verdict = text(result.verdict).replaceAll("_", " ").replaceAll("-", " ");
   container.dataset.verdict = passed ? "correct" : recorded ? "failed" : "saved";
-  container.append(make("strong", "feedback-heading", passed ? "Tests passed" : !recorded ? "Code draft saved"
+  container.append(make("strong", "feedback-heading", passed ? (result.purpose === "examples" ? "Examples passed" : "Tests passed") : !recorded ? "Code draft saved"
     : verdict ? `Runner result · ${verdict}` : "Tests did not pass"));
   if (recorded && typeof result.passed === "number" && typeof result.failed === "number") {
     container.append(make("p", "", `${result.passed} passed · ${result.failed} failed`));
   }
+  const timings = [Number.isFinite(result.compileMs) ? `Compile and check ${result.compileMs} ms` : "",
+    Number.isFinite(result.runtimeMs) ? `Test runtime ${result.runtimeMs} ms` : "",
+    Number.isFinite(result.elapsedMs) ? `Total runner time ${result.elapsedMs} ms` : ""].filter(Boolean);
+  if (timings.length) container.append(make("p", "fine-print", timings.join(" · ")));
+  if (list(result.groups).length) {
+    const wards = make("ul", "workbench-wards");
+    wards.setAttribute("aria-label", "Test wards");
+    for (const group of result.groups) {
+      const cleared = group.passed === group.required;
+      const ward = make("li", "", `${text(group.group)} · ${group.passed}/${group.required}${cleared ? " cleared" : ""}`);
+      ward.dataset.done = String(cleared);
+      wards.append(ward);
+    }
+    container.append(wards);
+  }
+  for (const item of list(result.cases)) {
+    const elapsed = Number.isFinite(item.durationMs) ? ` · ${item.durationMs} ms` : "";
+    container.append(make("p", "fine-print", `${text(item.id)} · ${text(item.status)}${elapsed}${item.message ? ` · ${item.message}` : ""}`));
+  }
+  if (result.hardClear) container.append(badge("Hard Clear", true));
   if (text(result.output)) {
     if (!recorded) container.append(make("p", "", result.output));
     else {
@@ -521,7 +578,7 @@ function testFeedback(container, result, data) {
       container.append(details);
     }
   }
-  if (passed) {
+  if (passed && result.purpose !== "examples" && !hardMode(data.level)) {
     const route = routeSuggestion(data, true);
     if (route) container.append(route);
   }
@@ -607,14 +664,24 @@ function renderPrompt(data, prompt, index) {
   }
 
   const actions = make("div", "form-actions");
-  const submit = button(runnable ? `Run ${state.world.name} tests` : codePrompt ? "Save code notes" : choicePrompt ? "Check answer" : "Submit response", "button button-primary");
+  const submit = button(runnable ? "Submit solution" : codePrompt ? "Save code notes" : choicePrompt ? "Check answer" : prompt.assessment ? "Ask the GM" : "Submit response", "button button-primary");
   submit.type = "submit";
   submit.disabled = runnable && state.runner.toLowerCase() === "unavailable";
   const status = make("span", "inline-status");
   status.setAttribute("aria-live", "polite");
   actions.append(submit);
   let saveCode;
+  let examples;
+  let cancel;
+  let activeRun;
   if (runnable) {
+    examples = button("Run Examples", "button button-quiet");
+    examples.type = "submit";
+    examples.disabled = submit.disabled;
+    cancel = button("Cancel run", "button button-quiet");
+    cancel.hidden = true;
+    cancel.addEventListener("click", () => activeRun?.abort());
+    actions.append(examples, cancel);
     saveCode = button("Save draft", "button button-quiet");
     saveCode.addEventListener("click", async () => {
       if (hero !== state.hero || state.switchingHero) return;
@@ -622,6 +689,7 @@ function renderPrompt(data, prompt, index) {
       const wasDisabled = submit.disabled;
       saveCode.disabled = true;
       submit.disabled = true;
+      examples.disabled = true;
       input.disabled = true;
       setInlineStatus(status, "Saving…");
       try {
@@ -638,6 +706,7 @@ function renderPrompt(data, prompt, index) {
         if (hero === state.hero) {
           saveCode.disabled = false;
           submit.disabled = wasDisabled;
+          examples.disabled = wasDisabled;
           input.disabled = false;
         }
       }
@@ -649,7 +718,7 @@ function renderPrompt(data, prompt, index) {
   if (codePrompt && !runnable) {
     form.append(make("p", "fine-print", "This is a code notebook. Your notes are saved for this page."));
   } else if (submit.disabled) {
-    form.append(make("p", "fine-print", "The local Rust runner is unavailable. You can still save your code draft."));
+    form.append(make("p", "fine-print", `The local ${state.world.name} runner is unavailable. You can still save your code draft.`));
   }
   const feedback = make("div", "prompt-feedback");
   feedback.setAttribute("aria-live", "polite");
@@ -684,22 +753,27 @@ function renderPrompt(data, prompt, index) {
     }
     persistDraft(key, value);
     submit.disabled = true;
+    if (examples) examples.disabled = true;
     if (saveCode) saveCode.disabled = true;
     input.disabled = true;
-    setInlineStatus(status, runnable ? "Compiling and testing…" : "Saving response…");
+    const purpose = examples && event.submitter === examples ? "examples" : "submit";
+    setInlineStatus(status, runnable ? "Compiling and testing…" : prompt.assessment ? "The GM is reviewing…" : "Saving response…");
     try {
       if (runnable) {
+        activeRun = new AbortController();
+        cancel.hidden = false;
         const result = await api("/api/grade", {
           method: "POST",
-          body: { page: data.page, promptId: prompt.id, exerciseId: prompt.exerciseId, code: value },
+          body: { page: data.page, promptId: prompt.id, exerciseId: prompt.exerciseId, code: value, purpose },
+          signal: activeRun.signal,
         });
         if (hero !== state.hero) return;
         clearDraft(key, value);
         testFeedback(feedback, result, data);
         const recorded = testRecorded(result);
-        setInlineStatus(status, recorded ? "Test run recorded" : "Draft saved. No result was recorded.");
+        setInlineStatus(status, purpose === "examples" && recorded ? "Practice run complete" : recorded ? "Test run recorded" : "Draft saved. No result was recorded.");
         try {
-          await refreshProgress({ animateForgeLevel: testPassed(result) ? Number(data.level) : null });
+          await refreshProgress({ animateForgeLevel: purpose === "submit" && testPassed(result) && result.newClear !== false ? Number(data.level) : null });
         } catch {
           if (recorded && hero === state.hero) setInlineStatus(status, "Test run recorded. Refresh the quest log to update your badges.");
         }
@@ -713,10 +787,13 @@ function renderPrompt(data, prompt, index) {
         setInlineStatus(status, "Saved to your quest log");
       }
     } catch (error) {
-      if (hero === state.hero) setInlineStatus(status, error.message, true);
+      if (hero === state.hero) setInlineStatus(status, activeRun?.signal.aborted ? "Run canceled. Your draft is kept." : error.message, !activeRun?.signal.aborted);
     } finally {
+      activeRun = null;
+      if (cancel) cancel.hidden = true;
       if (hero === state.hero) {
-        submit.disabled = false;
+        submit.disabled = runnable && state.runner.toLowerCase() === "unavailable";
+        if (examples) examples.disabled = submit.disabled;
         if (saveCode) saveCode.disabled = false;
         input.disabled = false;
       }
@@ -727,7 +804,7 @@ function renderPrompt(data, prompt, index) {
 
 function renderHints(data) {
   const hero = state.hero;
-  if (!pageNumber(data.level)) return null;
+  if (!pageNumber(data.level) || (hardMode(data.level) && !enabled(state.levels.get(Number(data.level))?.forge))) return null;
   const hints = data.hintKinds === undefined ? ["hint1", "hint2"] : list(data.hintKinds);
   const kinds = hints.filter((kind) => Object.hasOwn(hintLabels, kind));
   if (!kinds.length) return null;
@@ -752,14 +829,12 @@ function renderHints(data) {
       if (hide) return;
       control.setAttribute("aria-expanded", "true");
       panel.replaceChildren(make("p", "muted", "Opening the guide kit…"));
-      const key = `${data.level}:${kind}`;
       try {
-        if (!state.reveals.has(key)) {
-          const result = await api(`/api/levels/${data.level}/reveal/${kind}`);
-          if (hero !== state.hero) return;
-          state.reveals.set(key, text(result.text));
+        const result = await api(`/api/levels/${data.level}/reveal/${kind}`, {hero});
+        if (number === request && hero === state.hero && panel.isConnected && (!hardMode(data.level)
+            || enabled(state.levels.get(Number(data.level))?.forge))) {
+          panel.replaceChildren(make("p", "", text(result.text) || "No guide note is available here."));
         }
-        if (number === request) panel.replaceChildren(make("p", "", state.reveals.get(key) || "No guide note is available here."));
       } catch (error) {
         if (number === request && hero === state.hero) panel.replaceChildren(make("p", "", error.message));
       }
@@ -767,6 +842,43 @@ function renderHints(data) {
     actions.append(control);
   }
   card.append(actions, panel);
+  return card;
+}
+
+function renderDifficulty(data) {
+  const level = pageNumber(data.level);
+  const hero = state.hero;
+  if (!level || !list(data.prompts).some(prompt => prompt.exerciseId || prompt.assessment)) return null;
+  const card = section("Encounter difficulty");
+  const hard = hardMode(level);
+  const status = make("p", "fine-print", hard ? "Coaching is locked for this encounter." : "Hints and example answers are available on request.");
+  const change = button(hard ? "Switch to Guided" : "Hard Mode", "button button-quiet");
+  change.addEventListener("click", async () => {
+    change.disabled = true;
+    try {
+      const mode = await api(`/api/workbench/${level}/mode`, {hero, method:"PATCH", body:{mode:hard ? "guided" : "hard"}});
+      if (hero !== state.hero) return;
+      state.workbenchModes.set(level, mode);
+      if (data.page !== state.page?.page) return;
+      if (mode.mode === "hard") {
+        for (const prompt of list(data.prompts).filter(prompt => prompt.assessment)) {
+          const saved = state.responses.get(responseKey(data.page, prompt.id));
+          if (saved?.assessment) {
+            const {status:assessmentStatus, score} = saved.assessment;
+            saved.assessment = {status:assessmentStatus, score, feedback:"Hard Mode review saved."};
+          }
+        }
+      }
+      renderGuide(data);
+      await refreshProgress();
+      if (hero === state.hero && data.page === state.page?.page && mode.mode === "guided") renderGuide(data);
+    } catch (error) {
+      if (hero === state.hero) toast(error.message);
+    } finally {
+      change.disabled = false;
+    }
+  });
+  card.append(status, change);
   return card;
 }
 
@@ -946,6 +1058,8 @@ function renderGuide(data) {
   }
   const encounter = quest && creatureEncounter(data, quest);
   if (encounter) content.push(encounter);
+  const difficulty = renderDifficulty(data);
+  if (difficulty) content.push(difficulty);
   list(data.prompts).forEach((prompt, index) => {
     if (Object.hasOwn(promptLabels, prompt.type) && prompt.id != null) content.push(renderPrompt(data, prompt, index));
   });
@@ -1128,6 +1242,11 @@ function renderCharacterSheet() {
     stat.append(make("strong", "", String(counts[mark])), make("span", "", label));
     stats.append(stat);
   }
+  if (state.hardClears.size) {
+    const stat = make("div", "stat-tile");
+    stat.append(make("strong", "", String(state.hardClears.size)), make("span", "", "Hard Clears"));
+    stats.append(stat);
+  }
   const skills = make("ul", "sheet-skills");
   for (const skill of progress.skills) {
     const item = make("li", "sheet-skill");
@@ -1161,6 +1280,7 @@ function renderCharacterSheet() {
     for (const [field, label] of [["scout", "Scout"], ["forge", "Forge"], ["explain", "Explain"], ["side", "Side quest"]]) {
       if (enabled(record[field])) badges.append(badge(label, true));
     }
+    if (state.hardClears.has(level)) badges.append(badge("Hard Clear", true));
     item.append(badges);
     levels.append(item);
   }
@@ -1238,7 +1358,8 @@ async function activateHero(selected, preferredPage = null) {
   state.responses = new Map();
   state.attempts = [];
   state.drafts = readDrafts(state.hero);
-  state.reveals = new Map();
+  state.workbenchModes = new Map();
+  state.hardClears = new Set();
   state.progressError = "";
   state.page = null;
   state.loading = false;

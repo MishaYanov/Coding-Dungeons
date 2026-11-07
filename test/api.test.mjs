@@ -169,14 +169,84 @@ test('public campaign data reveals instructions and questions but excludes answe
       }
     }
   }
-  const { payload: hint } = await request('/api/levels/1/reveal/hint1');
+  await request('/api/levels/1/reveal/hint1', { status: 401 });
+  const { hero } = await createHero('Guide Reader');
+  const { payload: hint } = await request('/api/levels/1/reveal/hint1', { hero });
   assert.match(hint.text, /owner/);
   for (const path of ['/api/pages/0', '/api/pages/560', '/api/levels/43/reveal/hint1',
     '/api/levels/1/reveal/solution']) await request(path, { status: 404 });
 });
 
+test('Hard Mode survives reload and denies guide and authored answer access through the API', async () => {
+  const { hero } = await createHero('Hard Reader');
+  const { hero: guided } = await createHero('Guided Reader');
+  const question = { page: 25, promptId: 'training-1-3' };
+  const answer = { ...question, value: 'A shared borrow can end after its last use.' };
+  const { payload: page } = await request('/api/pages/25');
+  assert.ok(page.prompts.find(prompt => prompt.id === question.promptId).assessment.version);
+  const { payload: mode } = await request('/api/workbench/1/mode', { method: 'PATCH', hero, body: { mode: 'hard' } });
+  assert.deepEqual(mode, { mode: 'hard', assisted: false });
+  await request('/api/levels/1/reveal/hint1', { hero, status: 403 });
+  await request('/api/answers/reveal', { method: 'POST', hero, body: question, status: 403 });
+  const { payload: graded } = await request('/api/answers', { method: 'POST', hero, body: answer });
+  assert.equal(graded.assessment.score, null);
+  assert.equal(graded.assessment.status, 'unavailable');
+  assert.ok(!Object.hasOwn(graded.assessment, 'criteria'));
+  const { payload: saved } = await request('/api/progress', { hero });
+  assert.deepEqual(saved.workbench.modes, [{ level: 1, mode: 'hard', assisted: false }]);
+  assert.equal(saved.responses[0].assessment.status, 'unavailable');
+  assert.equal(saved.responses[0].value, answer.value);
+  assert.deepEqual(saved.levels, []);
+
+  const { payload: revealed } = await request('/api/answers/reveal', { method: 'POST', hero: guided, body: question });
+  assert.match(revealed.text, /shared borrow/);
+  const { payload: guidedProgress } = await request('/api/progress', { hero: guided });
+  assert.deepEqual(guidedProgress.workbench.modes, [{ level: 1, mode: 'guided', assisted: true }]);
+});
+
+test('Code Workbench runs public examples without victory, then saves a full clear once', async () => {
+  const headers = {'X-Ferrum-World': 'javascript'};
+  const {payload:{hero}} = await request('/api/heroes', {method:'POST', headers, body:{name:'Workbench Duelist'}, status:201});
+  const {payload:campaign} = await request('/api/campaign', {headers});
+  const {bossPage:page, level} = campaign.quests[0];
+  const {payload:boss} = await request(`/api/pages/${page}`, {headers});
+  const prompt = boss.prompts.find(item => item.id === `boss-${level}`);
+  const exercise = campaign.exercises.find(item => item.id === prompt.exerciseId);
+  assert.ok(exercise, 'the boss is linked to its suite');
+  assert.ok(exercise.requiredCases > exercise.testNames.length);
+  assert.doesNotMatch(JSON.stringify(exercise), /fresh-badges|blank-name|reference/);
+  const requestOptions = {headers, hero, method:'POST'};
+  const code = 'function makeBadge(input) { return { name: input.trim().toUpperCase(), visits: 0 }; }';
+  const body = {page, promptId:prompt.id, exerciseId:exercise.id, code};
+
+  await request(`/api/workbench/${level}/mode`, {headers, hero, method:'PATCH', body:{mode:'hard'}});
+  const {payload:examples} = await request('/api/grade', {...requestOptions, body:{...body, purpose:'examples'}});
+  assert.equal(examples.verdict, 'pass');
+  assert.equal(examples.newClear, false);
+  assert.equal(examples.purpose, 'examples');
+  const {payload:practiced} = await request('/api/progress', {headers, hero});
+  assert.deepEqual(practiced.levels, []);
+  assert.deepEqual(practiced.attempts, []);
+  await request(`/api/progress/${level}`, {headers, hero, method:'PATCH', body:{forge:true}, status:409});
+
+  const {payload:full} = await request('/api/grade', {...requestOptions, body});
+  assert.equal(full.verdict, 'pass');
+  assert.equal(full.newClear, true);
+  assert.equal(full.hardClear, true);
+  assert.equal(full.passed, exercise.requiredCases);
+  assert.ok(Number.isFinite(full.runtimeMs));
+  assert.ok(full.groups.some(item => item.group === 'Identity' && item.passed > 0));
+  assert.doesNotMatch(JSON.stringify(full), /fresh-badges|blank-name/);
+  const {payload:retry} = await request('/api/grade', {...requestOptions, body});
+  assert.equal(retry.newClear, false);
+  const {payload:won} = await request('/api/progress', {headers, hero});
+  assert.equal(won.levels[0].forge, true);
+  assert.deepEqual(won.workbench.hardClears, [level]);
+});
+
 test('mutations enforce local origin, JSON size and shape, and valid hero sessions', async () => {
   const signup = '/api/heroes';
+  const {payload:{heroes:initialHeroes}} = await request(signup);
   const mutation = { method: 'POST', body: { name: 'Blocked hero' } };
   await request(signup, { ...mutation, headers: { Origin: 'https://outside.invalid' }, status: 403 });
   await request(signup, { ...mutation, headers: { 'X-Ferrum-Request': '0' }, status: 403 });
@@ -199,7 +269,7 @@ test('mutations enforce local origin, JSON size and shape, and valid hero sessio
     await request(signup, { method: 'POST', body, status: 400 });
   }
   const { payload: { heroes } } = await request(signup);
-  assert.deepEqual(heroes, []);
+  assert.deepEqual(heroes, initialHeroes);
   await request('/api/progress', { status: 401 });
   await request('/api/progress', { headers: { 'X-Ferrum-Hero': 'bad' }, status: 401 });
   await request('/api/progress', { hero: { id: randomUUID() }, status: 401 });
@@ -333,9 +403,9 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
     assert.ok(campaign.quests.length > 0);
     assert.ok(campaign.paths.length > 0);
     const {payload: status} = await request('/api/status', {headers});
-    assert.deepEqual(status, {storage: 'SQLite', runner: 'unavailable'});
+    assert.equal(status.storage, 'SQLite');
     const {payload: {heroes}} = await request('/api/heroes', {headers});
-    assert.deepEqual(heroes, []);
+    assert.ok(!heroes.some(hero => hero.name === rustHero.name));
     const {payload: {hero}, response} = await request('/api/heroes', {
       method: 'POST', headers, body: {name: rustHero.name}, status: 201,
     });
@@ -350,6 +420,7 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
 
     const {level, bossPage} = campaign.quests[0];
     const {payload: page} = await request(`/api/pages/${bossPage}`, {headers});
+    const graded = !!page.prompts.find(prompt => prompt.id === `boss-${level}`)?.exerciseId;
     assert.ok(page.image.startsWith(`/book/${world.id}/pages/`));
     const {response: pageImage} = await request(page.image, {method: 'HEAD'});
     assert.equal(pageImage.headers.get('Content-Type'), 'image/webp');
@@ -365,10 +436,9 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
     await request(progress, {...mark, status: 409});
     const draft = {page: bossPage, promptId: `boss-${level}`, value: `Review draft for ${world.name}`};
     await request('/api/answers', {method: 'POST', headers, hero, body: draft});
-    await request(progress, mark);
+    await request(progress, {...mark, status:graded ? 409 : 200});
     await request('/api/profile', {method: 'PATCH', headers, hero, body: {lastPage: bossPage}});
-    await request('/api/grade', {method: 'POST', headers, hero, body: {}, status: 409});
-    saved.push({headers, hero, draft});
+    saved.push({headers, hero, draft, graded});
   }
 
   const {dir, name, ext} = parse(database);
@@ -381,11 +451,11 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
   }
   await stop();
   await start();
-  for (const {headers, hero, draft} of saved) {
+  for (const {headers, hero, draft, graded} of saved) {
     const {payload: progress} = await request('/api/progress', {headers, hero});
     assert.equal(progress.profile.lastPage, draft.page);
     assert.equal(progress.responses[0].value, draft.value);
-    assert.equal(progress.levels[0].forge, true);
+    assert.equal(progress.levels.some(level => level.forge), !graded);
     assert.deepEqual(progress.attempts, []);
   }
   const {payload: rustProgress} = await request('/api/progress', {hero: rustHero});

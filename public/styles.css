@@ -437,6 +437,10 @@ svg { display: block; flex-shrink: 0; }
 .prompt-feedback[data-verdict="incorrect"], .prompt-feedback[data-verdict="failed"] { border-color: #865747; background: #382d2c; }
 .prompt-feedback[data-verdict="saved"] { border-color: var(--line); background: #172530; }
 .prompt-feedback p { font-size: .82rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workbench-wards { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.workbench-wards li { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; font-size: .76rem; }
+.workbench-wards li[data-done="true"] { border-color: #598478; background: #29483f; }
+.example-answer { padding-left: 9px; border-left: 2px solid var(--copper); }
 .feedback-heading { color: var(--teal); font-size: .82rem; }
 .prompt-feedback[data-verdict="incorrect"] .feedback-heading, .prompt-feedback[data-verdict="failed"] .feedback-heading { color: var(--copper); }
 .recommendation { font-size: .8rem; }

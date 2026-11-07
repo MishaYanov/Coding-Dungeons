@@ -7,9 +7,16 @@ import { fileURLToPath } from 'node:url';
 import { openStore } from './lib/store.mjs';
 import { grade, runnerStatus } from './lib/grader.mjs';
 import { encounters, evaluateStage, publicEncounter } from './lib/encounters.mjs';
+import { createWrittenGm } from './lib/written-gm.mjs';
+import { runCourseExercise, runLegacyRust, workbenchSummary } from './lib/workbench-service.mjs';
+import javascriptSuites from './data/workbench/javascript.mjs';
+import typescriptSuites from './data/workbench/typescript.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const publicDir = join(root, 'public');
+const desktopToken = process.env.FERRUM_DESKTOP_TOKEN;
+if (desktopToken !== undefined && !/^[a-f0-9]{64}$/.test(desktopToken)) throw new Error('Invalid desktop token.');
+const desktopPublicDir = process.env.FERRUM_PUBLIC_DIR;
+const publicDir = desktopPublicDir ? resolve(root, desktopPublicDir) : join(root, 'public');
 const port = Number(process.env.PORT ?? 4173);
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid PORT.');
 const bodyLimit = 128 * 1024;
@@ -21,7 +28,20 @@ const worldSpecs = [
   {id:'rust', name:'Rust', title:'Understanding Rust', subtitle:'The Ferrum Expedition'},
   {id:'go', name:'Go', title:'Understanding Go', subtitle:'World 4'},
 ];
+const courseSuites = {javascript:javascriptSuites, typescript:typescriptSuites};
 const rustDatabase = resolve(root, process.env.FERRUM_DB ?? 'state/ferrum.sqlite');
+const writtenGm = createWrittenGm();
+
+let localJobActive = false;
+async function runLocalJob(action, busy) {
+  if (localJobActive) return busy;
+  localJobActive = true;
+  try {
+    return await action();
+  } finally {
+    localJobActive = false;
+  }
+}
 
 async function loadWorld(spec, number) {
   const {id} = spec;
@@ -31,6 +51,13 @@ async function loadWorld(spec, number) {
   const [campaign, pages, exercises] = await Promise.all([
     jsonFile('campaign.json'), jsonFile('pages.json'), jsonFile('exercises.json'),
   ]);
+  for (const exercise of courseSuites[id] ?? []) {
+    const quest = campaign.quests.find(quest => quest.level === exercise.level);
+    const prompt = pages[quest?.bossPage - 1]?.prompts.find(prompt => prompt.id === `boss-${exercise.level}`);
+    if (prompt?.type !== 'code') throw new Error(`Workbench suite ${exercise.id} is missing its boss card.`);
+    prompt.exerciseId = exercise.id;
+    exercises.push({...exercise, title:quest.title, description:prompt.body, starter:prompt.starter});
+  }
   const bookUrl = rust ? '/book/ferrum-expedition.pdf' : `/book/${id}/book.pdf`;
   const kitPath = rust ? '/book/ferrum-field-kit.zip' : `/book/${id}/field-kit.zip`;
   const kit = await stat(join(publicDir, kitPath.slice(1))).catch(error => {
@@ -54,20 +81,22 @@ async function loadWorld(spec, number) {
     questMap:new Map(campaign.quests.map(quest => [quest.level, quest])),
     exerciseMap:new Map(exercises.map(exercise => [exercise.id, exercise])),
     encounterMap:new Map(worldEncounters.map(encounter => [encounter.id, encounter])),
-    gradedLevels:new Set(rust ? exercises.map(exercise => exercise.level) : []),
+    gradedLevels:new Set(exercises.map(exercise => exercise.level)),
     publicCampaign:{
       world:info, zones:campaign.zones ?? [],
       paths:campaign.paths,
       quests:campaign.quests.map(({hint1, hint2, debrief, ...quest}) => quest),
       rooms:campaign.rooms.map(room => ({...room, choices:room.choices.map(({result,...choice}) => choice)})),
       specialEncounters:worldEncounters.map(publicEncounter),
-      exercises:exercises.map(({tests, solution, ...exercise}) =>
-        ({...exercise, page:exercisePages.get(exercise.id)})),
+      exercises:exercises.map(exercise => ({...workbenchSummary(exercise), page:exercisePages.get(exercise.id)})),
       levelPages:Object.fromEntries(campaign.quests.map(quest => [quest.level, quest.page])),
       total:pages.length,
     },
     publicPages:pages.map(page => ({...page, prompts:page.prompts.map(
-      ({feedback, feedbackByOption, correctOption, ...prompt}) => prompt)})),
+      ({feedback, feedbackByOption, correctOption, ...prompt}) => {
+        const assessment = prompt.type === 'text' ? writtenGm.getPrompt(id, prompt.id, prompt.body) : null;
+        return assessment ? {...prompt, assessment} : prompt;
+      })})),
   };
 }
 
@@ -210,31 +239,84 @@ async function levelPatch(request, response, {questMap, gradedLevels, store}, he
   json(response, {ok:true});
 }
 
+function visibleAssessment(world, heroId, level, assessment) {
+  if (world.store.workbenchMode(heroId, level).mode !== 'hard') return assessment;
+  const {status, score, rubricVersion} = assessment;
+  const feedback = status === 'scored' ? 'Hard Mode review complete.'
+    : status === 'unavailable' ? 'The review is unavailable. Your answer is saved.'
+      : 'The GM could not verify this answer.';
+  return {status, score, rubricVersion, feedback};
+}
+
+function disconnectSignal(response) {
+  const controller = new AbortController();
+  response.once('close', () => { if (!response.writableEnded) controller.abort(); });
+  return controller.signal;
+}
+
 async function saveAnswer(request, response, world, heroId) {
   const data = await readJson(request);
   const page = pageAt(world, data.page);
   const prompt = promptAt(page, data.promptId);
   const value = string(data.value, prompt.type === 'code' ? codeLimit : textLimit, 'Answer');
+  const {store, info:{id:worldId}} = world;
+  const rubric = prompt.type === 'text' ? writtenGm.getPrompt(worldId, prompt.id, prompt.body) : null;
+  if (rubric) {
+    const revision = store.startAssessment(heroId, page.page, prompt.id, value);
+    const signal = disconnectSignal(response);
+    const result = await runLocalJob(() => writtenGm.assess(worldId, prompt.id, prompt.body, value, {signal}), {
+      status:'unavailable', score:null, feedbackId:'busy', feedback:'The local workbench is busy. Try again in a moment.',
+      criteria:[], rubricVersion:rubric.version,
+    });
+    if (signal.aborted) return;
+    if (!store.completeAssessment(heroId, page.page, prompt.id, revision, result)) {
+      throw new HttpError(409, 'A newer version of this answer was saved.');
+    }
+    return json(response, {feedback:'Your response is saved.', correct:null,
+      assessment:visibleAssessment(world, heroId, page.level, result)});
+  }
   let correct = null;
   let feedback = prompt.feedback;
   if (prompt.type === 'choice') {
     if (!prompt.options.some(option => option.id === value)) throw new HttpError(400, 'Choose one of the listed options.');
     correct = prompt.correctOption === value;
     feedback = prompt.feedbackByOption?.[value] ?? prompt.feedback;
+  } else if (prompt.type === 'text' && store.workbenchMode(heroId, page.level).mode === 'hard') {
+    feedback = 'Your response is saved.';
   }
-  await world.store.saveResponse(heroId, page.page, prompt.id, value, feedback, correct == null ? null : Number(correct));
+  store.saveResponse(heroId, page.page, prompt.id, value, feedback, correct);
   json(response, {feedback, correct});
+}
+
+async function revealAnswer(request, response, world, heroId) {
+  const data = await readJson(request);
+  const page = pageAt(world, data.page);
+  const prompt = promptAt(page, data.promptId);
+  const reference = prompt.type === 'text' && writtenGm.reveal(world.info.id, prompt.id, prompt.body);
+  if (!reference) throw new HttpError(404, 'No example answer is available.');
+  if (!world.store.revealWorkbenchAid(heroId, page.level)) {
+    const prior = world.store.progress(heroId).responses.find(answer => answer.page === page.page && answer.promptId === prompt.id);
+    if (prior?.assessment?.score !== 100) throw new HttpError(403, 'Hard Mode locks the example answer.');
+  }
+  json(response, {text:reference});
 }
 
 function currentProgress(world, heroId) {
   const progress = world.store.progress(heroId);
+  progress.workbench = world.store.workbenchState(heroId);
   for (const answer of progress.responses) {
-    const prompt = world.pages[answer.page - 1]?.prompts.find(item => item.id === answer.promptId);
+    const page = world.pages[answer.page - 1];
+    const prompt = page?.prompts.find(item => item.id === answer.promptId);
     if (!prompt || prompt.exerciseId) continue;
     if (prompt.type === 'choice') {
       if (!prompt.options.some(option => option.id === answer.value)) continue;
       answer.correct = prompt.correctOption === answer.value;
       answer.feedback = prompt.feedbackByOption?.[answer.value] ?? prompt.feedback ?? answer.feedback;
+    } else if (prompt.type === 'text' && writtenGm.getPrompt(world.info.id, prompt.id, prompt.body)) {
+      answer.feedback = 'Your response is saved.';
+      if (answer.assessment) answer.assessment = visibleAssessment(world, heroId, page.level, answer.assessment);
+    } else if (prompt.type === 'text' && world.store.workbenchMode(heroId, page.level).mode === 'hard') {
+      answer.feedback = 'Your response is saved.';
     } else if (prompt.feedback) {
       answer.feedback = prompt.feedback;
     }
@@ -279,8 +361,8 @@ async function submitEncounterStage(request, response, store, heroId, encounter)
 }
 
 async function submitCode(request, response, world, heroId) {
-  if (!world.rust) throw new HttpError(409, 'Save a draft and use the guided Forge review for this world.');
   const {exerciseMap, store} = world;
+  if (!exerciseMap.size) throw new HttpError(409, 'Save a draft and use the guided Forge review for this world.');
   const data = await readJson(request);
   const page = pageAt(world, data.page);
   const prompt = promptAt(page, data.promptId);
@@ -288,18 +370,27 @@ async function submitCode(request, response, world, heroId) {
   if (!exercise || prompt.exerciseId !== exercise.id || page.level !== exercise.level) {
     throw new HttpError(400, 'The exercise does not belong to this page and prompt.');
   }
+  const purpose = data.purpose ?? 'submit';
+  if (!['examples','submit'].includes(purpose)) throw new HttpError(400, 'Choose Run Examples or Submit.');
   const code = string(data.code, codeLimit, 'Code');
-  if (!code.trim()) throw new HttpError(400, 'Enter Rust code before running tests.');
-  await store.saveResponse(heroId, page.page, prompt.id, code, 'Your submission is saved.');
-  const run = await grade({code, tests:exercise.tests, testNames:exercise.testNames});
-  const result = { verdict:run.verdict, output:run.output,
-    passed:run.passed.length, failed:run.failed.length,
-    passedTests:run.passed, failedTests:run.failed };
+  if (!code.trim()) throw new HttpError(400, 'Enter code before running tests.');
+  const {mode} = store.workbenchMode(heroId, page.level);
+  store.saveResponse(heroId, page.page, prompt.id, code, 'Your submission is saved.');
+  const signal = disconnectSignal(response);
+  const noRun = (verdict, output) => ({verdict, output, passed:0, failed:0, passedTests:[], failedTests:[], cases:[], groups:[]});
+  const result = await runLocalJob(() => {
+    if (!world.rust) return runCourseExercise(world.info.id, code, exercise, purpose, signal);
+    if (desktopToken) return noRun('unavailable', 'The packaged Rust runtime is unavailable. Your draft is saved.');
+    return runLegacyRust(grade, code, exercise, purpose);
+  }, noRun('busy', 'Another local evaluation is running. Try again in a moment.'));
+  if (signal.aborted) return;
+  const runId = randomUUID();
+  let completion = {newClear:false, hardClear:false};
   if (['pass', 'fail', 'compile_error', 'timeout'].includes(result.verdict)) {
-    await store.recordAttempt(heroId, {page:page.page, promptId:prompt.id, level:page.level,
-      exerciseId:exercise.id, code, ...result});
+    completion = store.recordAttempt(heroId, {page:page.page, promptId:prompt.id, level:page.level,
+      exerciseId:exercise.id, code, purpose, mode, runId, ...result});
   }
-  json(response, result);
+  json(response, {...result, purpose, mode, runId, ...completion});
 }
 
 const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8',
@@ -312,7 +403,8 @@ const pageAsset = /^\/book\/(?:(?:javascript|typescript|go)\/)?pages\/[1-9]\d{0,
 
 async function staticFile(request, response, path) {
   const named = path === '/' ? '/index.html' : path;
-  if (!publicFiles.has(named) && !pageAsset.test(named)) throw new HttpError(404, 'Page not found.');
+  const builtAsset = desktopPublicDir && /^\/assets\/[A-Za-z0-9_-]+\.(?:js|css)$/.test(named);
+  if (!publicFiles.has(named) && !pageAsset.test(named) && !builtAsset) throw new HttpError(404, 'Page not found.');
   const file = join(publicDir, named.slice(1));
   const meta = await stat(file).catch(() => null);
   if (!meta?.isFile()) throw new HttpError(404, 'Page asset not found.');
@@ -332,6 +424,9 @@ const server = createServer(async (request,response) => {
     const host = request.headers.host;
     const allowedHosts = [`127.0.0.1:${activePort}`, `localhost:${activePort}`];
     if (!allowedHosts.includes(host)) throw new HttpError(403, 'Use the local Ferrum URL.');
+    if (desktopToken && request.headers['x-ferrum-desktop-token'] !== desktopToken) {
+      throw new HttpError(403, 'Open Coding Dungeons from its desktop window.');
+    }
     const {pathname:path} = new URL(request.url, `http://${host}`);
     const method = request.method;
     if (method === 'GET' && path === '/api/worlds') return json(response, {worlds:worlds.map(({info}) => info)});
@@ -363,7 +458,9 @@ const server = createServer(async (request,response) => {
       if (path === '/api/heroes') return json(response, {heroes:await store.heroes()});
       if (path === '/api/progress') return json(response, currentProgress(world, await requireHero(request, world)));
       if (path === '/api/status') {
-        return json(response, {storage:store.label, runner:world.rust ? await runnerStatus() : 'unavailable'});
+        const runner = world.rust ? (desktopToken ? 'unavailable' : await runnerStatus())
+          : world.exerciseMap.size ? 'available' : 'unavailable';
+        return json(response, {storage:store.label, runner});
       }
       let match = path.match(/^\/api\/pages\/(\d+)$/);
       if (match) return json(response, world.publicPages[pageAt(world, Number(match[1])).page-1]);
@@ -371,11 +468,25 @@ const server = createServer(async (request,response) => {
       if (match) {
         const quest = world.questMap.get(Number(match[1]));
         if (!quest) throw new HttpError(404, 'Level not found.');
+        const heroId = await requireHero(request, world);
+        if (!store.revealWorkbenchAid(heroId, quest.level)
+            && !store.progress(heroId).levels.some(level => level.level === quest.level && level.forge)) {
+          throw new HttpError(403, 'Hard Mode locks the guide kit.');
+        }
         return json(response, {text:quest[match[2]]});
       }
     }
     if (method === 'PATCH') {
       if (path === '/api/profile') return await profilePatch(request, response, world, await requireHero(request, world));
+      const modeRoute = path.match(/^\/api\/workbench\/(\d+)\/mode$/);
+      if (modeRoute) {
+        const level = Number(modeRoute[1]);
+        if (!world.questMap.has(level)) throw new HttpError(404, 'Level not found.');
+        const heroId = await requireHero(request, world);
+        const {mode} = await readJson(request);
+        if (!['guided','hard'].includes(mode)) throw new HttpError(400, 'Choose Guided or Hard Mode.');
+        return json(response, store.setWorkbenchMode(heroId, level, mode));
+      }
       const match = path.match(/^\/api\/progress\/(\d+)$/);
       if (match) return await levelPatch(request, response, world, await requireHero(request, world), Number(match[1]));
     }
@@ -383,6 +494,7 @@ const server = createServer(async (request,response) => {
       if (path === '/api/heroes') return await createHero(request, response, world);
       if (path === '/api/heroes/load') return await loadHero(request, response, world);
       if (path === '/api/answers') return await saveAnswer(request, response, world, await requireHero(request, world));
+      if (path === '/api/answers/reveal') return await revealAnswer(request, response, world, await requireHero(request, world));
       if (path === '/api/grade') return await submitCode(request, response, world, await requireHero(request, world));
     }
     throw new HttpError(404, 'Route not found.');
@@ -397,6 +509,7 @@ const server = createServer(async (request,response) => {
 server.requestTimeout = 20000;
 server.listen(port, '127.0.0.1', () => {
   console.log(`Ferrum at http://127.0.0.1:${server.address().port} (${worldMap.get('rust').store.label})`);
+  process.parentPort?.postMessage({type:'ferrum-ready', port:server.address().port});
 });
 function shutdown() {
   server.close(() => {
@@ -405,3 +518,9 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+process.parentPort?.on('message', event => {
+  if (event.data?.type === 'ferrum-shutdown') {
+    shutdown();
+    process.parentPort.close();
+  }
+});

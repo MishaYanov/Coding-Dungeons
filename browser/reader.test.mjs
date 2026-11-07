@@ -174,7 +174,7 @@ test('an offline runner leaves the Rust editor and SQLite draft save available',
   const page = await newPage(t, '');
   await createHero(page, 'Forge Apprentice', 1);
   await jumpTo(page, gradedPage.page);
-  const run = page.getByRole('button', { name: 'Run Rust tests' });
+  const run = page.getByRole('button', { name: 'Submit solution' });
   assert.equal(await run.isDisabled(), true);
   const exercise = gradedPage.prompts.find((prompt) => prompt.exerciseId);
   const card = page.getByRole('form', { name: exercise.title, exact: true });
@@ -250,9 +250,9 @@ test('world selection opens separate books and restores the right hero and draft
   const source = '// My JavaScript draft';
   const editor = page.getByRole('textbox', { name: 'JavaScript code' });
   await editor.fill(source);
-  await page.getByRole('button', { name: 'Save code notes' }).click();
-  await page.getByText('Saved to your quest log', { exact: true }).waitFor();
-  await page.getByRole('checkbox', { name: 'Forge self-review' }).check();
+  await page.getByRole('button', { name: 'Save draft' }).click();
+  await page.getByText('Draft saved', { exact: true }).waitFor();
+  await page.getByRole('checkbox', { name: 'Scouted' }).check();
   await page.getByText('Quest log updated', { exact: true }).waitFor();
 
   await page.getByRole('button', { name: 'Worlds', exact: true }).click();
@@ -264,7 +264,7 @@ test('world selection opens separate books and restores the right hero and draft
   await pick(/World 1 JavaScript/);
   await openBookPage(page, encounter);
   assert.equal(await editor.inputValue(), source);
-  assert.equal(await page.getByRole('checkbox', { name: 'Forge self-review' }).isChecked(), true);
+  assert.equal(await page.getByRole('checkbox', { name: 'Scouted' }).isChecked(), true);
 });
 
 test('Go beginner checkpoints update the character sheet and survive a reload', async (t) => {
@@ -354,6 +354,28 @@ test('a creature is defeated only after Forge is earned by the current hero', as
   await ready.locator('canvas').waitFor();
 });
 
+test('Code Workbench examples leave the monster standing and a Hard submit defeats it', async (t) => {
+  const page = await newPage(t, '', 'javascript');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const {quests:[quest]} = JSON.parse(await readFile(new URL('data/worlds/javascript/campaign.json', project), 'utf8'));
+  await createHero(page, 'Ward Breaker', 1);
+  await jumpTo(page, quest.bossPage);
+  await page.getByRole('button', {name:'Hard Mode', exact:true}).click();
+  await page.getByText('Coaching is locked for this encounter.', {exact:true}).waitFor();
+  assert.equal(await page.getByRole('button', {name:'Hint one', exact:true}).count(), 0);
+  const ready = page.locator('.creature-encounter[data-state="ready"]');
+  await ready.waitFor();
+  await page.getByRole('textbox', {name:'JavaScript code'}).fill(
+    'function makeBadge(value) { return { name: value.trim().toUpperCase(), visits: 0 }; }',
+  );
+  await page.getByRole('button', {name:'Run Examples', exact:true}).click();
+  await page.getByText('Examples passed', {exact:true}).waitFor();
+  await ready.waitFor();
+  await page.getByRole('button', {name:'Submit solution', exact:true}).click();
+  await page.locator('.creature-encounter[data-state="defeated"]').waitFor();
+  await page.getByText('Hard Clear', {exact:true}).waitFor();
+});
+
 test('a Rust boss links to its graded drill and defeat follows recorded Forge', async (t) => {
   const campaign = JSON.parse(await readFile(new URL('data/campaign.json', project), 'utf8'));
   const quest = campaign.quests.find(({ level }) => level === 3);
@@ -389,7 +411,7 @@ test('a Rust boss links to its graded drill and defeat follows recorded Forge', 
 
   const form = page.getByRole('form', { name: exercise.title, exact: true });
   const code = form.getByRole('textbox', { name: 'Rust code' });
-  const run = form.getByRole('button', { name: 'Run Rust tests' });
+  const run = form.getByRole('button', { name: 'Submit solution' });
   await code.fill('// First attempt');
   await run.click();
   await form.getByText('0 passed · 1 failed', { exact: true }).waitFor();
