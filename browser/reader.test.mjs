@@ -223,6 +223,19 @@ test('a delayed save cannot erase a newer draft after revisiting its page', { ti
   assert.equal(await note.inputValue(), 'newer draft');
 });
 
+test('the home page offers all four worlds after playing as a Rust hero in the same tab', async (t) => {
+  const page = await newPage(t, '', 'rust');
+  await createHero(page, 'Home Page Scout', 1);
+
+  await page.goto(`${origin}/`);
+  const picker = page.getByRole('dialog', { name: 'Choose a world' });
+  await picker.waitFor();
+  await picker.getByRole('link', { name: /World 1 JavaScript/ }).waitFor();
+  await picker.getByRole('link', { name: /World 2 TypeScript/ }).waitFor();
+  await picker.getByRole('link', { name: /World 3 Rust/ }).waitFor();
+  await picker.getByRole('link', { name: /World 4 Go/ }).waitFor();
+});
+
 test('world selection opens separate books and restores the right hero and draft', async (t) => {
   const page = await newPage(t, '', null);
   const pick = async (label) => page.getByRole('link', { name: label }).click();

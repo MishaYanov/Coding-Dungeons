@@ -113,7 +113,7 @@ function chunkedStatus(path, { headers, chunks = [] }) {
 
 test('reader serves the book and blocks access to private project files', async () => {
   const { payload: home, response } = await request('/');
-  assert.match(home.toString(), /<title>Ferrum \| Rust Campaign<\/title>/);
+  assert.match(home.toString(), /<title>Coding Dungeons \| Choose a world<\/title>/);
   assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
   assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
   assert.match(response.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);

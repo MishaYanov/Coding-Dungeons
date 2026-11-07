@@ -1500,7 +1500,8 @@ async function boot() {
     openWorldPicker();
     return;
   }
-  const selection = new URLSearchParams(location.search).get("world") || ((hashPage() || tabHeroId()) ? "rust" : "");
+  // Older page bookmarks without a world point to the original Rust book.
+  const selection = new URLSearchParams(location.search).get("world") || (hashPage() ? "rust" : "");
   state.world = state.worlds.find((world) => world.id === selection) || null;
   if (!state.world) {
     readerMessage("Choose a world to open its book.", false);
