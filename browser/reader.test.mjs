@@ -389,3 +389,94 @@ test('a Rust boss links to its graded drill and defeat follows recorded Forge', 
   await jumpTo(page, quest.bossPage);
   await defeated.waitFor();
 });
+
+test('Bug Hunt is discoverable from the map and restores the case after reload', async (t) => {
+  const page = await newPage(t, '', 'javascript');
+  await createHero(page, 'Trace Detective', 1);
+  const catalog = await page.request.get(`${origin}/api/campaign`, {
+    headers: { 'X-Ferrum-World': 'javascript' },
+  });
+  assert.ok(catalog.ok());
+  const { specialEncounters: [encounter] } = await catalog.json();
+  const [diagnose, reproduce, repair] = encounter.stages;
+
+  await page.getByRole('button', { name: 'World map' }).click();
+  await page.getByRole('dialog', { name: 'World map' })
+    .getByRole('link', { name: /The Stolen Signal/ }).click();
+  await openBookPage(page, encounter.page);
+  const hunt = page.getByRole('region', { name: 'The Stolen Signal', exact: true });
+  const progress = (count) => hunt.and(page.locator(`[data-completed="${count}"]`)).waitFor();
+  const choose = async (stage, id) => {
+    const option = stage.options.find((item) => item.id === id);
+    await hunt.getByRole('radio', { name: option.label }).check();
+  };
+  const submit = async (stage) => {
+    const reply = page.waitForResponse((response) =>
+      response.url().endsWith(`/api/encounters/${encounter.id}`) && response.request().method() === 'POST');
+    await hunt.getByRole('button', { name: stage.actionLabel, exact: true }).click();
+    const response = await reply;
+    assert.equal(response.status(), 200);
+    return (await response.json()).result;
+  };
+
+  await progress(0);
+  await choose(diagnose, diagnose.options.find(({ id }) => id !== 'late-request').id);
+  const missed = await submit(diagnose);
+  assert.equal(missed.correct, false);
+  await hunt.getByText(missed.feedback, { exact: true }).waitFor();
+  await progress(0);
+  await choose(diagnose, 'late-request');
+  assert.equal((await submit(diagnose)).correct, true);
+  await progress(1);
+  const replay = await submit(reproduce);
+  assert.ok(replay.trace.length > 0);
+  await hunt.getByText(replay.trace.at(-1), { exact: true }).waitFor();
+  await progress(2);
+
+  await page.reload();
+  await openBookPage(page, encounter.page);
+  await progress(2);
+  await choose(repair, 'guard-both');
+  const fixed = await submit(repair);
+  assert.ok(fixed.checks.length >= 3);
+  await hunt.getByText(fixed.checks[0].label, { exact: true }).waitFor();
+  await progress(3);
+  await hunt.getByText('Case closed', { exact: true }).waitFor();
+
+  await page.reload();
+  await openBookPage(page, encounter.page);
+  await progress(3);
+  await hunt.getByText('Case closed', { exact: true }).waitFor();
+});
+
+test('the Ironbound Scarab falls after its three locks without awarding regular Forge', async (t) => {
+  const page = await newPage(t, '');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await createHero(page, 'Lockbreaker', 1);
+  const catalog = await page.request.get(`${origin}/api/campaign`);
+  assert.ok(catalog.ok());
+  const { specialEncounters: [encounter] } = await catalog.json();
+
+  await page.getByRole('button', { name: 'World map' }).click();
+  await page.getByRole('dialog', { name: 'World map' })
+    .getByRole('link', { name: 'The Ironbound Scarab', exact: true }).click();
+  await openBookPage(page, encounter.page);
+  const boss = page.getByRole('region', { name: 'The Ironbound Scarab', exact: true });
+  await boss.getByText('0 / 3 locks broken', { exact: true }).waitFor();
+  const canvas = boss.locator('canvas');
+  await canvas.waitFor();
+  const intact = await canvas.evaluate((node) => node.toDataURL());
+  const correct = ['overlapping-borrows', 'split-disjoint', 'separate-regions'];
+  for (const [index, stage] of encounter.stages.entries()) {
+    const option = stage.options.find(({ id }) => id === correct[index]);
+    await boss.getByRole('radio', { name: option.label, exact: true }).check();
+    await boss.getByRole('button', { name: stage.actionLabel, exact: true }).click();
+    await boss.and(page.locator(`[data-completed="${index + 1}"]`)).waitFor();
+  }
+  await boss.getByText('Elite defeated', { exact: true }).waitFor();
+  assert.notEqual(await canvas.evaluate((node) => node.toDataURL()), intact);
+  await page.locator('.creature-encounter[data-state="ready"]').waitFor();
+  await page.reload();
+  await openBookPage(page, encounter.page);
+  await boss.getByText('Elite defeated', { exact: true }).waitFor();
+});

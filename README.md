@@ -4,6 +4,8 @@ Play through four programming books in a local game reader. Read the book on the
 
 Challenge pages have a creature from their world. Passing a graded exercise or completing a guided Forge self-review defeats it, and your hero's save keeps the result.
 
+The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
+
 | World | Levels | What you practice |
 | --- | ---: | --- |
 | 1 · JavaScript | 14 | Language foundations, data validation, state, and asynchronous work |

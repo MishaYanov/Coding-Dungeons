@@ -6,6 +6,7 @@ import { dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './lib/store.mjs';
 import { grade, runnerStatus } from './lib/grader.mjs';
+import { encounters, evaluateStage, publicEncounter } from './lib/encounters.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(root, 'public');
@@ -41,6 +42,7 @@ async function loadWorld(spec, number) {
     bookUrl, kitUrl:kit?.isFile() ? kitPath : null,
   };
   const database = parse(rustDatabase);
+  const worldEncounters = encounters.filter(encounter => encounter.world === id);
   const exercisePages = new Map(pages.flatMap(page => page.prompts
     .filter(prompt => prompt.exerciseId)
     .map(prompt => [prompt.exerciseId, page.page])));
@@ -51,12 +53,14 @@ async function loadWorld(spec, number) {
     pathIds:new Set(['all', '', ...campaign.paths.map(path => path.id)]),
     questMap:new Map(campaign.quests.map(quest => [quest.level, quest])),
     exerciseMap:new Map(exercises.map(exercise => [exercise.id, exercise])),
+    encounterMap:new Map(worldEncounters.map(encounter => [encounter.id, encounter])),
     gradedLevels:new Set(rust ? exercises.map(exercise => exercise.level) : []),
     publicCampaign:{
       world:info, zones:campaign.zones ?? [],
       paths:campaign.paths,
       quests:campaign.quests.map(({hint1, hint2, debrief, ...quest}) => quest),
       rooms:campaign.rooms.map(room => ({...room, choices:room.choices.map(({result,...choice}) => choice)})),
+      specialEncounters:worldEncounters.map(publicEncounter),
       exercises:exercises.map(({tests, solution, ...exercise}) =>
         ({...exercise, page:exercisePages.get(exercise.id)})),
       levelPages:Object.fromEntries(campaign.quests.map(quest => [quest.level, quest.page])),
@@ -238,6 +242,42 @@ function currentProgress(world, heroId) {
   return progress;
 }
 
+function completedStages(encounter, results) {
+  return encounter.stages.filter(stage => results.has(stage.id)).map(stage => stage.id);
+}
+
+async function submitEncounterStage(request, response, store, heroId, encounter) {
+  const data = await readJson(request);
+  if (Object.keys(data).some(key => key !== 'stageId' && key !== 'optionId')) {
+    throw new HttpError(400, 'Send a stage and its listed option when required.');
+  }
+  const stageId = string(data.stageId, 64, 'Stage ID');
+  const stage = encounter.stages.find(item => item.id === stageId);
+  if (!stage) throw new HttpError(400, 'Choose a stage from this encounter.');
+  let optionId;
+  if (stage.options?.length) {
+    optionId = string(data.optionId, 64, 'Option ID');
+    if (!stage.options.some(option => option.id === optionId)) {
+      throw new HttpError(400, 'Choose one of the listed options.');
+    }
+  } else if (Object.hasOwn(data, 'optionId')) {
+    throw new HttpError(400, 'This stage does not take an option.');
+  }
+
+  const before = store.encounterResults(heroId, encounter.id);
+  if (before.has(stageId)) {
+    return json(response, {completed:completedStages(encounter, before), result:before.get(stageId)});
+  }
+  if (encounter.stages.find(item => !before.has(item.id)) !== stage) {
+    throw new HttpError(409, 'Finish the earlier stages first.');
+  }
+
+  const attempt = await evaluateStage(encounter, stage, optionId);
+  if (attempt.correct) store.recordEncounterStage(heroId, encounter.id, stageId, attempt);
+  const after = store.encounterResults(heroId, encounter.id);
+  json(response, {completed:completedStages(encounter, after), result:after.get(stageId) ?? attempt});
+}
+
 async function submitCode(request, response, world, heroId) {
   if (!world.rust) throw new HttpError(409, 'Save a draft and use the guided Forge review for this world.');
   const {exerciseMap, store} = world;
@@ -266,6 +306,7 @@ const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf
   '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
   '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip'};
 const publicFiles = new Set(['/index.html', '/styles.css', '/app.js', '/progression.mjs', '/creatures.mjs',
+  '/special-encounters.mjs',
   ...worlds.flatMap(({info}) => [info.bookUrl, info.kitUrl].filter(Boolean))]);
 const pageAsset = /^\/book\/(?:(?:javascript|typescript|go)\/)?pages\/[1-9]\d{0,2}\.webp$/;
 
@@ -305,6 +346,16 @@ const server = createServer(async (request,response) => {
       const origin = request.headers.origin;
       if (request.headers['x-ferrum-request'] !== '1' || (origin && origin !== `http://${host}`)) {
         throw new HttpError(403, 'Open Ferrum locally to make changes.');
+      }
+    }
+    if (method === 'GET' || method === 'POST') {
+      const match = path.match(/^\/api\/encounters\/([a-z0-9-]{1,64})$/);
+      if (match) {
+        const encounter = world.encounterMap.get(match[1]);
+        if (!encounter) throw new HttpError(404, 'Encounter not found in this world.');
+        const heroId = await requireHero(request, world);
+        if (method === 'POST') return await submitEncounterStage(request, response, store, heroId, encounter);
+        return json(response, {completed:completedStages(encounter, store.encounterResults(heroId, encounter.id))});
       }
     }
     if (method === 'GET') {

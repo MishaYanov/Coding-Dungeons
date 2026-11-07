@@ -1,5 +1,6 @@
 import { characterProgress, SKILL_LEVEL_CAP } from "./progression.mjs";
 import { creatureName, mountCreature } from "./creatures.mjs";
+import { createSpecialEncounter, encounterKind } from "./special-encounters.mjs";
 
 const $ = (id) => document.getElementById(id);
 const make = (tag, className = "", copy = "") => {
@@ -78,6 +79,7 @@ const state = {
   responses: new Map(),
   attempts: [],
   creature: null,
+  specialEncounter: null,
   drafts: new Map(),
   reveals: new Map(),
   runner: "",
@@ -101,7 +103,7 @@ async function api(path, options = {}) {
     headers["X-Ferrum-Request"] = "1";
     headers["Content-Type"] = "application/json";
   }
-  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers$|grade$)/.test(path)) {
+  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers$|grade$|encounters\/)/.test(path)) {
     const hero = options.hero || state.hero;
     if (!hero) throw new Error("Choose a hero to save your expedition.");
     headers["X-Ferrum-Hero"] = hero.id;
@@ -783,9 +785,11 @@ function updateForgeBadge() {
   marker.textContent = forged ? "Forge earned" : "Forge · pass the tests";
 }
 
-function clearCreature() {
+function clearGuideEncounters() {
   state.creature?.destroy();
   state.creature = null;
+  state.specialEncounter?.destroy();
+  state.specialEncounter = null;
 }
 
 function updateCreature(animateLevel = null) {
@@ -909,7 +913,7 @@ function renderGuide(data) {
   const hero = state.hero;
   const guide = $("guide-content");
   const quest = findQuest(data.level);
-  clearCreature();
+  clearGuideEncounters();
   $("guide-title").textContent = text(data.title) || text(quest?.mission_title) || `Book page ${data.page}`;
   const content = [guideNotes(data)];
   if (state.progressError) {
@@ -931,6 +935,15 @@ function renderGuide(data) {
     status.append(refresh);
     content.push(status);
   }
+  const special = list(state.campaign.specialEncounters).find((item) => item.page === data.page);
+  if (special && hero) {
+    const endpoint = `/api/encounters/${encodeURIComponent(special.id)}`;
+    state.specialEncounter = createSpecialEncounter(special, {
+      load: () => api(endpoint, { hero }),
+      submit: (body) => api(endpoint, { hero, method: "POST", body }),
+    });
+    content.push(state.specialEncounter.card);
+  }
   const encounter = quest && creatureEncounter(data, quest);
   if (encounter) content.push(encounter);
   list(data.prompts).forEach((prompt, index) => {
@@ -941,6 +954,7 @@ function renderGuide(data) {
   if (quest) content.push(levelCheckpoint(data, quest));
   guide.replaceChildren(...content);
   guide.setAttribute("aria-busy", "false");
+  state.specialEncounter?.start();
 }
 
 function populatePaths() {
@@ -1022,6 +1036,19 @@ function renderMap() {
     });
     summary.append(equip);
     description.append(summary);
+  }
+  const specials = list(state.campaign.specialEncounters);
+  if (specials.length) {
+    const group = make("section", "special-map");
+    group.append(make("h3", "zone-title", "Special encounters"));
+    for (const special of specials) {
+      const entry = make("div", "special-map-entry");
+      const link = bookLink(special.title, special.page);
+      link.addEventListener("click", () => $("map-dialog").close());
+      entry.append(link, make("span", "fine-print", `${encounterKind(special)} · Level ${special.level}`));
+      group.append(entry);
+    }
+    description.append(group);
   }
   const filter = $("map-search").value.trim().toLowerCase();
   const pathLevels = new Set(list(path?.levels).map(Number));
@@ -1215,7 +1242,7 @@ async function activateHero(selected, preferredPage = null) {
   state.progressError = "";
   state.page = null;
   state.loading = false;
-  clearCreature();
+  clearGuideEncounters();
   $("map-search").value = "";
   $("log-content").replaceChildren();
   $("guide-content").replaceChildren(make("p", "muted", "Opening your expedition…"));

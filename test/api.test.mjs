@@ -392,3 +392,107 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
   assert.deepEqual(rustProgress.responses, []);
   assert.deepEqual(rustProgress.levels, []);
 });
+
+test('special encounters grade each stage in order and persist separately from Forge', async () => {
+  const headers = { 'X-Ferrum-World': 'javascript' };
+  const { payload: { specialEncounters: [hunt] } } = await request('/api/campaign', { headers });
+  const { payload: { specialEncounters: [elite] } } = await request('/api/campaign');
+  assert.deepEqual([hunt.id, hunt.world, hunt.kind, hunt.level, hunt.page],
+    ['stale-signal', 'javascript', 'bug-hunt', 12, 38]);
+  assert.deepEqual([elite.id, elite.world, elite.kind, elite.level, elite.page],
+    ['ferric-scarab-elite', 'rust', 'elite', 3, 48]);
+  for (const encounter of [hunt, elite]) {
+    for (const stage of encounter.stages) {
+      assert.deepEqual(Object.keys(stage).filter((key) =>
+        !['id', 'title', 'prompt', 'actionLabel', 'options', 'code'].includes(key)), []);
+      for (const option of stage.options ?? []) {
+        assert.deepEqual(Object.keys(option).filter((key) => !['id', 'label', 'code'].includes(key)), []);
+      }
+    }
+  }
+  await request('/lib/encounters.mjs', { status: 404 });
+  const { response: module } = await request('/special-encounters.mjs', { method: 'HEAD' });
+  assert.equal(module.headers.get('Content-Type'), 'text/javascript; charset=utf-8');
+
+  const huntPath = `/api/encounters/${hunt.id}`;
+  const elitePath = `/api/encounters/${elite.id}`;
+  await request(huntPath, { headers, status: 401 });
+  const makeHunter = async (name) => {
+    const { payload: { hero } } = await request('/api/heroes', {
+      method: 'POST', headers, status: 201, body: { name },
+    });
+    return hero;
+  };
+  const hunter = await makeHunter('Signal Tracker');
+  const other = await makeHunter('Signal Observer');
+  const { hero: smith } = await createHero('Scarab Smith');
+  await request(elitePath, { headers, hero: hunter, status: 404 });
+  await request(huntPath, { hero: smith, status: 404 });
+  const { payload: initial } = await request(huntPath, { headers, hero: hunter });
+  assert.deepEqual(initial.completed, []);
+
+  const post = async (path, session, stageId, optionId, status = 200) => {
+    const { payload } = await request(path, {
+      method: 'POST', ...session, status,
+      body: optionId === undefined ? { stageId } : { stageId, optionId },
+    });
+    return payload;
+  };
+  const huntSession = { headers, hero: hunter };
+  const eliteSession = { hero: smith };
+  const incorrectDiagnosis = hunt.stages[0].options.find(({ id }) => id !== 'late-request').id;
+  await post(huntPath, huntSession, 'reproduce', undefined, 409);
+  await post(huntPath, huntSession, 'diagnose', 'unknown-option', 400);
+  const rejected = await post(huntPath, huntSession, 'diagnose', incorrectDiagnosis);
+  assert.equal(rejected.result.correct, false);
+  assert.deepEqual(rejected.completed, []);
+
+  const [diagnosed, duplicate] = await Promise.all([
+    post(huntPath, huntSession, 'diagnose', 'late-request'),
+    post(huntPath, huntSession, 'diagnose', 'late-request'),
+  ]);
+  assert.equal(diagnosed.result.correct, true);
+  assert.deepEqual(diagnosed.completed, ['diagnose']);
+  assert.deepEqual(duplicate.completed, diagnosed.completed);
+  const reproduced = await post(huntPath, huntSession, 'reproduce');
+  assert.equal(reproduced.result.correct, true);
+  assert.ok(reproduced.result.trace.length > 0);
+  assert.deepEqual(reproduced.completed, ['diagnose', 'reproduce']);
+  const failedRepair = await post(huntPath, huntSession, 'repair', 'guard-success');
+  assert.equal(failedRepair.result.correct, false);
+  assert.match(failedRepair.result.checks.find(({ passed }) => !passed).label, /older failure/);
+  assert.deepEqual(failedRepair.completed, reproduced.completed);
+  const repaired = await post(huntPath, huntSession, 'repair', 'guard-both');
+  assert.equal(repaired.result.correct, true);
+  assert.equal(repaired.result.checks.length, 4);
+  assert.ok(repaired.result.checks.every(({ passed }) => passed));
+  assert.deepEqual(repaired.completed, ['diagnose', 'reproduce', 'repair']);
+  const retried = await post(huntPath, huntSession, 'diagnose', incorrectDiagnosis);
+  assert.equal(retried.result.correct, true);
+  assert.deepEqual(retried.completed, repaired.completed);
+
+  await post(elitePath, eliteSession, 'explain', 'separate-regions', 409);
+  await post(elitePath, eliteSession, 'diagnose', 'overlapping-borrows');
+  const sorted = await post(elitePath, eliteSession, 'repair', 'split-sorted');
+  assert.equal(sorted.result.correct, false);
+  assert.match(sorted.result.checks.find(({ passed }) => !passed).label, /reversed indices/i);
+  assert.deepEqual(sorted.completed, ['diagnose']);
+  const tested = await post(elitePath, eliteSession, 'repair', 'split-disjoint');
+  assert.deepEqual(tested.completed, ['diagnose', 'repair']);
+  assert.equal(tested.result.checks.length, 4);
+  assert.ok(tested.result.checks.every(({ passed }) => passed));
+  const defeated = await post(elitePath, eliteSession, 'explain', 'separate-regions');
+  assert.equal(defeated.result.correct, true);
+  assert.deepEqual(defeated.completed, ['diagnose', 'repair', 'explain']);
+
+  await stop();
+  await start();
+  const { payload: restoredHunt } = await request(huntPath, huntSession);
+  const { payload: restoredElite } = await request(elitePath, eliteSession);
+  const { payload: otherHunt } = await request(huntPath, { headers, hero: other });
+  const { payload: regularProgress } = await request('/api/progress', eliteSession);
+  assert.deepEqual(restoredHunt.completed, repaired.completed);
+  assert.deepEqual(restoredElite.completed, defeated.completed);
+  assert.deepEqual(otherHunt.completed, []);
+  assert.deepEqual(regularProgress.levels, []);
+});

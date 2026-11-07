@@ -121,9 +121,12 @@ function drawScarab(ctx, colors, variant) {
     oval(ctx, 37, 8, 2.5, 2.5, accent);
     ctx.restore();
   }
+  if (colors.elite) {
+    polygon(ctx, [[-28,-22],[-33,-45],[-14,-33],[0,-53],[14,-33],[33,-45],[28,-22]], shade, accent);
+  }
   polygon(ctx, [[-26,-27],[-12,-42],[12,-42],[26,-27],[30,-4],[19,22],[0,33],[-19,22],[-30,-4]], dark);
   polygon(ctx, [[-24,-25],[-12,-39],[-2,-36],[-4,12],[-16,20],[-27,-5]], shade);
-  polygon(ctx, [[24,-25],[12,-39],[2,-36],[4,12],[16,20],[27,-5]], "#c96d59");
+  polygon(ctx, [[24,-25],[12,-39],[2,-36],[4,12],[16,20],[27,-5]], colors.elite ? "#ab74d3" : "#c96d59");
   line(ctx, [[-23,-23],[-11,-35],[-5,-32]], accent, 2.5);
   line(ctx, [[23,-23],[11,-35],[5,-32]], accent, 2.5);
   polygon(ctx, [[-16,8],[-7,1],[7,1],[16,8],[13,21],[0,30],[-13,21]], "#733d42");
@@ -230,9 +233,11 @@ function drawSparks(ctx, colors, level, progress) {
   ctx.globalAlpha = 1;
 }
 
-export function mountCreature(canvas, { world, level, defeated = false, onStateChange = () => {} }) {
+export function mountCreature(canvas, { world, level, defeated = false, elite = false, onStateChange = () => {} }) {
   const ctx = canvas.getContext("2d");
-  const colors = creature(world);
+  const colors = elite && world === "rust"
+    ? { ...creature(world), elite: true, light: "#fff0ca", accent: "#e6b9ff", shade: "#7d4b9f", dark: "#382b51" }
+    : creature(world);
   const rank = Number.isSafeInteger(level) ? level : 1;
   const variant = 1 + Math.abs(rank - 1) % 3;
   const view = canvas.ownerDocument.defaultView;
