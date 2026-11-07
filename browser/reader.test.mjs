@@ -299,3 +299,93 @@ test('Go beginner checkpoints update the character sheet and survive a reload', 
   await jumpTo(page, go.quests[0].bossPage);
   assert.equal(await page.getByRole('textbox', { name: 'Go code' }).inputValue(), '// Keep this Go draft 1');
 });
+
+test('a creature is defeated only after Forge is earned by the current hero', async (t) => {
+  const page = await newPage(t, '', 'go');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const { quests: [quest] } = JSON.parse(await readFile(new URL('data/worlds/go/campaign.json', project), 'utf8'));
+  await createHero(page, 'Creature Hunter', 1);
+  await jumpTo(page, quest.manualPage);
+  assert.equal(await page.locator('.creature-encounter').count(), 0);
+
+  await jumpTo(page, quest.bossPage);
+  const encounter = page.locator('.creature-encounter');
+  const ready = page.locator('.creature-encounter[data-state="ready"]');
+  const defeated = page.locator('.creature-encounter[data-state="defeated"]');
+  await ready.locator('canvas').waitFor();
+  const forge = page.getByRole('checkbox', { name: 'Forge self-review' });
+  await forge.click();
+  await page.getByText('Save your boss encounter draft before marking Forge.', { exact: true }).waitFor();
+  assert.equal(await forge.isChecked(), false);
+  await ready.waitFor();
+
+  await page.getByRole('textbox', { name: 'Go code' }).fill('func badge(raw string) string { return raw }');
+  await page.getByRole('button', { name: 'Save code notes' }).click();
+  await page.getByText('Saved to your quest log', { exact: true }).waitFor();
+  await ready.waitFor();
+
+  await Promise.all([
+    page.locator('.creature-encounter[data-state="defeating"]').waitFor(),
+    forge.check(),
+  ]);
+  await defeated.waitFor();
+  await encounter.getByText(/Defeated/i).waitFor();
+
+  await page.reload();
+  await openBookPage(page, quest.bossPage);
+  await defeated.locator('canvas').waitFor();
+
+  await page.getByRole('button', { name: 'Switch hero' }).click();
+  await createHero(page, 'Creature Scout', 1);
+  await jumpTo(page, quest.bossPage);
+  await ready.locator('canvas').waitFor();
+});
+
+test('a Rust boss links to its graded drill and defeat follows recorded Forge', async (t) => {
+  const campaign = JSON.parse(await readFile(new URL('data/campaign.json', project), 'utf8'));
+  const quest = campaign.quests.find(({ level }) => level === 3);
+  const drill = pages.find(({ level, prompts }) => level === quest.level && prompts.some((prompt) => prompt.exerciseId));
+  const exercise = drill.prompts.find((prompt) => prompt.exerciseId);
+  const page = await newPage(t, '');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/status', (route) => route.fulfill({ json: { storage: 'SQLite', runner: 'available' } }));
+  await page.reload();
+  await createHero(page, 'Rust Creature Hunter', 1);
+  await jumpTo(page, quest.bossPage);
+
+  const ready = page.locator('.creature-encounter[data-state="ready"]');
+  const defeated = page.locator('.creature-encounter[data-state="defeated"]');
+  await ready.getByRole('link', { name: 'Open the graded drill' }).click();
+  await openBookPage(page, drill.page);
+  await ready.waitFor();
+
+  let passed = false;
+  let submissions = 0;
+  await page.route('**/api/grade', (route) => {
+    const body = route.request().postDataJSON();
+    assert.deepEqual([body.page, body.promptId, body.exerciseId], [drill.page, exercise.id, exercise.exerciseId]);
+    passed = ++submissions === 2;
+    return route.fulfill({ json: { verdict: passed ? 'pass' : 'fail', passed: Number(passed), failed: Number(!passed) } });
+  });
+  await page.route('**/api/progress', async (route) => {
+    const response = await route.fetch();
+    const progress = await response.json();
+    if (passed) progress.levels.push({ level: quest.level, forge: true });
+    await route.fulfill({ response, json: progress });
+  });
+
+  const form = page.getByRole('form', { name: exercise.title, exact: true });
+  const code = form.getByRole('textbox', { name: 'Rust code' });
+  const run = form.getByRole('button', { name: 'Run Rust tests' });
+  await code.fill('// First attempt');
+  await run.click();
+  await form.getByText('0 passed · 1 failed', { exact: true }).waitFor();
+  await ready.waitFor();
+  await code.fill('// Revised attempt');
+  await run.click();
+  await form.getByText('Tests passed', { exact: true }).waitFor();
+  assert.match(await defeated.getByRole('status').textContent(), /Defeated/i);
+
+  await jumpTo(page, quest.bossPage);
+  await defeated.waitFor();
+});

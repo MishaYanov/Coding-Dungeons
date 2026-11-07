@@ -1,4 +1,5 @@
 import { characterProgress, SKILL_LEVEL_CAP } from "./progression.mjs";
+import { creatureName, mountCreature } from "./creatures.mjs";
 
 const $ = (id) => document.getElementById(id);
 const make = (tag, className = "", copy = "") => {
@@ -76,6 +77,7 @@ const state = {
   levels: new Map(),
   responses: new Map(),
   attempts: [],
+  creature: null,
   drafts: new Map(),
   reveals: new Map(),
   runner: "",
@@ -206,7 +208,7 @@ function applyProgress(progress) {
   $("open-profile").title = `Edit ${state.profile.callsign}`;
 }
 
-async function refreshProgress() {
+async function refreshProgress({ animateForgeLevel = null } = {}) {
   const hero = state.hero;
   if (!hero) return;
   const number = ++state.progressRequest;
@@ -216,6 +218,7 @@ async function refreshProgress() {
     applyProgress(progress);
     state.progressError = "";
     updateForgeBadge();
+    updateCreature(animateForgeLevel);
     if ($("log-dialog").open) renderCharacterSheet();
   } catch (error) {
     if (hero !== state.hero || number !== state.progressRequest) return;
@@ -694,7 +697,7 @@ function renderPrompt(data, prompt, index) {
         const recorded = testRecorded(result);
         setInlineStatus(status, recorded ? "Test run recorded" : "Draft saved. No result was recorded.");
         try {
-          await refreshProgress();
+          await refreshProgress({ animateForgeLevel: testPassed(result) ? Number(data.level) : null });
         } catch {
           if (recorded && hero === state.hero) setInlineStatus(status, "Test run recorded. Refresh the quest log to update your badges.");
         }
@@ -780,6 +783,65 @@ function updateForgeBadge() {
   marker.textContent = forged ? "Forge earned" : "Forge · pass the tests";
 }
 
+function clearCreature() {
+  state.creature?.destroy();
+  state.creature = null;
+}
+
+function updateCreature(animateLevel = null) {
+  const encounter = state.creature;
+  if (!encounter) return;
+  encounter.update(enabled(state.levels.get(encounter.level)?.forge), {
+    animate: !state.loading && encounter.level === animateLevel,
+  });
+}
+
+function creatureEncounter(data, quest) {
+  const isBoss = data.page === Number(quest.bossPage);
+  const isGraded = list(data.prompts).some((prompt) => prompt.exerciseId);
+  if (!isBoss && !isGraded) return null;
+
+  const world = state.world.id;
+  const level = Number(quest.level);
+  const card = make("section", "field-card creature-encounter");
+  const heading = make("div", "creature-heading");
+  const identity = make("div");
+  identity.append(make("p", "eyebrow", "DUNGEON ENCOUNTER"), make("h2", "", creatureName(world, level)));
+  const status = make("p", "creature-status");
+  status.setAttribute("role", "status");
+  heading.append(identity, status);
+  const canvas = make("canvas");
+  canvas.width = 320;
+  canvas.height = 116;
+  canvas.setAttribute("aria-hidden", "true");
+  card.append(heading, canvas);
+
+  const drillPage = pageNumber(levelExercises(level)[0]?.page);
+  if (isGraded) {
+    card.append(make("p", "fine-print", "Pass the challenge tests to defeat this creature."));
+  } else if (drillPage) {
+    const hint = make("p", "fine-print");
+    hint.append(bookLink("Open the graded drill", drillPage), " to defeat this creature.");
+    card.append(hint);
+  } else {
+    card.append(make("p", "fine-print", "Save your challenge draft and complete Forge self-review below."));
+  }
+
+  const renderer = mountCreature(canvas, {
+    world,
+    level,
+    defeated: enabled(state.levels.get(level)?.forge),
+    onStateChange(phase) {
+      card.dataset.state = phase;
+      const copy = phase === "ready" ? "Awaiting Forge" : "Defeated · Forge earned";
+      if (status.textContent !== copy) status.textContent = copy;
+      if (phase === "defeating" && card.isConnected) card.scrollIntoView({ block: "nearest" });
+    },
+  });
+  state.creature = { ...renderer, level };
+  return card;
+}
+
 function levelCheckpoint(data, quest) {
   const hero = state.hero;
   const card = section("Level checkpoint");
@@ -802,6 +864,7 @@ function levelCheckpoint(data, quest) {
         await api(`/api/progress/${level}`, { method: "PATCH", body: { [field]: checked } });
         if (hero !== state.hero) return;
         state.levels.set(level, { ...state.levels.get(level), level, [field]: checked });
+        if (field === "forge") updateCreature(level);
         toast("Quest log updated");
       } catch (error) {
         if (hero === state.hero) {
@@ -846,6 +909,7 @@ function renderGuide(data) {
   const hero = state.hero;
   const guide = $("guide-content");
   const quest = findQuest(data.level);
+  clearCreature();
   $("guide-title").textContent = text(data.title) || text(quest?.mission_title) || `Book page ${data.page}`;
   const content = [guideNotes(data)];
   if (state.progressError) {
@@ -867,6 +931,8 @@ function renderGuide(data) {
     status.append(refresh);
     content.push(status);
   }
+  const encounter = quest && creatureEncounter(data, quest);
+  if (encounter) content.push(encounter);
   list(data.prompts).forEach((prompt, index) => {
     if (Object.hasOwn(promptLabels, prompt.type) && prompt.id != null) content.push(renderPrompt(data, prompt, index));
   });
@@ -1149,6 +1215,7 @@ async function activateHero(selected, preferredPage = null) {
   state.progressError = "";
   state.page = null;
   state.loading = false;
+  clearCreature();
   $("map-search").value = "";
   $("log-content").replaceChildren();
   $("guide-content").replaceChildren(make("p", "muted", "Opening your expedition…"));

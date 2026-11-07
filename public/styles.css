@@ -254,6 +254,35 @@ svg { display: block; flex-shrink: 0; }
 .field-card p + p { margin-top: 8px; }
 .note-card { background: linear-gradient(120deg, #253039, #1b2733 65%); border-left: 3px solid var(--copper-deep); }
 .note-card .eyebrow { margin-bottom: 7px; font-size: .64rem; }
+.creature-encounter {
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(140deg, #252838, #15222f 68%);
+}
+.creature-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.creature-heading .eyebrow { font-size: .63rem; margin-bottom: 3px; }
+.creature-encounter .creature-status {
+  font-size: .71rem;
+  color: var(--copper);
+  border: 1px solid #665248;
+  border-radius: 100px;
+  padding: 4px 8px;
+  background: #352a2b;
+}
+.creature-encounter:not([data-state="ready"]) .creature-status {
+  color: var(--teal);
+  border-color: #527c71;
+  background: #233932;
+}
+.creature-encounter canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 320 / 116;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #101925;
+}
 .prompt-form { display: grid; gap: 12px; }
 .prompt-heading { display: flex; gap: 9px; align-items: flex-start; justify-content: space-between; }
 .prompt-heading h2 { margin-top: 2px; }

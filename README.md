@@ -2,6 +2,8 @@
 
 Play through four programming books in a local game reader. Read the book on the left, then use the Game Master on the right for quizzes, coding challenges, hints, and debriefs. Your character sheet tracks XP, skill levels, and path progress.
 
+Challenge pages have a creature from their world. Passing a graded exercise or completing a guided Forge self-review defeats it, and your hero's save keeps the result.
+
 | World | Levels | What you practice |
 | --- | ---: | --- |
 | 1 · JavaScript | 14 | Language foundations, data validation, state, and asynchronous work |

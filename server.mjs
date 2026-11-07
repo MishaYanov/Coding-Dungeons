@@ -41,6 +41,9 @@ async function loadWorld(spec, number) {
     bookUrl, kitUrl:kit?.isFile() ? kitPath : null,
   };
   const database = parse(rustDatabase);
+  const exercisePages = new Map(pages.flatMap(page => page.prompts
+    .filter(prompt => prompt.exerciseId)
+    .map(prompt => [prompt.exerciseId, page.page])));
   return {
     info, pages, rust,
     cookie:rust ? 'ferrum_hero' : `ferrum_hero_${id}`,
@@ -54,7 +57,8 @@ async function loadWorld(spec, number) {
       paths:campaign.paths,
       quests:campaign.quests.map(({hint1, hint2, debrief, ...quest}) => quest),
       rooms:campaign.rooms.map(room => ({...room, choices:room.choices.map(({result,...choice}) => choice)})),
-      exercises:exercises.map(({tests, solution, ...exercise}) => exercise),
+      exercises:exercises.map(({tests, solution, ...exercise}) =>
+        ({...exercise, page:exercisePages.get(exercise.id)})),
       levelPages:Object.fromEntries(campaign.quests.map(quest => [quest.level, quest.page])),
       total:pages.length,
     },
@@ -261,7 +265,7 @@ async function submitCode(request, response, world, heroId) {
 const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8',
   '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
   '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip'};
-const publicFiles = new Set(['/index.html', '/styles.css', '/app.js', '/progression.mjs',
+const publicFiles = new Set(['/index.html', '/styles.css', '/app.js', '/progression.mjs', '/creatures.mjs',
   ...worlds.flatMap(({info}) => [info.bookUrl, info.kitUrl].filter(Boolean))]);
 const pageAsset = /^\/book\/(?:(?:javascript|typescript|go)\/)?pages\/[1-9]\d{0,2}\.webp$/;
 
