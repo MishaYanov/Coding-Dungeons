@@ -19,6 +19,14 @@ The test builds the helper with the Windows .NET Framework compiler into a fresh
 
 The runner expects `native-runner.json`, `broker.exe`, and `wasm-worker/wasm-worker.exe` in the bundle. The compiler directories are `rust/` with the Windows x64 Rust compiler and `wasm32-wasip1` target and `go/` with the Windows x64 Go toolchain. Publish the Wasmtime worker as a self-contained Windows x64 directory. The manifest identifies the available languages and SHA-256 hashes of their fixed executable paths.
 
+The staging script builds the broker and self-contained worker and copies the required toolchains into `desktop/runtime/standalone-runner`. Use Windows x64, PowerShell 7, a .NET SDK, Rust 1.99.1 with the WASI target, and Go 1.25.1. Provide a local folder with the pinned Wasmtime and .NET NuGet packages and the Wasmtime license listed in the script. It verifies the file hashes before building. [Native staging script](../desktop/stage-native-runtime.ps1)
+
+```powershell
+rustup target add --toolchain 1.99.1 wasm32-wasip1
+$rustBin = Split-Path (rustup which --toolchain 1.99.1 rustc)
+pwsh -File desktop/stage-native-runtime.ps1 -RustToolchain (Split-Path $rustBin) -ArtifactSource 'C:\path\to\runtime-artifacts'
+```
+
 After staging the package, run both the boundary and actual compiler smoke as a standard user on a clean Windows machine with networking off.
 
 ```powershell

@@ -17,6 +17,7 @@ delete env.GOOS;
 delete env.GOARCH;
 const command = { env, timeout: 90_000, maxBuffer: 32 * 1024, windowsHide: true };
 const goAvailable = await exec('go', ['version'], command).then(() => true, () => false);
+if (process.env.FERRUM_REQUIRE_GO === '1' && !goAvailable) throw new Error('The pinned Go compiler is required for catalog verification.');
 
 // This developer test runs only checked-in reference, starter, and mutant code.
 // Learner submissions use the isolated Workbench backend.
