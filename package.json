@@ -1,8 +1,16 @@
 {
-  "name": "ferrum-reader",
+  "name": "coding-dungeons",
   "version": "1.0.0",
+  "productName": "Coding Dungeons",
+  "description": "Four offline programming worlds with books, challenges, and hero progression.",
+  "author": "Coding Dungeons contributors",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
+  "main": "desktop/main.mjs",
+  "config": {
+    "forge": "./desktop/forge.config.cjs"
+  },
   "engines": {
     "node": ">=24"
   },
@@ -10,9 +18,35 @@
     "start": "node --env-file-if-exists=.env server.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "test:browser": "node --test browser/reader.test.mjs",
-    "test:book": "python work/scripts/check_examples.py && python work/scripts/run_case_studies.py"
+    "test:desktop": "node --test browser/desktop.test.mjs",
+    "test:book": "python work/scripts/check_examples.py && python work/scripts/run_case_studies.py",
+    "desktop:bundle": "vite build",
+    "desktop:start": "npm run desktop:bundle && electron .",
+    "desktop:package": "npm run desktop:bundle && electron-forge package --platform=win32 --arch=x64",
+    "desktop:make": "npm run desktop:bundle && electron-forge make --platform=win32 --arch=x64"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "1.0.1",
+    "quickjs-emscripten": "0.32.0",
+    "typescript": "6.0.3"
+  },
+  "overrides": {
+    "@electron/packager": {
+      "extract-zip": "npm:@electron-internal/extract-zip@1.0.8"
+    }
   },
   "devDependencies": {
-    "playwright-core": "1.65.0"
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
+    "@electron/node-gyp": "git+https://github.com/electron/node-gyp.git#06b29aafb7708acef8b3669835c8a7857ebc92d2",
+    "7zip-bin": "5.2.0",
+    "electron": "45.2.3",
+    "playwright-core": "1.65.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "8.3.6"
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.4": false
   }
 }
