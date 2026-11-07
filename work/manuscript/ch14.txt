@@ -1,0 +1,218 @@
+# Chapter 14 Error Architecture and Recovery
+
+## An Error Type Defines Decisions Callers Can Make
+
+Result is an ownership boundary carrying one of two values. Its advanced design problem is not how to write a question mark. The problem is deciding which information crosses the boundary, which recovery decisions remain possible, and what has already happened when failure is reported.
+
+A storage operation can fail before changing anything, after committing, or while its commit status is unknown. All three cases can use Result. A parser can return a precise byte offset or a string that discards it. A queue can return a rejected job or drop it while returning an error. The enum shape determines what the caller still owns; documentation determines how that ownership relates to external effects.
+
+Begin error design with the caller's decisions. Can it retry immediately, retry with a delay, ask for different input, choose another backend, or stop? If several failures require the same response, they may share a public category while retaining their underlying source for diagnosis. If two failures require different responses, flattening them into one string forces callers to inspect text or give up on structured recovery.
+
+Not every detail should become a public variant. Exposing internal dependency errors directly can couple the API to a particular library and version. A good boundary preserves useful meaning while limiting accidental implementation commitments. This requires judgment about which layer owns the recovery policy.
+
+## Separate Domain Categories From Diagnostic Causes
+
+A domain error can classify an operation while preserving an underlying error through the standard Error trait's source method. Display provides a human-readable description. Neither should be treated as a stable machine protocol unless that is explicitly promised.
+
+```rust
+use std::error::Error;
+use std::fmt;
+use std::io;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug)]
+enum LoadError {
+    Read { path: PathBuf, source: io::Error },
+    InvalidLimit { line: usize, value: String },
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read { path, .. } => {
+                write!(f, "cannot read configuration {}", path.display())
+            }
+            Self::InvalidLimit { line, value } => {
+                write!(f, "invalid limit on line {line}: {value:?}")
+            }
+        }
+    }
+}
+
+impl Error for LoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Read { source, .. } => Some(source),
+            Self::InvalidLimit { .. } => None,
+        }
+    }
+}
+
+fn load_limit(path: &Path) -> Result<u32, LoadError> {
+    let text = std::fs::read_to_string(path).map_err(|source| {
+        LoadError::Read { path: path.to_owned(), source }
+    })?;
+    let value = text.lines().next().unwrap_or("").trim();
+    value.parse().map_err(|_| LoadError::InvalidLimit {
+        line: 1,
+        value: value.to_owned(),
+    })
+}
+```
+
+The Read variant adds the path because io::Error alone does not identify which configuration was being loaded. The source remains available for details such as permission denial. InvalidLimit preserves the invalid value and line because the caller may present a targeted correction. The parse error's precise implementation type is not needed for this domain decision.
+
+This example stores a PathBuf and String in errors. That allocation is often acceptable because the error path needs durable context after local borrows end. In allocation-constrained code, use compact offsets, numeric categories, or borrowed errors with carefully scoped lifetimes. Do not assume every error must implement Error or own a heap allocation; those are interoperability choices rather than requirements of Result.
+
+## The Question Mark Converts but Does Not Invent Context
+
+The question mark propagates an early return and can convert an error through the relevant conversion relationship. It does not know what operation was attempted or which domain object matters. A broad From<io::Error> implementation can be convenient, but it cannot attach a path that it never received.
+
+Use local map_err when the context is available at that call site. Use From when the conversion is genuinely context-free and unambiguous. A large application may use contextual error reporting at orchestration boundaries while its reusable libraries expose structured enums. These strategies serve different callers and can coexist.
+
+Avoid wrapping every layer with a sentence that repeats the previous layer. A chain saying failed to load, failed to read, read failed adds little. Useful context names the operation, resource, position, or invariant that the lower layer could not know. The final rendering can show the high-level operation followed by the cause chain.
+
+Also avoid logging and returning the same error at every level. If a caller is responsible for handling or reporting the failure, intermediate logging may create several misleading incidents for one event. Log where the operation's outcome is decided or where important context would otherwise be lost. A library can preserve context in the error without emitting anything itself.
+
+## Preserve Ownership When Recovery Needs It
+
+A bounded queue that rejects a job should often return the job. Otherwise the caller cannot retry without cloning it before submission. The failure type can carry both the reason and the original value.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+enum RejectReason {
+    Full,
+    Closed,
+}
+
+#[derive(Debug)]
+struct Rejected<T> {
+    reason: RejectReason,
+    value: T,
+}
+
+struct Queue<T> {
+    values: Vec<T>,
+    limit: usize,
+    closed: bool,
+}
+
+impl<T> Queue<T> {
+    fn try_push(&mut self, value: T) -> Result<(), Rejected<T>> {
+        let reason = if self.closed {
+            Some(RejectReason::Closed)
+        } else if self.values.len() >= self.limit {
+            Some(RejectReason::Full)
+        } else {
+            None
+        };
+
+        if let Some(reason) = reason {
+            Err(Rejected { reason, value })
+        } else {
+            self.values.push(value);
+            Ok(())
+        }
+    }
+}
+
+fn main() {
+    let mut queue = Queue {
+        values: Vec::new(), limit: 0, closed: false,
+    };
+    let rejected = queue.try_push(String::from("job")).unwrap_err();
+    assert_eq!(rejected.reason, RejectReason::Full);
+    assert_eq!(rejected.value, "job");
+}
+```
+
+The method validates before modifying the vector. A returned rejection therefore means the queue did not accept ownership. This is a useful semantic guarantee in addition to memory safety. If submission involved a remote broker, the same guarantee might be impossible after a timeout. The error model would then need a category such as unknown outcome, and retry would need an idempotency strategy.
+
+Returning T can make the error generic and large. That is a reasonable tradeoff when recovery needs ownership. Another API can borrow input and return a status if the operation never retains it. Do not force cloning solely to keep an error enum small without measuring the actual cost and caller needs.
+
+## Recovery Is a State Transition
+
+Treat each fallible operation as a transition with a failure postcondition. For an in-memory update, the postcondition might be unchanged state. For a stream parser, it might be input consumed through a delimiter. For a database transaction, it might be a durable commit or an explicit rollback. The error's meaning depends on this postcondition.
+
+A common robust pattern is validate, prepare, then commit. Validation checks preconditions without mutating shared state. Preparation builds a new owned value that may fail independently. Commit performs a small, ideally infallible replacement. This minimizes the region where state can be partially updated.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+enum RenameError {
+    Empty,
+    TooLong,
+}
+
+struct Account {
+    name: String,
+    revision: u64,
+}
+
+impl Account {
+    fn rename(&mut self, input: &str) -> Result<(), RenameError> {
+        let normalized = input.trim();
+        if normalized.is_empty() {
+            return Err(RenameError::Empty);
+        }
+        if normalized.len() > 64 {
+            return Err(RenameError::TooLong);
+        }
+        let next = normalized.to_owned();
+        let revision = self.revision.checked_add(1)
+            .expect("account revision exhausted");
+        self.name = next;
+        self.revision = revision;
+        Ok(())
+    }
+}
+```
+
+The revision overflow is treated as an internal exhaustion condition rather than a user-input error. The important ordering is that checked arithmetic happens before modifying name. If a panic unwinds from expect, the account still holds its original pair. After preparation, assigning the new String and revision requires no application-level fallible step.
+
+This does not promise survival under every process failure. Allocation failure may abort, and a process crash can occur between machine instructions. The guarantee is about ordinary returned errors and the considered panic path in memory. Durability across crashes requires a storage protocol, not merely careful Result handling.
+
+## Panic Is an Escape From the Normal Return Contract
+
+A panic is useful for violated programming assumptions when continuing the current operation is inappropriate. It should not be the ordinary representation of invalid user input or expected remote failures. Callers can choose to turn a Result into a panic; a callee that panics first removes their recovery option.
+
+Unwinding runs destructors along the unwound path, but it does not roll back arbitrary mutations or external effects. A panic in the middle of a vector update can leave a logically incomplete value even if memory safety remains intact. Standard synchronization poisoning can signal that protected data may need repair, but poisoning is advisory behavior rather than a universal proof of validity.
+
+catch_unwind is a boundary tool for isolating unwinding panics in selected contexts. It catches neither aborting panics nor all possible failures. UnwindSafe is a marker about exposing potentially inconsistent state across that boundary, not a guarantee that an application can safely resume its domain workflow. Adding AssertUnwindSafe suppresses a type-level concern; it does not repair the underlying invariant.
+
+A useful review separates memory safety, local invariant preservation, and business consistency. Safe Rust provides strong memory guarantees, but a caught panic may still leave a payment half recorded or a callback registry temporarily altered. Decide whether to repair, discard, restart, or terminate the affected component based on its actual state model.
+
+## Error Erasure Belongs at a Deliberate Boundary
+
+Box<dyn Error + Send + Sync> can combine unrelated failures into one owned type. It is useful in application entry points, orchestration code, and diagnostic pipelines where the primary action is reporting rather than fine-grained recovery. It also hides concrete categories unless callers downcast or inspect sources.
+
+Erasure is less suitable when library callers must distinguish missing data from corruption or retryable rejection from permanent invalid input. An opaque library error can still expose stable query methods such as kind or is_retryable, allowing internal representation to evolve. The right design depends on which decisions the boundary promises to support.
+
+Be careful with a universal is_retryable boolean. Retryability can depend on the operation's idempotency, elapsed time, authentication state, and whether an effect may already have committed. A transport timeout is not inherently safe to retry for every request. An error can classify what is known; the orchestration layer often owns the final retry decision.
+
+## Testing Failure Paths Means Testing Postconditions
+
+Tests that merely assert is_err miss most error architecture. For a rejected job, assert that ownership is returned and the queue length is unchanged. For a failed rename, assert that both name and revision retain their previous values. For a parse failure, assert the offset and the documented consumption behavior. For a wrapped I/O error, assert that the source chain preserves the relevant cause.
+
+Inject failure at meaningful boundaries. A writer that fails after a chosen number of bytes can expose partial-output behavior. A repository stub that reports unknown commit status can exercise idempotency logic. A callback that panics can reveal whether a registry restores its internal structure. Such tests validate the contract rather than merely mirror enum construction.
+
+Keep public error messages useful but avoid using them as a substitute for structured data. Exact string assertions are appropriate for a promised CLI format or user-facing snapshot, while library recovery tests should match variants or stable query methods. This lets wording improve without silently breaking machine behavior.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A network request times out after sending a payment command. Should its error automatically be classified as retryable?
+
+Solution. No. The server may have committed the payment before the response was lost. Preserve an unknown-outcome category or equivalent information. Retry policy must use an idempotency key, a query for prior completion, or a protocol that defines safe repetition. Transport failure alone does not establish the operation's postcondition.
+
+Exercise 2. A library converts every error to String. What capabilities has it removed?
+
+Solution. Callers lose structured classification, reliable cause traversal, and access to owned recovery data unless those are encoded separately. Text can still be excellent for final reporting, but it is a poor machine interface. Preserve domain categories at library boundaries and render them at the reporting boundary.
+
+Exercise 3. A mutation method returns Err after changing two of three fields. Is this memory unsafe?
+
+Solution. Not necessarily. Safe Rust can preserve memory safety while allowing a broken domain invariant. The method must document partial updates or be redesigned around validation, preparation, and a smaller commit step. Tests should assert the failure postcondition, not just the presence of Err.
+
+## Further Reading
+
+- [Standard library Error](https://doc.rust-lang.org/std/error/trait.Error.html) documents diagnostic descriptions and source chains.
+- [Standard library Result](https://doc.rust-lang.org/std/result/enum.Result.html) describes ownership-preserving combinators and propagation operations.
+- [Standard library catch_unwind](https://doc.rust-lang.org/std/panic/fn.catch_unwind.html) specifies the limits of panic interception and unwind safety.

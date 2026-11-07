@@ -1,0 +1,210 @@
+# Chapter 30 Raw Pointers Provenance Aliasing and Validity
+
+## A raw pointer postpones obligations
+
+A raw pointer can represent an address without carrying the safe access guarantees of a reference. It can be null, unaligned, stale, or point to storage that does not currently contain an initialized value of its nominal pointee type. Merely having such a pointer is not the same as having permission to dereference it. The obligations become concrete when an operation reads, writes, forms a reference, performs constrained pointer arithmetic, or otherwise relies on a stronger contract.
+
+This flexibility is useful for implementing allocators, foreign interfaces, collections, and device access. It is also why raw pointers do not solve a borrowing problem by themselves. They remove static enforcement from part of the operation and require the implementation to preserve the same underlying memory safety conditions through another argument.
+
+Separate four questions. Does the pointer identify an appropriate live allocation? Is the addressed range properly aligned and in bounds for this operation? Does the storage contain valid initialized values when the operation requires them? Is the access compatible with other active references, pointers, and threads? A positive answer to one question does not imply the others.
+
+`NonNull<T>` answers only a narrow representation question: the pointer is nonnull, with the type's documented variance and other properties. It does not establish ownership, alignment for dereference, initialization, allocation identity, or freedom from alias conflicts. A nonnull dangling pointer can still be useful as a sentinel in a correctly designed empty container.
+
+## References assert a stronger contract immediately
+
+Creating `&T` or `&mut T` is itself a meaningful event. It asserts appropriate validity, alignment, lifetime, and access relationships. It is not safe to create an invalid reference temporarily on the theory that no load will occur before it is repaired. The compiler may optimize based on the reference's contract.
+
+Raw address expressions are useful when an implementation needs an address without first making those assertions. This includes addresses of uninitialized fields and packed fields. The raw pointer is not a license to access the field incorrectly; it avoids prematurely asserting a reference contract.
+
+```rust
+use std::mem::MaybeUninit;
+
+struct Pair {
+    left: u32,
+    right: u32,
+}
+
+fn main() {
+    let mut storage = MaybeUninit::<Pair>::uninit();
+    let pointer = storage.as_mut_ptr();
+    // SAFETY: these raw field addresses are within allocated storage;
+    // write initializes each field without reading an old value.
+    unsafe {
+        (&raw mut (*pointer).left).write(10);
+        (&raw mut (*pointer).right).write(20);
+    }
+    // SAFETY: both fields now contain valid initialized u32 values.
+    let pair = unsafe { storage.assume_init() };
+    assert_eq!(pair.left + pair.right, 30);
+}
+```
+
+The code never creates a reference to the uninitialized `Pair`. A field projection used to obtain a raw address still needs to stay within the appropriate allocated storage. Forming arbitrary out of bounds projections is not made valid merely by avoiding a load.
+
+The example's fields are copyable integers, so partial initialization cannot leak owned resources. A field by field constructor involving strings needs a cleanup strategy for a panic after the first field is initialized. That is an ownership problem in addition to the validity problem addressed here.
+
+## Provenance tracks the origin of access
+
+A pointer is not adequately modeled as just an integer address. Its ability to access storage also depends on its relationship with an allocation and the history by which it was derived. This family of relationships is discussed as pointer provenance. Two pointers displaying the same address do not thereby establish that every operation through them is interchangeable.
+
+Rust's precise aliasing and provenance semantics continue to be developed. Avoid presenting one experimental model, such as a particular Miri borrowing mode, as a complete final language specification. At the same time, the absence of a complete formal model is not permission to ignore documented pointer requirements. Standard library safety contracts and the Reference still impose concrete obligations.
+
+Strict provenance APIs make some intended operations explicit. `addr` extracts the address component. `with_addr` creates a pointer with a changed address while retaining the source pointer's provenance under its contract. These operations help express address manipulation without assuming an integer alone reconstructs the needed access authority.
+
+```rust
+use std::mem::size_of;
+
+fn main() {
+    let values = [10_u32, 20, 30];
+    let base = values.as_ptr();
+    let address = base.addr() + size_of::<u32>();
+    let second = base.with_addr(address);
+    // SAFETY: second is derived from this live allocation, points
+    // to its initialized second element, and only reads shared data.
+    assert_eq!(unsafe { second.read() }, 20);
+}
+```
+
+Ordinary `base.add(1)` would express this particular operation more directly. The example isolates the role of address adjustment. `with_addr` does not prove the new address is in bounds, aligned, or initialized. The subsequent read still needs those facts.
+
+Pointer tagging techniques can reserve unused address bits and later restore the original usable address, but they need a proof about alignment, masks, allocation provenance, and every dereference. Strict provenance operations make that proof easier to state; they do not supply the proof automatically. If pointer tagging merely saves a small field with no demonstrated benefit, a separate enum or integer tag may be a better engineering choice.
+
+## Arithmetic has operation specific requirements
+
+Different pointer arithmetic methods have different contracts. In bounds arithmetic carries stronger requirements than wrapping address arithmetic. A one past the end pointer can be useful for iteration or range representation, but it cannot be dereferenced as an element. Going outside an allocation and later returning is not something to justify casually with hardware behavior; read the exact method's requirements.
+
+Byte offsets and element offsets also differ. `add(1)` on `*const u64` advances by one element, while byte based methods express byte movement. Generic code must account for zero sized types, where logical iteration length changes while an element pointer's address may not. Counting bytes is therefore not a substitute for counting initialized elements.
+
+An implementation should derive pointers from the owner or borrowed slice at a point where the owner is known to remain alive and stable. Retaining raw pointers across vector growth, buffer replacement, or object movement creates additional invalidation rules. A raw pointer does not keep an allocation alive and does not freeze its address.
+
+These rules matter even when tests happen to reuse the same allocation address. An allocator can return the same address for a later allocation, but an old pointer's history is not automatically renewed. Treat deallocation as ending the old access relationship. Reacquire pointers from the new owner rather than reviving stale ones based on numeric equality.
+
+## Reads and writes also affect ownership
+
+`ptr::read` creates a value by reading storage without treating the source place as moved out in the compiler's ordinary safe analysis. For a copyable integer, copying can be straightforward. For an owning `String`, an uncoordinated read can duplicate destruction responsibility for the same allocation. The implementation must ensure the old location is no longer read or dropped as that owning value, or use an operation that replaces it coherently.
+
+`ptr::write` writes a value without dropping a previous value at the destination. It is appropriate for uninitialized storage, but overwriting an initialized owner can leak the old resource. Ordinary assignment performs different work because it accounts for the old initialized value.
+
+```rust
+fn replace_string(slot: &mut String, incoming: String) -> String {
+    let pointer: *mut String = slot;
+    // SAFETY: the exclusive borrow supplies one initialized String
+    // place. replace leaves incoming there and returns the old owner.
+    unsafe { pointer.replace(incoming) }
+}
+
+fn main() {
+    let mut value = String::from("before");
+    let old = replace_string(&mut value, String::from("after"));
+    assert_eq!(old, "before");
+    assert_eq!(value, "after");
+}
+```
+
+Safe `mem::replace` is preferable for this ordinary case. The raw version makes the ownership obligation visible for implementations already operating through pointers. The important property is that the destination remains initialized and the old owner has exactly one returned destruction responsibility.
+
+Bulk copies require the same reasoning. Copying the representation of owning values does not automatically clone their resources. A vector implementation may move elements with byte copies only because it also updates which locations are considered initialized and will be dropped. The byte operation and the ownership bookkeeping form one proof.
+
+## Range constructors need a complete lifetime contract
+
+`slice::from_raw_parts` can turn a pointer and a length into a borrowed slice. Its apparent convenience can hide several obligations: suitable alignment and nonnull pointer requirements, valid initialized elements, a range within one allocation, size constraints, and a valid shared access relationship for the entire returned lifetime.
+
+```rust
+/// Borrows bytes supplied by an external owner.
+///
+/// # Safety
+/// For the complete returned lifetime, pointer must be nonnull and
+/// valid for reads of length initialized bytes in one allocation.
+/// The range must fit isize::MAX and must not be mutated except as
+/// permitted by Rust's shared reference rules.
+unsafe fn borrowed_bytes<'a>(
+    pointer: *const u8,
+    length: usize,
+) -> &'a [u8] {
+    // SAFETY: these are precisely the caller's obligations above.
+    unsafe { std::slice::from_raw_parts(pointer, length) }
+}
+
+fn main() {
+    let bytes = [1_u8, 2, 3];
+    // SAFETY: bytes remains alive and unchanged through this use;
+    // its pointer and length describe one initialized allocation.
+    let view = unsafe { borrowed_bytes(bytes.as_ptr(), bytes.len()) };
+    assert_eq!(view, &[1, 2, 3]);
+}
+```
+
+The unconstrained output lifetime makes this unsafe helper easy to misuse if its precondition is not understood. A safer public design often takes a borrowed owner or returns a view tied to a guard, making the lifetime relationship explicit in safe types. Merely checking for null and checking the length cannot verify that arbitrary foreign memory is allocated, live, or immutable for the desired duration.
+
+For a foreign API that represents an empty buffer with a null pointer, normalize the empty case before constructing a slice, for example by returning an ordinary empty slice. Do not assume a zero length waives every requirement of a reference constructor. The exact contract of the called function determines what must hold.
+
+## Aliasing is about active access promises
+
+The phrase one mutable reference or many shared references is a useful first approximation, but advanced unsafe reasoning needs to consider derivation, reborrowing, access liveness, and interior mutability. A raw pointer derived from an exclusive reference can participate in legitimate internal operations, but it cannot be used in ways that contradict references handed to safe clients.
+
+For example, a collection cannot return a shared slice and then mutate its ordinary element bytes through a stored raw pointer while the slice is actively used. The raw pointer may predate the slice, but it does not override the later shared contract. Likewise, `UnsafeCell` only changes the relevant shared immutability rule for its contents; it does not allow duplicate exclusive references.
+
+When implementing an unsafe container, write down when raw access is permitted relative to every safe result. If a method returns `&mut T`, all other paths that could access that same value must be incompatible or suspended for the result's usable region. A dynamic guard, an exclusive owner borrow, or a private state machine can enforce that relationship.
+
+Do not base a proof solely on the statement that the program is single threaded. Aliasing violations can occur within one call stack. Callbacks and destructors can reenter a container, and saved references can overlap later accesses even without concurrency.
+
+## Safe inputs can establish useful pointer facts
+
+A function that receives ordinary borrowed slices starts with many facts already established by safe typing. An exclusive destination slice and a shared source slice usable at the same time cannot overlap in a way that violates their reference contracts. Their lengths establish accessible ranges. Their constructors establish initialization and alignment for the element type.
+
+```rust
+fn copy_prefix(destination: &mut [u8], source: &[u8]) -> bool {
+    if source.len() > destination.len() {
+        return false;
+    }
+    // SAFETY: safe slice inputs establish live initialized ranges.
+    // The exclusive destination cannot conflict with source, and
+    // the checked destination range is large enough for this copy.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            source.as_ptr(),
+            destination.as_mut_ptr(),
+            source.len(),
+        );
+    }
+    true
+}
+
+fn main() {
+    let mut bytes = [0_u8; 4];
+    assert!(copy_prefix(&mut bytes, &[7, 8]));
+    assert_eq!(bytes, [7, 8, 0, 0]);
+}
+```
+
+This example has a straightforward safe equivalent using `copy_from_slice` on a checked prefix. The unsafe version is educational, not a performance recommendation. Compilers can optimize the safe version to the same underlying operation. Use unsafe code when it provides a concrete capability or measured improvement, and preserve the safe baseline for comparison.
+
+## Review pointer code by obligations rather than syntax
+
+For each unsafe operation, identify the allocation owner, range, alignment, initialization state, ownership effect, alias compatibility, and concurrency policy. Then identify which constructor, bound, check, or invariant supplies each fact. A comment saying the pointer is valid compresses too many independent assumptions to be useful in a serious review.
+
+Miri and sanitizers can find important errors in tested executions, including some that ordinary optimized runs appear to tolerate. They do not prove correctness for all clients, targets, and schedules. Use them to challenge a written invariant, and revise the invariant when a failure reveals a missing condition.
+
+The strongest pointer code keeps raw access intervals short and converts back to safe types only after every stronger contract has been established. That local discipline allows the rest of the program to reason with ownership and borrowing instead of repeating the same pointer proof at every call site.
+
+## Exercises
+
+1. A raw pointer is nonnull and has the expected numeric address. Name four additional facts needed before reading a `T` through it.
+
+2. A helper returns a slice with any lifetime selected by its unsafe caller. Why cannot null and length checks make that helper safe for arbitrary pointers?
+
+3. A custom container uses `ptr::read` to move a string out of an element slot. What bookkeeping must change before normal destruction of the container resumes?
+
+## Reasoned Solutions
+
+1. The storage must belong to an appropriate live allocation, cover the complete range, have suitable alignment for the operation, contain a valid initialized `T`, and permit access under aliasing and concurrency rules. Nonnull and address equality establish none of those by themselves.
+
+2. Runtime checks cannot generally establish allocation lifetime, one allocation range membership, initialization, or the absence of conflicting mutation throughout an arbitrary future lifetime. A borrowed owner, guard, or unsafe caller contract must supply those relationships.
+
+3. The slot must no longer be treated as containing the moved owning string, or it must receive a replacement value before any operation reads or drops it as initialized. Otherwise cleanup may free the same allocation through both the returned string and the old slot. Panic paths must preserve the same accounting.
+
+## Further Reading
+
+- [The Rust standard library pointer module](https://doc.rust-lang.org/std/ptr/index.html) documents pointer access and provenance APIs.
+- [The Rust Reference on undefined behavior](https://doc.rust-lang.org/reference/behavior-considered-undefined.html) states current language obligations and their limits.
+- [The Rust standard library slice from raw parts function](https://doc.rust-lang.org/std/slice/fn.from_raw_parts.html) provides the complete slice constructor contract.

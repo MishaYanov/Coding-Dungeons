@@ -1,0 +1,278 @@
+# Chapter 36 Validation Should Attack the Contract
+
+Rust's compiler establishes important properties before execution, but it does not establish that a parser accepts the intended language, a retry is idempotent, a shutdown completes, or an unsafe abstraction is sound. Validation works best when each technique attacks a specific remaining uncertainty. A unit test checks a concrete observation. A property test explores a relationship over many inputs. A model checks a simplified state machine. An interpreter or sanitizer detects certain invalid executions. None of these should be asked to prove more than its method can support.
+
+Begin by writing the contract in observable terms. A bounded queue never contains more than its capacity, preserves accepted item order, and returns rejected items unchanged. A transaction either commits its intended state or leaves the previous state available. A parser either returns a valid representation or a defined error without losing bytes outside its consumption contract. Such statements generate useful tests because they describe behavior independent of the implementation's private steps.
+
+Tests that merely repeat the algorithm can share its mistakes. If production computes an offset with a complicated expression and the test computes the expected value with the same expression, agreement provides little evidence. Prefer a simpler reference model, independently constructed examples, or algebraic relationships that constrain the result from another direction. Validation should challenge the implementation's assumptions rather than narrate its source code back to itself.
+
+## Choose Tests From Invariants and Boundaries
+
+Boundary values are where representation choices become observable. Empty collections, zero capacity, maximum lengths, integer overflow, missing delimiters, Unicode boundaries, and truncated frames often exercise paths absent from ordinary examples. Derive these cases from the type and protocol. A queue with capacity zero is not simply a smaller ordinary queue if the implementation performs modulo by capacity before checking fullness.
+
+Also test transitions, not only states. A queue may work when first filled but fail after its indices wrap several times. A service may reject correctly after shutdown but race while closing admission. A transaction may restore state on one error path while leaking a reservation on another. The sequence that reaches a state can matter as much as the state's current field values.
+
+Classify failures so that tests assert the intended recovery behavior. Invalid input, resource exhaustion, dependency uncertainty, and internal invariant failure can require different responses. A test should distinguish rejection before admission, failure of accepted work, and an unknown external outcome. That distinction informs which operations a caller can safely retry.
+
+Keep tests deterministic when the property does not require environmental variation. Determinism makes a failure reproducible and reduces the chance that a flaky test is ignored. Randomized exploration is valuable, but retain the seed or minimized input that produced a failure. A discovered bug should become a stable regression case after the broader search has explained it.
+
+## Compare a Ring Buffer With a Simpler Model
+
+A reference model can be slower and more obvious than the optimized structure. Its purpose is to describe behavior through a different representation. The following complete program implements a small safe ring buffer and compares operation sequences against `VecDeque`. It exercises empty, full, wraparound, and rejected insertion behavior at several capacities.
+
+```rust
+use std::collections::VecDeque;
+
+struct Ring<T, const N: usize> {
+    slots: [Option<T>; N],
+    head: usize,
+    len: usize,
+}
+
+impl<T, const N: usize> Ring<T, N> {
+    fn new() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| None),
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, value: T) -> Result<(), T> {
+        if self.len == N {
+            return Err(value);
+        }
+        let tail = (self.head + self.len) % N;
+        self.slots[tail] = Some(value);
+        self.len += 1;
+        Ok(())
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+        let value = self.slots[self.head].take();
+        self.head = (self.head + 1) % N;
+        self.len -= 1;
+        value
+    }
+}
+
+fn exercise<const N: usize>() {
+    let mut ring = Ring::<u32, N>::new();
+    let mut model = VecDeque::new();
+    let mut state = 0x1234_5678_u64;
+    for _ in 0..5_000 {
+        state = state.wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        let value = (state >> 32) as u32;
+        if value & 1 == 0 {
+            let actual = ring.push(value);
+            let expected = if model.len() == N {
+                Err(value)
+            } else {
+                model.push_back(value);
+                Ok(())
+            };
+            assert_eq!(actual, expected);
+        } else {
+            assert_eq!(ring.pop(), model.pop_front());
+        }
+        assert_eq!(ring.len, model.len());
+    }
+    while let Some(expected) = model.pop_front() {
+        assert_eq!(ring.pop(), Some(expected));
+    }
+    assert_eq!(ring.pop(), None);
+}
+
+fn main() {
+    exercise::<0>();
+    exercise::<1>();
+    exercise::<2>();
+    exercise::<7>();
+}
+```
+
+The zero capacity case is safe because `push` returns before modulo and `pop` returns before advancing the head. The model checks ownership of rejected values as well as queue order. The deterministic sequence generator provides varied histories while remaining reproducible. It is not a substitute for exhaustive exploration, and a different generator may discover different patterns.
+
+This test still has limits. It uses `u32`, so it does not check destruction of nontrivial elements. It does not explore every capacity or every operation sequence. It also inspects the private length field rather than a public method because the example keeps the contract small. A production test suite should add drop counting, explicit boundary histories, and public API tests where compatibility matters.
+
+The ring buffer is implemented safely, so many memory errors are excluded by construction. If a later optimization replaces `Option<T>` with `MaybeUninit<T>`, the same behavioral model remains useful, but new obligations appear: exactly the initialized elements must be read and dropped, panic paths must preserve accounting, and zero capacity must remain valid. Reusing the model preserves semantic evidence while adding tools targeted at the unsafe representation.
+
+## Property Testing Needs Meaningful Properties
+
+Useful properties often relate several operations. Encoding then decoding should reproduce a value within the format's domain. Sorting should preserve the multiset and produce an ordered result. Splitting and recombining a valid byte stream at arbitrary boundaries should not change the parsed messages. A queue's outputs should equal its accepted inputs in the promised order. These properties constrain behavior more strongly than checking that a function does not panic.
+
+Round trip tests can still hide paired bugs. An encoder and decoder that share the same wrong field order may agree with each other while violating an external format. Combine round trips with independently specified fixtures or differential checks against an authoritative implementation. For a public protocol, bytes on the wire are part of the contract, not merely an implementation detail between two functions in one crate.
+
+Generate valid and invalid inputs deliberately. Uniform arbitrary bytes can spend most of its time failing at the first header check, leaving deep parser states unexplored. A structured generator can reach valid nested records and then mutate one length or delimiter. Conversely, generating only valid values misses rejection and resource limit behavior. The generator's distribution is part of the test's coverage strategy.
+
+Shrinking or minimizing a failing input makes the underlying invariant easier to see. Preserve enough context to reproduce stateful failures: the initial state, operation sequence, scheduling decisions where relevant, and toolchain configuration. A five operation queue history is more actionable than an unexplained failure after a million random steps. The minimized case should become a named regression test describing the violated behavior.
+
+## Failure Injection Tests the Unhappy Transition
+
+Ordinary success tests rarely visit the exact point at which an invariant is temporarily fragile. Inject failures between stages to verify that ownership based cleanup restores the promised state. Use an explicit error injection interface in tests or a small dependency that can return controlled failures. Avoid production switches that accidentally expose test behavior to users unless the system intentionally supports fault injection.
+
+This complete example uses a transaction guard to restore a vector's original length unless committed. It tests failures after different numbers of appended values.
+
+```rust
+struct AppendTransaction<'a> {
+    target: &'a mut Vec<u32>,
+    original_len: usize,
+    committed: bool,
+}
+
+impl<'a> AppendTransaction<'a> {
+    fn new(target: &'a mut Vec<u32>) -> Self {
+        let original_len = target.len();
+        Self { target, original_len, committed: false }
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for AppendTransaction<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.target.truncate(self.original_len);
+        }
+    }
+}
+
+fn append(
+    target: &mut Vec<u32>,
+    values: &[u32],
+    fail_after: Option<usize>,
+) -> Result<(), &'static str> {
+    let transaction = AppendTransaction::new(target);
+    for (index, &value) in values.iter().enumerate() {
+        if fail_after == Some(index) {
+            return Err("injected failure");
+        }
+        transaction.target.push(value);
+    }
+    transaction.commit();
+    Ok(())
+}
+
+fn main() {
+    for stage in 0..3 {
+        let mut target = vec![9];
+        assert!(append(&mut target, &[1, 2, 3], Some(stage)).is_err());
+        assert_eq!(target, vec![9]);
+    }
+    let mut target = vec![9];
+    append(&mut target, &[1, 2, 3], None).unwrap();
+    assert_eq!(target, vec![9, 1, 2, 3]);
+}
+```
+
+The rollback policy is valid because the transaction only appends. If it overwrote existing elements, truncation would not restore their old values. A test that merely checks length would then miss damaged contents. This illustrates why the invariant must precede the test: cleanup must restore the actual promised state, not one convenient metric.
+
+Panic injection adds another dimension when unwinding is part of the supported configuration. A guard can restore local state during unwinding, but process abort does not run ordinary unwind cleanup. Foreign exceptions and ABI boundaries add their own constraints. Test the failure behavior that the application actually promises, and avoid presenting unwind tests as evidence for an aborting deployment's cleanup behavior.
+
+## Compile Time Rejections Are API Tests
+
+Some of Rust's best API guarantees are that invalid programs cannot be written through the safe interface. A typestate transition, borrow relationship, or trait bound can be tested with an example that is expected not to compile. Rustdoc supports compile failure examples, and dedicated test harnesses can check diagnostics more precisely when needed.
+
+The following complete example should fail because a read only view does not expose the mutation method.
+
+```rust,compile_fail
+struct ReadOnly;
+struct Writable;
+
+struct Store<State> {
+    values: Vec<u32>,
+    state: std::marker::PhantomData<State>,
+}
+
+impl Store<Writable> {
+    fn append(&mut self, value: u32) {
+        self.values.push(value);
+    }
+}
+
+fn main() {
+    let mut store = Store::<ReadOnly> {
+        values: vec![],
+        state: std::marker::PhantomData,
+    };
+    store.append(3);
+}
+```
+
+A compile failure test can pass for the wrong reason. A missing import or syntax error may reject the program before it reaches the intended bound. Keep such examples complete and minimal, and inspect the diagnostic during development. If a precise diagnostic is part of the assertion, account for compiler version changes so that harmless wording updates do not overwhelm meaningful failures.
+
+Also test positive neighboring cases. A type system restriction that rejects every program is not a useful API. Show that writable stores can append, borrowed views remain usable for their valid interval, and sendable service operations satisfy the intended scheduler bound. Positive and negative examples together describe the boundary that the abstraction is meant to enforce.
+
+## Fuzzing Explores Inputs Beyond Examples
+
+Coverage guided fuzzing uses execution feedback to search for inputs that reach new behavior. It is particularly useful for parsers, decoders, and stateful operation sequences. A fuzz target should be small enough to execute many times, deterministic enough to reproduce failures, and strict about resource limits so that arbitrary lengths cannot consume unbounded memory or time.
+
+Do more than call the parser and ignore the result. On success, validate invariants of the returned representation. If the format supports reencoding, compare a canonicalized result. For incremental parsing, feed the same bytes under several chunk boundaries and compare outcomes. For a data structure, decode bytes into operation sequences and compare against a model. These targets turn silent logical corruption into observable failures.
+
+Keep malformed input handling separate from infrastructure failure. An allocation limit exceeded by a declared length should produce the format's defined error rather than crashing the harness. A timeout caused by intentionally huge work may indicate an algorithmic denial of service risk or simply a missing test bound; investigate the contract before discarding it. Fuzzing's value includes resource behavior, not only memory faults.
+
+Every discovered failure needs triage. Determine whether it is a harness bug, an unsupported input assumption, a logic error, or an unsafe execution. Minimize the input and retain it in a regression corpus. Fixing one crash without adding its invariant to the validation strategy leaves the same category of defect ready to reappear elsewhere.
+
+## Miri Detects Executed Undefined Behavior
+
+Miri interprets Rust programs and can detect many classes of undefined behavior on the executions it explores, including invalid memory access and certain aliasing violations. It is especially valuable for unsafe abstractions whose ordinary tests may appear to work on real hardware. A pointer bug can remain invisible when an allocator happens to retain old bytes; an interpreter can identify the invalid operation instead of waiting for a visible crash.
+
+Miri is not a proof of soundness. It observes tested executions under its supported model and capabilities. Some platform interactions are unavailable or require substitutes, and Rust's full unsafe semantics continue to have areas under development. Passing Miri does not mean every possible safe client of an abstraction has been considered. The written safety argument remains necessary.
+
+Use small focused tests that exercise initialization, destruction, reborrowing, zero sized types, empty collections, and unusual operation histories. A generic container tested only with integers may miss double drops or invalid reads of uninitialized elements. Types with drop counters and types with stricter alignment can expose different obligations. Run the tool on the tests that stress the representation rather than assuming one happy path is representative.
+
+The typical command shape is shown below. The required toolchain and component availability should be checked against the project's environment.
+
+```text
+rustup component add miri --toolchain nightly
+cargo +nightly miri test
+```
+
+Do not automatically rewrite correct code merely to silence an unexplained interpreter report. Understand whether the report identifies a real violation, an unsupported operation, or a model limitation. Conversely, do not dismiss an inconvenient report because optimized native execution looks fine. Native success is weak evidence when the alleged defect concerns undefined behavior.
+
+## Concurrency Tests Need Schedule Reasoning
+
+Sleeping for a few milliseconds and hoping another thread reached a state is a fragile test protocol. Use barriers, channels, or controlled hooks to establish the intended interleaving. A test for closing admission should deliberately pause a request around its registration boundary and then run shutdown, rather than rely on a race occurring by chance.
+
+Repeated stress tests can discover real bugs but rarely establish their absence. Schedule exploration tools can systematically vary supported synchronization interleavings within a bounded model. Such tools require using their modeled primitives and have limits on the behaviors explored. The model must include the synchronization edges on which the algorithm's proof depends; replacing only one atomic in a larger protocol is not enough.
+
+Memory ordering bugs deserve particular caution. A test on one architecture can pass because that machine's common behavior is stronger than the algorithm's required portable guarantee. Increasing stress iterations does not repair a missing happens before relationship. Combine a written ordering argument with appropriate model exploration and tests for the state machine's visible behavior.
+
+Progress properties also need tests and analysis distinct from memory safety. A queue can return correct values in all completed operations while one participant starves indefinitely. Use bounded scenarios to detect obvious deadlocks and retain timeouts as test escape hatches, but do not confuse the timeout threshold with a proof of fairness. State the scheduling assumptions under which progress is expected.
+
+## A Validation Plan Should Remain Economical
+
+Not every change needs every tool. A private wording change does not need fuzzing, and a small safe refactor may need only existing behavior tests and a targeted new case. An unsafe storage rewrite, parser format change, or admission protocol change creates different uncertainties and deserves stronger evidence. Match effort to the contract that could be broken.
+
+Organize evidence so that failures are interpretable. Fast deterministic tests should cover ordinary invariants and regressions. Slower randomized or interpreter runs can target representation and state space exploration. Integration tests should verify boundaries with real dependencies where their behavior matters. Avoid several suites that all assert the same implementation detail while leaving failure and cancellation paths unexamined.
+
+When a bug is found, ask which assumption escaped validation. A missing boundary case suggests a generator or invariant gap. A flaky timing test suggests an uncontrolled interleaving. A Miri finding suggests a safety argument that omitted a client behavior or lifetime transition. Improving the validation model is more durable than adding one opaque test with the original incident's incidental constants.
+
+## Exercises
+
+1. A ring buffer passes thousands of integer operation sequences. It is then rewritten with uninitialized storage. Identify three new classes of evidence needed beyond rerunning the same sequences.
+
+2. A parser's encoder and decoder pass round trip tests but disagree with another implementation. Explain how paired bugs can survive and propose complementary validation.
+
+3. A concurrency test uses a sleep to make shutdown race with admission and fails once a month. Redesign the test and explain what uncertainty remains after it becomes deterministic.
+
+## Reasoned Solutions
+
+1. Test destruction accounting with nontrivial elements, initialization boundaries under errors or panics, and validity under a tool such as Miri. Include zero sized and aligned element types where relevant. Maintain a written proof of which slots are initialized and who drops each element. Behavioral agreement with a model remains valuable but does not by itself prove the unsafe representation sound.
+
+2. The two functions can share the same wrong field order, length rule, or normalization assumption. Add independent byte fixtures from the specification, differential tests against an authoritative implementation, and properties that inspect the returned representation. Round trips constrain internal agreement; interoperability requires agreement with the external contract.
+
+3. Add a controlled hook or barrier around the admission registration point, pause the request, run shutdown to the relevant phase, and release the request. Assert the defined acceptance outcome and final active count. This tests one deliberate interleaving reproducibly. Other schedules and portable memory ordering still need reasoning or broader model exploration.
+
+## Further Reading
+
+- [Rustdoc documentation tests](https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html) describes executable and compile failure examples.
+- [Miri](https://github.com/rust-lang/miri) documents supported checks, execution limits, and usage.
+- [Rust Fuzz Book](https://rust-fuzz.github.io/book/) explains fuzz target construction and corpus workflows.
+- [Loom](https://docs.rs/loom/latest/loom/) describes modeled concurrency exploration and its assumptions.

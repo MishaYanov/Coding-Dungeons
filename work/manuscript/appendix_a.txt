@@ -1,0 +1,87 @@
+# Appendix A A Diagnostic Reasoning Guide
+
+Compiler diagnostics are most useful when translated into a missing relationship. The entries below describe recurring advanced situations. They are not a replacement for the exact diagnostic or the smallest reproducing example. Use them to decide which design question to answer before changing a type.
+
+## A Mutable Borrow Appears to Last Too Long
+
+First identify the last use of the value derived from the borrow. A returned reference, iterator, guard, or closure can keep access active after the method call itself ends. If the derived value is needed later, ending the borrow earlier would invalidate that use. If it is not needed, a smaller scope or explicit drop can make the intended boundary clear. Do not assume lexical block size is always the borrow's actual duration; nonlexical lifetime analysis follows uses and constraints.
+
+A second possibility is an overly broad method signature. A helper taking `&mut self` claims access to the whole object even if its implementation touches one field. Borrowing disjoint fields directly or passing a narrower field reference can expose the independence the caller needs. The helper's body is not normally substituted into every call site for borrow checking.
+
+## A Reference Cannot Be Returned From Behind a Guard
+
+Ask who prevents mutation or destruction after the guard is released. Returning the guard preserves synchronization for the caller's use. Returning a copied value or an `Arc` transfers independent ownership. Running a callback while the guard is held offers temporary access but introduces lock-duration and reentrancy concerns. Returning a bare reference after releasing the only protection generally loses the relationship that made access valid.
+
+The same pattern appears with `RefCell` guards, mapped file views, transaction snapshots, and temporary owners. Identify the owner or capability that must travel with the view. If no practical return type can carry it, redesign the API around an owned result or scoped operation.
+
+## A Spawned Task Requires Static Data
+
+An unscoped task can outlive the stack frame that creates it. A borrow of a local variable cannot support that possibility. Move owned data into the task, share ownership with an appropriate `Arc`, or use a scoped concurrency mechanism whose lifetime boundary is enforced. A `'static` bound on a type means it contains no borrowed data that expires sooner; it does not mean its value must remain alive forever.
+
+Adding `move` changes how a closure or async block captures its environment. It does not turn a borrowed reference into owned backing storage. A moved `&str` can still point into a local string. Follow the capture one level deeper and name the actual owner of the bytes.
+
+## A Future Is Not Send
+
+Inspect the state retained across suspension points. A value that is used and dropped before an await may not enter the suspended state; a value kept across the await does. Common causes include `Rc`, non-`Send` guards, trait objects without required auto-trait bounds, and borrowed data whose referent does not satisfy the necessary relationship.
+
+Decide whether thread migration is actually required. A local executor may accept a non-`Send` future. If migration is required, shorten the lifetime of the offending value, change ownership or synchronization representation, or adjust the trait contract that produces the future. Do not replace every local type with a synchronized equivalent unless shared access is part of the requirement.
+
+## A Trait Cannot Be Used as a Dyn Type
+
+Inspect which operations require information unavailable through an erased receiver. Generic methods, unconstrained uses of `Self`, and associated items can prevent the desired dynamic interface. Sometimes a method can be excluded from dynamic dispatch with an appropriate `Self: Sized` condition. Sometimes the public trait should be split into a small erased core and a generic extension.
+
+Associated types may need explicit choices in the trait object. Erasure removes the concrete implementing type; it does not remove every relationship the interface needs. An adapter can package a generic implementation behind a simpler object-safe operation when dynamic composition is a real requirement.
+
+## An Implementation Conflicts With Another Implementation
+
+Rust must select a coherent implementation under its overlap rules, including implementations that a blanket rule covers. Adding a more specific implementation does not generally specialize a stable blanket implementation. A newtype creates a distinct type on which a different implementation may be legal. A policy parameter or explicitly named adapter can make the choice visible rather than relying on overlapping inference.
+
+For orphan-rule errors, identify which trait or type is local and how generic parameters appear in the implementation. The rules are more precise than saying that one mentioned type is local. When designing a library, remember that a broad blanket implementation can reserve implementation space that downstream users might otherwise need.
+
+## A Lifetime Annotation Does Not Fix a Returned Temporary
+
+An annotation describes a relationship among valid references. It does not extend the storage duration of a local allocation or temporary owner. If a function creates a string and wants to return its contents, return the owned string, place the storage in a caller-provided owner, or use another representation whose owner survives.
+
+When the return value genuinely borrows from an input, make that relationship explicit enough for the compiler and caller. Avoid assigning one lifetime to every parameter merely to make the signature shorter. Unrelated inputs can then become unnecessarily coupled, restricting calls that should be valid.
+
+## An Iterator Cannot Yield the Borrow You Expected
+
+Determine whether each item borrows from the iterator's original backing data or from the current mutable borrow of the iterator itself. Ordinary `Iterator` has one associated `Item` type for the implementation. A lending interface can use a generic associated type tied to each call, which prevents retaining one item while requesting another when the buffer is reused.
+
+Changing to owned items is sometimes the right API, especially when consumers need to retain them. Collecting borrowed items from a reused buffer is not fixed by annotation because it conflicts with the storage policy. Decide whether the producer or consumer should own the retained bytes.
+
+## Pin Does Not Permit a Field Operation
+
+Ask whether the field is structurally pinned and whether exposing a pinned projection is part of the type's contract. A pinned outer value does not automatically authorize arbitrary projection, replacement, or movement of its fields. `Unpin` changes which restrictions matter, and a pointer wrapper's movability is different from moving its pointee.
+
+Use a documented safe projection facility where appropriate. If implementing projection with unsafe code, explain why the projected value remains pinned until its required destruction and why no other safe operation can move it. Address stability is a whole-abstraction promise, not a one-line cast property.
+
+## A Const Expression Is Rejected
+
+Separate the syntax of a const context from the operations permitted during compile-time evaluation. A function callable at runtime is not necessarily callable in const evaluation. A const generic parameter does not make every arithmetic expression over that parameter legal in every type position on stable Rust.
+
+Consider whether the computation truly belongs in the type system. A constructor that validates a runtime value may offer a simpler contract. If compile-time evaluation is required, use supported const operations and represent constraints within the stable feature set rather than silently requiring nightly behavior.
+
+## A Safe Wrapper Still Needs an Unsafe Trait
+
+If an implementation may cause memory unsafety when a caller supplies a trait implementation that violates a semantic rule, ordinary safe implementors cannot be trusted to uphold that rule for safety. Either validate defensively, avoid depending on that semantic property for memory safety, or place the obligation behind an appropriately documented unsafe trait boundary.
+
+An ordinary trait may still specify semantic laws such as ordering consistency, and violating them may produce logic errors. The critical distinction is whether violating the law can make safe caller code trigger undefined behavior. Review every place the implementation converts semantic expectations into unchecked memory operations.
+
+## A Program Compiles but Hangs During Shutdown
+
+Inventory every owner that can keep a resource live. A forgotten channel sender prevents a receiver from observing disconnection. A guard held while joining a thread may prevent that thread from acquiring its lock. A result queue that is no longer drained can keep workers blocked while the coordinator waits for them to exit.
+
+Draw the wait graph and the ownership graph separately. Memory safety can hold while the wait graph contains a cycle. Define which component closes admission, which drains accepted work, which drops the final sender, and which observes completion. Test shutdown as a protocol rather than as incidental cleanup.
+
+## A Clone Fixes Compilation but Memory Grows
+
+Inspect what was cloned. Cloning a `String` duplicates bytes. Cloning an `Arc` duplicates a handle and retains the underlying allocation. Cloning a snapshot can preserve an entire historical structure. A cheap clone may therefore be expensive in lifetime and peak memory even when its immediate CPU cost is small.
+
+Measure live retained data under the actual workload. A small selective copy can release a much larger shared source. A bounded queue containing shared handles can still retain large allocations. Decide whether independent ownership, shared retention, or a narrower borrowed scope matches the consumer's requirement.
+
+## Further Reading
+
+- [Rust compiler error index](https://doc.rust-lang.org/error_codes/error-index.html) explains individual diagnostics and their examples.
+- [The Rust Reference](https://doc.rust-lang.org/reference/) defines the language rules behind type and lifetime relationships.
+- [Standard library documentation](https://doc.rust-lang.org/std/) gives the exact contracts of guards, ownership wrappers, and synchronization operations.

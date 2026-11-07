@@ -1,0 +1,212 @@
+# Chapter 16 Public APIs and the Cost of Commitments
+
+## A Public Signature Is Only Part of the Contract
+
+A reusable Rust library exposes types, methods, implementations, lifetimes, auto traits, errors, feature behavior, and documented guarantees. Downstream code can depend on all of them. A change that looks internal may alter whether a type is Send, whether an iterator can outlive an input, or whether a trait remains dyn compatible. API design therefore includes deciding which facts should remain stable and which details should stay hidden.
+
+The first useful distinction is between an application boundary and a library boundary. Inside one application, a compiler-guided refactor can update every caller together. A published crate may have callers the author cannot inspect. Its design needs room for evolution, but excessive abstraction can make the current API unpleasant. The aim is a small set of deliberate commitments, not maximum concealment.
+
+Ask what downstream users should be able to construct, implement, match, name, and rely on. Public fields permit direct construction and pattern matching. Public traits permit external implementations unless sealed. Public enums permit exhaustive matching unless marked otherwise. Return-position impl Trait hides a concrete type but still exposes selected capabilities and captured generic relationships.
+
+An API review should examine these operations explicitly. Looking only at the method list misses much of the surface that Rust's type system makes available to callers.
+
+## Private Fields Preserve Construction and Representation Freedom
+
+A struct with all public fields permits callers to construct it with a literal. Adding another required field then breaks those callers. A private field prevents external literal construction and makes constructors the supported entry point. It also creates a place to maintain invariants.
+
+```rust
+pub struct RetryPolicy {
+    attempts: u32,
+    base_delay_ms: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PolicyError {
+    ZeroAttempts,
+}
+
+impl RetryPolicy {
+    pub fn new(attempts: u32) -> Result<Self, PolicyError> {
+        if attempts == 0 {
+            return Err(PolicyError::ZeroAttempts);
+        }
+        Ok(Self { attempts, base_delay_ms: 100 })
+    }
+
+    pub fn with_base_delay_ms(mut self, delay: u64) -> Self {
+        self.base_delay_ms = delay;
+        self
+    }
+
+    pub fn attempts(&self) -> u32 { self.attempts }
+
+    pub fn delay_for(&self, retry: u32) -> u64 {
+        self.base_delay_ms.saturating_mul(u64::from(retry))
+    }
+}
+```
+
+The constructor establishes nonzero attempts. The builder-style method adjusts a value that has no additional validation here. The representation can later gain internal bookkeeping without requiring callers to provide it. This freedom does not mean every behavioral change is compatible. If callers rely on documented delay semantics, changing the formula can still be disruptive even though no signature changes.
+
+Getters can also create commitments. Returning &Vec<T> exposes a specific container where &[T] may express the intended read-only sequence more narrowly. Returning an iterator can hide representation but introduces iterator capability and lifetime decisions. Choose the least specific return type that remains convenient for real use cases, then document meaningful guarantees such as ordering and allocation.
+
+## Trait Implementors Are API Users Too
+
+Adding a required method to a public trait breaks downstream implementations. Adding a default method avoids that particular problem but can still introduce method-name ambiguity or change dyn compatibility. Tightening a bound can exclude implementations or callers that previously worked. A trait is an extension point with two audiences: consumers and implementors.
+
+If external implementations are not part of the intended contract, seal the trait. A private supertrait can prevent outside crates from satisfying the required relationship while leaving the public trait usable as a bound.
+
+```rust
+mod private {
+    pub trait Sealed {}
+}
+
+pub trait WireInteger: private::Sealed + Copy {
+    fn append_be(self, output: &mut Vec<u8>);
+}
+
+impl private::Sealed for u16 {}
+impl private::Sealed for u32 {}
+
+impl WireInteger for u16 {
+    fn append_be(self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&self.to_be_bytes());
+    }
+}
+
+impl WireInteger for u32 {
+    fn append_be(self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&self.to_be_bytes());
+    }
+}
+
+pub fn encode<T: WireInteger>(value: T) -> Vec<u8> {
+    let mut output = Vec::new();
+    value.append_be(&mut output);
+    output
+}
+```
+
+The private module is inaccessible to downstream crates, so they cannot name and implement the sealing trait. The public trait can still describe the supported integer family. This is useful when the library needs generic convenience over a controlled set, not an open extension mechanism.
+
+Sealing is a policy choice, not a default requirement. If users need to integrate custom backends, sealing the backend trait defeats the purpose. A smaller open core trait plus sealed convenience traits can provide a better balance. Document whether external implementation is supported, and test an external-style implementation in a separate crate when that promise matters.
+
+## Exhaustiveness Is a Choice About Future Growth
+
+A public enum lets downstream users match every variant. That is useful when the set is intentionally complete. If the library expects to add variants in compatible releases, non_exhaustive requires external callers to include a fallback from the beginning.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CacheOutcome {
+    Hit,
+    Miss,
+    Bypassed,
+}
+
+pub struct CacheReport {
+    outcome: CacheOutcome,
+    bytes: usize,
+}
+
+impl CacheReport {
+    pub fn outcome(&self) -> CacheOutcome { self.outcome }
+    pub fn bytes(&self) -> usize { self.bytes }
+}
+```
+
+The example declares an extensible outcome set. A downstream match must decide what unknown future outcomes mean. That fallback is itself a semantic responsibility. If every new outcome requires a distinct response for correctness, claiming extension compatibility through a wildcard may merely hide necessary migration work. Nonexhaustiveness provides syntactic room; it does not make all future behavior compatible.
+
+The same principle applies to structs and variants marked non_exhaustive. Consider the caller's construction and matching needs before applying the attribute. Adding it later can break code that previously relied on exhaustive construction or matching, so reserve extension space when the type first becomes public.
+
+## Auto Traits Are Observable Commitments
+
+A type's Send and Sync behavior can matter even if the documentation never mentions threads. Downstream code may move the type into a worker or store it behind Arc. Adding an Rc field can remove Send and Sync and break those users. Replacing an internal pointer or marker can similarly alter auto-trait behavior.
+
+For types intended to be transferable, add compile-time assertions in the library's meaningful validation suite. These assertions document an actual compatibility promise. For a type intended to remain thread-confined, encode that constraint deliberately rather than relying on an accidental current field.
+
+```rust
+pub struct Snapshot {
+    data: std::sync::Arc<[u8]>,
+}
+
+fn assert_send_sync<T: Send + Sync>() {}
+
+fn verify_contract() {
+    assert_send_sync::<Snapshot>();
+}
+```
+
+The function body is checked even if it is not executed. This verifies the type relationship for the current implementation. It does not test runtime thread safety beyond the promises of the constituent abstractions. Unsafe implementations of auto traits require an independent soundness argument.
+
+Other observable capabilities include Unpin, unwind-safety markers, and trait implementations such as Clone, Eq, or AsRef. Adding an implementation is often useful, but broad blanket relationships can interact with downstream code. Removing one is ordinarily a direct loss of capability. Review implementations as part of the public surface, not as harmless decoration around a struct.
+
+## Opaque Returns Still Expose Lifetime Relationships
+
+Return-position impl Trait hides one concrete return type while exposing declared bounds. Callers can depend on whether the value borrows an input, whether it is Send, and which generic parameters the opaque type captures. Edition 2024 capture rules make this especially important when designing lifetime-sensitive APIs.
+
+A function that returns an iterator over an input slice naturally needs to capture that input lifetime. A function that returns an independent computed value may want to avoid unnecessarily tying the result to unrelated borrows. Precise capture syntax can express this, but it is a commitment: changing the set of captured lifetimes can change how long callers must keep inputs alive.
+
+The following edition 2024 example explicitly captures only the lifetime used by the returned iterator:
+
+```rust
+fn selected<'a, 'b>(
+    values: &'a [u32],
+    _label: &'b str,
+) -> impl Iterator<Item = &'a u32> + use<'a> {
+    values.iter().filter(|value| **value % 2 == 0)
+}
+
+fn main() {
+    let values = [1, 2, 3, 4];
+    let iter;
+    {
+        let label = String::from("even");
+        iter = selected(&values, &label);
+    }
+    assert_eq!(iter.copied().collect::<Vec<_>>(), [2, 4]);
+}
+```
+
+The result does not borrow label. The explicit capture list makes that relationship part of the interface. If the implementation later tries to retain label, it must change the contract rather than silently imposing a longer borrow. When type and const parameters are present, precise capture lists have additional requirements; consult the current Reference rather than generalizing from this lifetime-only example.
+
+Opaque return types also preserve their concrete auto traits. If an implementation changes from a Send iterator to a thread-confined one, callers can break even if the written return bounds look unchanged. A named wrapper type can sometimes provide a more deliberate compatibility boundary for substantial public iterators or futures.
+
+## Features Should Compose Under Dependency Unification
+
+Cargo features are usually additive configuration. Several dependencies may enable different features of the same crate, and the final build can receive their union. Designing features as mutually exclusive modes can therefore create conflicts far from the library author. A default feature is not a global switch that an application can reliably disable if another dependency enables it.
+
+Prefer features that add capabilities or integrations while preserving the meaning of existing APIs. If a feature changes an algorithm, ensure the combined configuration is meaningful and document observable behavior. If two backends truly cannot coexist, separate packages or an explicit runtime selection may communicate the constraint more honestly than hidden feature interactions.
+
+Feature testing needs a model of supported combinations. Testing only all-features can miss a missing import in the minimal configuration. Testing only defaults can miss integration conflicts. A small matrix covering the minimal build, default build, important independent integrations, and their supported union often provides better evidence than an arbitrary collection of combinations.
+
+The minimum supported Rust version is another compatibility dimension. Declare it in the manifest when maintaining such a policy, and test it. A dependency update can raise the effective minimum even when the library's own syntax is unchanged. The policy should match what users can reasonably depend on, rather than merely what the current developer workstation happens to compile.
+
+## Documentation Must Explain Costs and Failure Behavior
+
+Rustdoc shows signatures well. It cannot infer ordering guarantees, lock behavior, allocation patterns, or the postcondition after an error. Describe these when they affect user decisions. A method named snapshot might clone all data, increment an Arc, or hold a lock-backed view. Those designs have very different latency and lifetime implications.
+
+Examples should exercise the intended path through the API, including construction, operation, failure handling, and cleanup where relevant. Compileable documentation examples are especially useful because they validate that the public surface can express its advertised workflow without private helpers. They should not rely on hidden imports or impossible setup.
+
+Avoid documenting incidental internals as guarantees unless users need them. Promising the exact growth factor of a vector or the exact number of allocations can make future optimization unnecessarily difficult. On the other hand, hiding a linear scan behind a method users expect to be constant time creates performance traps. State complexity and ownership behavior at the level that supports sound application design.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A public struct has two public fields and no private fields. Why can adding a third private field break callers?
+
+Solution. External callers may currently construct it with a struct literal or use exhaustive patterns. Adding a private field prevents those operations. Constructors and an initially private representation would have preserved more evolution freedom. Compatibility includes construction and matching, not just method calls.
+
+Exercise 2. A public trait has a default method added that is generic over T. Could this break Box<dyn Trait> users?
+
+Solution. Yes, if the new method is not excluded from dispatch with an appropriate Self: Sized bound, it can make the trait non-dyn-compatible. A default body does not remove the compatibility restriction. Trait evolution must consider consumers using erased values as well as external implementors.
+
+Exercise 3. A crate has features fast and accurate that choose incompatible definitions of the same function. Why is this fragile?
+
+Solution. Different dependencies can enable both features through feature unification. The combined build must have a defined supported meaning, or users encounter conflicts they did not directly choose. Additive capabilities, separate packages, or explicit policy values usually compose more reliably.
+
+## Further Reading
+
+- [Cargo SemVer compatibility](https://doc.rust-lang.org/cargo/reference/semver.html) catalogs observable compatibility changes in Rust APIs.
+- [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html) explains additive feature behavior and unification.
+- [Rust Edition Guide on opaque type capture](https://doc.rust-lang.org/edition-guide/rust-2024/rpit-lifetime-capture.html) describes edition 2024 capture behavior.
+- [Rust Reference on non_exhaustive](https://doc.rust-lang.org/reference/attributes/type_system.html#the-non_exhaustive-attribute) specifies downstream construction and matching restrictions.

@@ -1,0 +1,582 @@
+[
+  {
+    "level": 29,
+    "mission_title": "The Shape Shifter",
+    "scene": "Beneath Ferrum, a relay translates messages between machines built decades apart. Its engineers saved bandwidth by sending the memory image of a Rust structure. The relay works in their demonstration and corrupts reports elsewhere. Your map shows a clear route into the Unsafe Depths: separate the message people mean from the arrangement one compiler happens to choose. The broken relay is a design case, not an executable puzzle hidden in this page.",
+    "objective": "Specify and implement a portable byte format without treating an in-memory Rust value as its wire representation.",
+    "loadout": [
+      2,
+      18
+    ],
+    "win_conditions": [
+      "Produce explicit encoder and decoder functions with documented field widths and byte order.",
+      "Reject unknown tags and malformed lengths before constructing a validated message.",
+      "Explain which layout observations are target-specific and which format guarantees your code establishes."
+    ],
+    "boss_title": "The Mimic Packet",
+    "boss_brief": "The relay carries a one-byte kind, a four-byte sequence, a two-byte payload length, and payload bytes. Kinds 1 and 2 are valid. All integers use little-endian encoding, and extra bytes belong to the next packet. Implement a decoder that distinguishes incomplete input from invalid input and returns the consumed count only after one complete packet. Implement the matching encoder. Then show an independently written byte fixture for each kind; do not generate every fixture through your encoder. A colleague proposes replacing both functions with a cast from a repr(C) structure because its measured size looks convenient. Write a precise rejection of that proposal, including padding and validity concerns.",
+    "constraints": [
+      "Use safe byte operations for the codec.",
+      "Check length arithmetic and reject payloads longer than the length field permits.",
+      "Do not rely on native endianness, pointer width, or measured structure size."
+    ],
+    "debrief": "The format is a sequence of specified bytes, so parse fields by explicit ranges and integer conversion functions. Read the fixed header only when it is available, decode the length, calculate total size with checked arithmetic, and wait for the entire payload. Validate the kind before returning the message. Encoding performs the inverse after checking representable length. Independent fixtures catch paired encoder-decoder mistakes. repr(C) describes certain target layout relationships; it does not remove padding, choose protocol byte order, or make arbitrary bytes a valid Rust value. Keep an ordinary message model separate from the wire format and document whether unknown kinds are errors or future extension points.",
+    "hint1": "Write down the first seven byte positions before writing a struct. Ask which positions exist when the buffer ends after the sequence number, and which error can already be known from the first byte.",
+    "hint2": "The decoder needs three outcomes: incomplete, invalid, or complete with a consumed length. A complete header does not imply a complete packet. Use the decoded length only after converting it safely, and leave trailing bytes untouched. Compare your output against a hand-calculated sequence whose integer bytes differ, rather than testing only zero and one.",
+    "side_quest": "Add a version byte and an optional extension region. Decide whether an older decoder can skip an unfamiliar extension or must reject it. Give the region an explicit length so skipping does not depend on a Rust enum layout. Design two compatibility fixtures: a known message with an unknown optional extension and an unknown required extension. Explain why versioning is a protocol policy rather than a representation attribute.",
+    "route_choices": [
+      {
+        "label": "Follow the pointer trail",
+        "level": 30,
+        "reason": "Separate a byte address from the permission to access its allocation."
+      },
+      {
+        "label": "Take the interoperability bridge",
+        "level": 33,
+        "reason": "Apply representation decisions to a real ownership boundary with foreign code."
+      }
+    ],
+    "reward": "Wire Cartographer"
+  },
+  {
+    "level": 30,
+    "mission_title": "The Window With No Owner",
+    "scene": "Ferrum exports image fragments to inspection tools. A fragment is described by a pointer and a length, but the old interface forgot to say who keeps the image alive. One tool holds a fragment after the renderer reuses its buffer. You have reached a door that cannot be opened by checking for null alone. The repair is to connect access to an owner, then make any remaining unsafe step justify its exact range.",
+    "objective": "Design a mutable byte-window API whose lifetime and splitting rules remain connected to valid backing storage.",
+    "loadout": [
+      3,
+      4,
+      29
+    ],
+    "win_conditions": [
+      "Construct windows from a borrowed mutable byte slice rather than an arbitrary safe raw-pointer constructor.",
+      "Split one window into disjoint children with no simultaneous overlapping mutable access.",
+      "Write an access argument covering empty windows, range limits, lifetime, and ownership."
+    ],
+    "boss_title": "The Overlapping Observatory",
+    "boss_brief": "Build a PixelWindow abstraction supporting length inspection, byte replacement, and splitting at a checked offset. Its caller owns the backing slice, and successful splitting transfers the original window into two child windows. Decide whether raw pointers are useful at all; a safe slice representation is a valid victory. If you choose an internal raw pointer representation, explain how construction, zero-length windows, subranges, and returned references preserve the original borrow. Show a rejected usage that tries to mutate the original slice while a child window is later used. Your solution must also reject an out-of-bounds split without inventing an arbitrary returned lifetime or exposing two overlapping mutable regions.",
+    "constraints": [
+      "The public construction path must be safe and borrow existing storage.",
+      "A failed split must have an explicit ownership policy.",
+      "No pointer-to-integer-to-pointer round trip is needed."
+    ],
+    "debrief": "A wrapper around an exclusive slice can delegate checked splitting to split_at_mut and preserve the borrow directly. Consuming the parent prevents an independent parent capability from surviving alongside its children. Return the parent on a failed consuming split, or choose a clearly documented alternative. A pointer implementation adds obligations without changing the desired contract: each nonempty region must stay within the original live allocation, while an empty view still needs a nonnull aligned pointer but need not have backing storage, and mutable regions must remain disjoint. A lifetime parameter records the borrow relationship but cannot create it from a naked address. Prefer the safe representation unless a concrete requirement justifies the additional implementation proof.",
+    "hint1": "Treat each window as a capability to access one region. Draw the regions before and after splitting. Which value should disappear when two child capabilities are created, and which owner must remain unavailable?",
+    "hint2": "Start with a struct containing an exclusive slice and a consuming split method. You can check the offset before calling the standard splitting operation. If you later replace the field with a pointer and marker, list every fact that the original slice supplied automatically. Your unsafe implementation must preserve those facts for every safe method, including empty cases.",
+    "side_quest": "Add a read-only inspection mode that can create several shared child views. Explain why switching an exclusive window into shared views should consume or restrict the exclusive capability until those views expire. Then compare retaining a borrowed view with returning a copied thumbnail. Include the effect on a large backing image that otherwise could have been released or reused immediately.",
+    "route_choices": [
+      {
+        "label": "Audit the sealed chamber",
+        "level": 31,
+        "reason": "Turn the window proof into an audit of every safe entry point."
+      },
+      {
+        "label": "Return to the ownership maze",
+        "level": 8,
+        "reason": "Use checked handles when stable identity matters more than direct borrowed access."
+      }
+    ],
+    "reward": "Allocation Witness"
+  },
+  {
+    "level": 31,
+    "mission_title": "The Trusted Label",
+    "scene": "The Unsafe Depths contain a display service with a tiny optimization: every station label is exposed as text through an unchecked conversion. Its constructor accepts only ASCII, so the first inspection looks reassuring. A later convenience method replaces any byte. Ferrum's review board wants the whole abstraction examined, including methods added after the original safety comment. Your enemy is an invariant that exists only in the constructor's author's memory.",
+    "objective": "Audit a text wrapper by tracing its representation invariant through every safe operation and failure path.",
+    "loadout": [
+      7,
+      29,
+      30
+    ],
+    "win_conditions": [
+      "State a representation invariant sufficient for every returned text view.",
+      "Demonstrate a safe call sequence that breaks the original byte-replacement design.",
+      "Repair all mutation entry points and explain whether unsafe conversion remains justified."
+    ],
+    "boss_title": "The Friendly Corruptor",
+    "boss_brief": "Design AsciiLabel with private owned bytes, a checked constructor, an as_str accessor, and replacement of a byte at a requested index. The proposed implementation checks ASCII only during construction and uses from_utf8_unchecked in as_str. Its replacement method accepts any u8. Exhibit the safe caller sequence that invalidates the conversion's contract. Repair the interface while retaining useful mutation, and define what happens on invalid index or invalid replacement. Add an append operation and review it under the same invariant. Finally compare the repaired unsafe accessor against a completely safe implementation. The boss is defeated only when the explanation covers every safe constructor and mutator, rather than one successful test of the accessor.",
+    "constraints": [
+      "Fields remain private and safe callers need no safety preconditions.",
+      "Errors must leave the previous valid label usable.",
+      "Do not treat documentation of a safe method as permission to cause undefined behavior."
+    ],
+    "debrief": "ASCII bytes are valid UTF-8, but that implication helps only while all stored bytes remain ASCII. The original replacement method can store a non-ASCII continuation byte and make the unchecked conversion violate its contract. Validate both index and new byte before mutation, and apply the same policy to append and bulk replacement. A private field narrows access but does not repair an unsafe public mutation method. A safe conversion or a String-based representation may remove the unsafe step entirely. If retaining it, explain the invariant beside the type and conversion, and review future methods against the same statement. Runtime tests support this reasoning but do not establish soundness for arbitrary future call sequences.",
+    "hint1": "Begin from the assumptions of the unchecked conversion. Work backward to the constructor, then forward through every method that changes the bytes. Find a replacement byte that is not valid as a standalone text character.",
+    "hint2": "Separate validation from commitment. Check the index and permitted byte class before changing storage. For a bulk operation, validate the complete proposed input first or stage a replacement. Your argument must include error paths, because returning an error after partially writing invalid bytes still breaks the next safe call to as_str.",
+    "side_quest": "Relax the wrapper from ASCII to general UTF-8. Replace a byte-oriented mutation API with operations on valid character boundaries, and decide which operations require reallocation. Explain why a valid u8 replacement at one position is no longer a sufficient local check. Design an edit operation that either produces one valid complete string or leaves the previous string unchanged, without weakening error behavior.",
+    "route_choices": [
+      {
+        "label": "Descend into unfinished storage",
+        "level": 32,
+        "reason": "Track validity when complete values do not exist yet."
+      },
+      {
+        "label": "Open the validation vault",
+        "level": 36,
+        "reason": "Choose tests and dynamic tools that attack the abstraction contract."
+      }
+    ],
+    "reward": "Invariant Auditor"
+  },
+  {
+    "level": 32,
+    "mission_title": "The Scattered Assembly",
+    "scene": "Ferrum's archive reconstructs records from fragments delivered in an unpredictable order. The old builder counts how many fragments arrived and assumes that many leading slots are initialized. A late fragment can occupy slot nine while slot zero is still empty. This room replaces a convenient prefix assumption with a real state machine. The challenge is to know which values exist, who owns them, and what cleanup remains legal when construction stops.",
+    "objective": "Build an out-of-order fixed-size assembly representation with explicit initialization and destruction accounting.",
+    "loadout": [
+      2,
+      6,
+      30,
+      31
+    ],
+    "win_conditions": [
+      "Track initialization per slot instead of treating a count as a contiguous prefix.",
+      "Define duplicate arrival, failure cleanup, and transfer of a complete result.",
+      "Demonstrate that no empty slot is read as T and no owned value is dropped twice."
+    ],
+    "boss_title": "The Ninth Fragment",
+    "boss_brief": "Design a generic assembler for N slots. insert(index, value) may receive slots in any order; choose and document whether duplicate arrivals replace the old value or return the new value as an error. finish consumes the assembler and succeeds only when every slot is initialized. A failed finish should preserve enough ownership for retry or clean disposal according to your stated API. First implement a safe model using optional elements. Then outline a MaybeUninit representation and its initialization map. Include an early-return construction error and a destructor that panics in one stored element. Explain what memory-safety guarantee remains, even if completing cleanup of every other element cannot be promised by your teaching implementation.",
+    "constraints": [
+      "Use stable Rust mechanisms rather than assuming generic const-expression support.",
+      "Do not create a reference to an incomplete T.",
+      "Keep logical initialization state consistent before transferring or destroying an owner."
+    ],
+    "debrief": "The safe model makes empty and full slots explicit. A MaybeUninit version needs the same logical information in a separate map; total count alone cannot authorize reading a particular index. On insertion, write the new value before marking an empty slot initialized. On transfer or removal, revoke the old slot's ownership before normal cleanup can revisit it. finish checks every slot, then transfers values without leaving a second destruction obligation behind. Error handling must retain or clean precisely the initialized slots. If an element destructor panics, a simple loop may leak later elements; that limitation must not permit reading uninitialized storage or dropping an already transferred owner. Optimize only after the safe model and invariant are clear.",
+    "hint1": "Write the state of four slots after arrivals 3, 1, and 3. A count of three tells you almost nothing about which values exist. Decide the duplicate policy before designing cleanup.",
+    "hint2": "Use the safe optional-slot model as your behavioral oracle. For each operation, identify the ownership transition and update its initialization flag at the correct point. In finish, checking the number of received messages is insufficient: duplicate arrivals may inflate that number. Distinguish the number of initialized distinct slots from total arrival count.",
+    "side_quest": "Add replacement as a transactional operation: a user callback computes a new element from the old one and may return an error or panic. Choose whether the old value must remain available during computation. Explain which signatures can support failure preservation without cloning T, and which require a weaker contract or a separately prepared replacement. Compare the safe model with your initialization bookkeeping.",
+    "route_choices": [
+      {
+        "label": "Cross the foreign boundary",
+        "level": 33,
+        "reason": "Foreign out-parameters can expose similarly partial construction states."
+      },
+      {
+        "label": "Test the hostile sequence",
+        "level": 36,
+        "reason": "Generate out-of-order arrivals and verify destruction accounting against a model."
+      }
+    ],
+    "reward": "Initialization Ledger"
+  },
+  {
+    "level": 33,
+    "mission_title": "The Two Allocators",
+    "scene": "A foreign maintenance tool connects to Ferrum's Rust archive. Its first integration returned a pointer, length, and capacity, then invited callers to free the pointer however they preferred. Different allocators and ambiguous ownership turned a convenient bridge into a trap. The tool needs a small explicit protocol instead: borrowed input, owned output, and one matching destruction path. Your task is to make the crossing understandable from both sides of the boundary.",
+    "objective": "Design a narrow C-compatible ownership protocol for Rust-created byte results and borrowed foreign input.",
+    "loadout": [
+      6,
+      29,
+      30,
+      31
+    ],
+    "win_conditions": [
+      "Specify creation, read-only access, and matching release of one opaque result handle.",
+      "Keep Rust containers and references out of the public C ABI.",
+      "Document foreign-pointer preconditions, error ownership, and panic containment at each export."
+    ],
+    "boss_title": "The Borrowed Bridge Toll",
+    "boss_brief": "Sketch a C-facing API that accepts borrowed input bytes, transforms them into an owned Rust result, and returns an opaque handle. Separate the operation that exposes a temporary data pointer and length from the operation that releases the result. Specify exactly how long the exposed bytes stay valid, whether the result may mutate, and what a null input means for zero length. A failed creation must not leave an ambiguous partially owned output. Include the signatures and ownership table a C caller needs, plus a safe Rust owner that uses the matching release operation when wrapping the foreign interface in the reverse direction. Do not claim that null checking can validate arbitrary pointer liveness.",
+    "constraints": [
+      "The allocating side supplies the matching destruction function.",
+      "Foreign callers must not copy an owning handle and release it twice.",
+      "No unwinding may cross an ABI boundary that does not permit it."
+    ],
+    "debrief": "An opaque handle keeps Vec layout and allocator details private. A successful creation transfers one ownership obligation, while an accessor temporarily borrows the result without transferring its allocation. The bytes remain valid only while the owner lives and the documented mutation restrictions hold. The matching release path consumes the obligation exactly once; foreign misuse remains an explicit caller contract, not something a pointer check can generally detect. Validate lengths and status paths before forming Rust slices, with documented provenance and lifetime requirements for foreign input. Define panic handling for exports and preserve outputs on failure. A Rust RAII wrapper can encode the matching release, but its unsafe constructor must receive a genuinely valid owned handle.",
+    "hint1": "Make a table with one row per exported operation: input ownership, output ownership, and validity interval. If the foreign caller cannot tell who frees a value from that table, the interface is incomplete.",
+    "hint2": "Separate representation from ownership. repr(C) can help describe a simple pointer-and-length view, but it does not make the pointed-to bytes live. Keep the owning result opaque, expose immutable borrowed bytes, and route destruction through the allocating implementation. For zero-length input, branch before constructing a slice if your foreign convention allows null.",
+    "side_quest": "Add a completion callback that foreign code can invoke after registration returns. Specify which threads may call it, whether calls can overlap, which state must be owned and static, and what unregister guarantees about in-flight calls. A forgotten guard can leak the context without extending borrowed captures. A scoped alternative needs teardown guaranteed by the scope boundary.",
+    "route_choices": [
+      {
+        "label": "Forge a public library",
+        "level": 41,
+        "reason": "Turn an ownership protocol into a versioned compatibility promise."
+      },
+      {
+        "label": "Choose the archive representation",
+        "level": 34,
+        "reason": "Evaluate storage and retention behind the opaque boundary."
+      }
+    ],
+    "reward": "Boundary Keeper"
+  },
+  {
+    "level": 34,
+    "mission_title": "The Archive That Remembers Too Much",
+    "scene": "The Endgame routes pass through an archive that answers three questions: find one station, list stations in name order, and show recent events. Engineers keep adding maps and cached copies whenever a query slows down. Ferrum now stores more indexing data than original records. This chamber asks you to choose a representation from actual operations, account for retained ownership, and decide where an index earns its memory cost.",
+    "objective": "Choose a coherent collection layout for mixed queries and explain the cost of maintaining each retained index.",
+    "loadout": [
+      8,
+      14,
+      29
+    ],
+    "win_conditions": [
+      "Define canonical record ownership and make secondary indexes refer to stable logical identities.",
+      "Explain update, deletion, sorted traversal, and event-retention behavior.",
+      "Propose measurements that compare complete workloads rather than lookup complexity alone."
+    ],
+    "boss_title": "The Three Index Hydra",
+    "boss_brief": "Design an in-memory station archive supporting lookup by numeric ID, alphabetical listing, renaming, deletion, and a bounded history of recent events. Choose a canonical record owner and any secondary indexes. Renaming must not leave the old alphabetical entry visible, and deletion must not make an identifier silently refer to a different station. Decide whether alphabetical output is maintained continuously or sorted on demand. Explain how updates preserve consistency if preparation fails, and describe what happens to externally retained snapshots or shared payloads after deletion. Your deliverable is a representation sketch, operation walkthroughs, and a benchmark plan with realistic query proportions. No collection wins merely because one operation has attractive asymptotic complexity.",
+    "constraints": [
+      "State whether IDs can be reused and how stale identity is detected.",
+      "Bound event history in a way that accounts for payload bytes.",
+      "Do not use interior mutation to change an ordering key while it remains indexed."
+    ],
+    "debrief": "One owner should define the authoritative station data. Secondary indexes store IDs or handles and must be updated under the same logical mutation protocol. A rename can prepare new owned data before committing coordinated changes; generic panic and allocation assumptions still need a stated policy. Sorting on demand can avoid a permanently maintained tree when listings are rare, while a maintained ordered index can reduce repeated sorting when they dominate. Deletion revokes lookup identity, but externally retained Arc payloads may stay alive. Recent-event capacity measured only in entry count does not bound bytes for arbitrary payloads. Benchmark update cost, listing cost, retained memory, and the actual mixed workload before choosing the extra indexes.",
+    "hint1": "Name the authoritative copy first. Then imagine renaming a station halfway through an update: which indexes disagree, and can a caller observe them before the update finishes? Add a byte budget to the event log.",
+    "hint2": "Compare two complete designs: one hash-based canonical store with sorting at listing time, and one with a maintained alphabetical index. Include the work needed to keep the second index correct. Store logical IDs in indexes rather than raw pointers into a growable vector, and define stale-ID behavior independently from memory safety.",
+    "side_quest": "Add an export snapshot that readers can retain while stations change. Compare cloning owned records, sharing immutable payloads, and preserving an entire historical index. Measure peak live memory when one slow reader holds a snapshot across many updates. Explain how the representation that minimizes immediate copying can nevertheless retain the most memory in that workload. Include the lifetime of the historical index.",
+    "route_choices": [
+      {
+        "label": "Enter the measurement arena",
+        "level": 35,
+        "reason": "Test whether your representation improves the complete workload."
+      },
+      {
+        "label": "Explore immutable worlds",
+        "level": 38,
+        "reason": "Give historical reads an explicit snapshot and validation contract."
+      }
+    ],
+    "reward": "Representation Strategist"
+  },
+  {
+    "level": 35,
+    "mission_title": "The Benchmark Crown",
+    "scene": "Ferrum offers a crown to whoever makes its message router fastest. One contestant replaces dynamic handlers with a large generic dispatch tree and reports a dramatic win. Another measures the full service and sees longer startup, larger binaries, and uneven latency. Neither result is automatically wrong. The arena rewards a reproducible experiment that explains which cost moved, who pays it, and which workload the conclusion actually describes.",
+    "objective": "Design and report a fair performance comparison across runtime cost, compilation, code size, and workload behavior.",
+    "loadout": [
+      10,
+      11,
+      34
+    ],
+    "win_conditions": [
+      "Keep input generation and observable output policies equivalent across compared designs.",
+      "Measure a representative router workload and distinguish it from a dispatch microbenchmark.",
+      "Report uncertainty and tradeoffs without inventing a universal winner."
+    ],
+    "boss_title": "The Tournament of Unequal Rules",
+    "boss_brief": "Compare a router using erased handlers with a statically specialized alternative across a small and a large set of handler types. Define identical work, input distributions, error behavior, and output checks. Plan one experiment that isolates dispatch overhead and another that measures the full route, including realistic batching and payload processing. Record build configuration, binary size, compile cost, allocation behavior, and latency or throughput as appropriate. A proposed benchmark constructs input inside one timed loop, reuses it outside the other, and never consumes the computed result. Repair that protocol before interpreting any numbers. Victory is a defensible experiment and explanation; no particular timing improvement is required.",
+    "constraints": [
+      "Do not assign arbitrary speedup numbers to unrun experiments.",
+      "Avoid changing required semantics merely to simplify one contestant.",
+      "Treat profiling evidence separately from a claim of causation."
+    ],
+    "debrief": "Begin by making the two implementations compute the same observable result on the same inputs. Separate setup from measurement consistently and prevent the intended work from becoming irrelevant to the optimized program. The isolated dispatch test answers a narrow question; a full router test reveals interactions with payload work, instruction-cache pressure, allocation, and batching. Static specialization can increase code size and build effort while improving some runtime paths, so record those dimensions rather than hiding them in one score. Repeat measurements under a documented configuration and investigate variance. A profile identifies where time is observed, while changing one suspected cause and measuring again supplies stronger evidence for that explanation.",
+    "hint1": "Before reaching for a timer, write what must be equal between the contenders. Then identify every cost currently included for only one side. Ask what observable result prevents the measured computation from disappearing.",
+    "hint2": "Use the same prepared datasets and verify equivalent outputs outside the timed region. Add distinct small-work and realistic-work cases so dispatch cost is not mistaken for end-to-end impact. Record compiler and optimization settings and compare code size as the number of concrete handler types grows. Keep claims tied to the tested workload and machine.",
+    "side_quest": "Give the router a memory ceiling and a tail-latency objective. A batching optimization improves throughput but retains more payloads and delays small requests. Design a load experiment that reveals the tradeoff near saturation. Include admission rate, queue size, completed throughput, and latency distribution, so an overloaded system cannot appear fast merely by failing or dropping most work. Report rejected work alongside successful completions.",
+    "route_choices": [
+      {
+        "label": "Challenge the correctness oracle",
+        "level": 36,
+        "reason": "Ensure the faster implementation still satisfies its behavioral contract."
+      },
+      {
+        "label": "Return to the dispatch forge",
+        "level": 10,
+        "reason": "Revisit where type erasure belongs after identifying the real cost."
+      }
+    ],
+    "reward": "Measurement Skeptic"
+  },
+  {
+    "level": 36,
+    "mission_title": "The Fault Vault",
+    "scene": "The final vault of the Unsafe Depths contains a pipeline that survives ordinary traffic and loses work during a rare failure. Its tests mostly repeat successful jobs and sleep until shutdown seems finished. Ferrum needs evidence that can challenge the contract deliberately. This level asks you to invent hostile but controlled histories, preserve reproducible traces, and distinguish a useful test result from a proof the test cannot supply.",
+    "objective": "Build a validation strategy around explicit acceptance, completion, and failure-accounting invariants.",
+    "loadout": [
+      8,
+      20,
+      21,
+      31
+    ],
+    "win_conditions": [
+      "Define an independent state model for job ownership and accepted-work accounting.",
+      "Control at least one failure interleaving without relying on sleeps.",
+      "Explain which properties need compile checks, runtime tests, dynamic tools, or protocol reasoning."
+    ],
+    "boss_title": "The Missing Job",
+    "boss_brief": "A bounded service accepts jobs, transfers them to workers, and collects results. Introduce a controlled fault after one job is accepted but before its result reaches the collector. Count admission rejections separately. Classify accepted jobs as completed, failed, abandoned, or uncertain if external effects are possible. Build a small reference model and generate operation sequences that compare implementation accounting against it. Add synchronization hooks so a test can pause a worker at the precise fault boundary and trigger shutdown. Record the sequence and seed needed to reproduce a failure. Your evidence plan must also include a compile-time API property and identify why passing runtime tests does not prove an unsafe representation or a distributed delivery guarantee.",
+    "constraints": [
+      "Acceptance must have one explicitly named point.",
+      "The test controls ordering through synchronization rather than timing guesses.",
+      "Do not count uncertain external effects as confirmed successful work."
+    ],
+    "debrief": "Start with a model whose state changes are simpler than the implementation: each job identity has a known owner or terminal classification. Compare those observable transitions rather than copying the production queue code into the test. A barrier or test channel can establish that acceptance occurred before the injected fault; another releases the blocked participant. This makes one intended history reproducible, not every possible schedule. Compile checks can establish a bound such as Send for a returned future, while runtime histories test accounting and shutdown. Miri or another dynamic tool may find executed memory violations, but neither a clean run nor model agreement proves all unsafe behavior sound or an external operation exactly once.",
+    "hint1": "Write the accounting equation before generating random operations. Then identify the exact transition where a job becomes accepted. If the test cannot tell whether that transition happened, its shutdown assertion is probably ambiguous.",
+    "hint2": "Represent each job by an ID and an independent model state. Pause execution immediately after admission is recorded, fail the collector or initiate shutdown, and then release the worker. Assert the documented terminal classification. Keep the failure trace small enough to replay deterministically, and use shrinking or manual reduction to isolate the essential history.",
+    "side_quest": "Create three deliberate mutants: omit the final sender drop, release a byte-budget token too early, and reuse a deleted generation. Name the specific test that should catch each mutant. If a mutant survives, decide whether your observable contract excludes the behavior or whether your evidence is missing a relevant property. Do not treat mutation scores as a substitute for the contract itself.",
+    "route_choices": [
+      {
+        "label": "Enter the endgame",
+        "level": 37,
+        "reason": "Use adversarial reasoning while building a complete borrowing parser."
+      },
+      {
+        "label": "Audit one invariant chain",
+        "level": 42,
+        "reason": "Combine tool evidence with ownership, state, and boundary arguments."
+      }
+    ],
+    "reward": "Failure Cartographer"
+  },
+  {
+    "level": 37,
+    "mission_title": "The Living Document",
+    "scene": "Ferrum's operators keep old search results open while editing the source archive. The original parser returns borrowed fields from a buffer that the editor wants to replace. One quick fix copies every field; another stores references inside the object that owns the editable string. Your endgame begins by deciding what an old result means after an edit. Storage, identity, and the version of the text must tell the same story.",
+    "objective": "Design parsed document snapshots whose records remain meaningful while a newer document version is edited.",
+    "loadout": [
+      4,
+      8,
+      13,
+      14,
+      34
+    ],
+    "win_conditions": [
+      "Keep each retained record tied to the exact source version from which its ranges were produced.",
+      "Preserve UTF-8 range validity without storing movable internal self references.",
+      "Explain the memory cost of retaining a tiny result from a large old document."
+    ],
+    "boss_title": "The Stale Span Doppelganger",
+    "boss_brief": "Extend the borrowing-parser design into an editor model with immutable source snapshots. A reader can retain a record from version A while the editor produces version B. Design owners and byte ranges so the old record still resolves to A and cannot silently index B. An API accepting a free-standing span must reject use with an unrelated snapshot or make that mismatch impossible through ownership. Define how invalid text produces owned diagnostics without exposing an invalid record. Show the lifetime and retention consequences of returning a temporary borrowed view versus an independently owned record handle. Your deliverable should include a complete ownership diagram and tests for edits that change byte lengths before a retained field.",
+    "constraints": [
+      "Do not mutate a source allocation while retained views rely on its old contents.",
+      "Avoid a structure storing ordinary references into its own movable owned String.",
+      "Do not confuse Unicode character positions with byte offsets."
+    ],
+    "debrief": "An immutable snapshot can own one source string and its validated ranges. A temporary view borrows that snapshot; an independently retained record can carry an ownership share of the exact snapshot plus a record index. Moving handles leaves ranges meaningful because resolution uses their associated owner. If spans travel independently, attach and validate a snapshot identity rather than assuming equal numeric offsets imply equal text. Editing constructs a new snapshot instead of mutating A beneath its readers. Owned diagnostic positions survive rejection without granting a valid record. Sharing avoids copying every field but retains the complete old source, so selective copying may still be the best policy for a few long-lived search results.",
+    "hint1": "Give the old text and the new text different names. Then follow one retained field after an insertion at the beginning. Which owner or identity prevents its old byte range from resolving against the new bytes?",
+    "hint2": "Separate immutable source snapshots from the editor's current-snapshot handle. Store validated ranges, not internal references, and construct borrowed views on demand. A retained record can own a shared snapshot handle and an index. Check every boundary before slicing, and make source identity part of span resolution when the span does not already own its source.",
+    "side_quest": "Add normalized search keys while preserving exact original spelling for display. For ASCII-only case normalization, decide whether keys borrow or own bytes and where they are cached. Then discuss what changes when normalization can change byte length. Keep normalized offsets separate from source spans, and measure the cost of caching keys for records that are never searched. Keep display text independent from lookup policy.",
+    "route_choices": [
+      {
+        "label": "Make history transactional",
+        "level": 38,
+        "reason": "Add an explicit validation rule when snapshots become the basis of writes."
+      },
+      {
+        "label": "Revisit lending views",
+        "level": 13,
+        "reason": "Compare reusable producer storage with independently retained document records."
+      }
+    ],
+    "reward": "Snapshot Pathfinder"
+  },
+  {
+    "level": 38,
+    "mission_title": "The Transaction Within",
+    "scene": "The restored archive lets an operator preview a repair, try a risky adjustment, and discard only that adjustment. Ferrum calls these inner experiments savepoints. The existing store knows how to validate one transaction against its snapshot, but the operator now needs nested local work that does not leak into the published map. Your challenge is to distinguish committing a child proposal from publishing a new global version.",
+    "objective": "Add nested local savepoints while preserving the outer transaction’s snapshot and global commit validation.",
+    "loadout": [
+      14,
+      20,
+      34,
+      37
+    ],
+    "win_conditions": [
+      "Child rollback leaves parent staged reads and writes unchanged.",
+      "Child commit merges only into the parent proposal and never independently publishes store state.",
+      "A conflicting outer commit rejects the complete nested proposal without partially publishing it."
+    ],
+    "boss_title": "The False Inner Commit",
+    "boss_brief": "Design savepoints for the versioned store. A parent transaction stages a value, a child reads it and changes two keys, and the child can either merge or roll back. Reads should consult the nearest staged change before older layers and the base snapshot. A child deletion must hide an older value rather than look like no staged entry. Only the outer transaction may call the store’s publication operation. Provide histories covering child rollback, child merge followed by parent rollback, and a background writer invalidating the outer base before publication. Explain what remains a valid historical snapshot after conflict. You may use an owned transaction stack or a scoped borrowing API, but identify who owns every staged value at each transition.",
+    "constraints": [
+      "Do not advertise independent database isolation for these local savepoints.",
+      "Preserve store-origin validation as well as version validation.",
+      "No external side effects occur merely because an inner savepoint merges."
+    ],
+    "debrief": "A savepoint layer is a proposal overlay, not a new published store. Reads search from the newest layer outward, distinguishing a tombstone from absence in that layer. Rollback discards the child’s owned changes. Merge moves those changes into its parent while leaving the same base snapshot and outer validation requirements intact. Only a successful outer publication advances the store version and replaces visible state. If a background writer invalidates the base, rejecting the outer transaction discards the whole combined proposal; its historical snapshot remains valid for reading. Retain the identity check that prevents a transaction from another store passing on an equal numeric version. Nested structure does not make external effects reversible.",
+    "hint1": "Rename child commit to merge while designing it. That word makes the missing distinction visible: one action changes a local proposal, while another publishes a new store state for all readers.",
+    "hint2": "Use a stack of maps whose values distinguish replacement from deletion. A lookup checks the newest map first and stops at the first staged entry, including a tombstone. Merging moves entries into the immediately older map. The base snapshot and origin identity remain attached to the outer transaction until its final validation.",
+    "side_quest": "Allow a long-running preview to report which keys it changed without claiming those values are still current. Design a conflict report that separates reusable owned input from calculations derived from stale reads. Then compare retrying the whole decision with merging a domain-specific commutative operation. State the conditions that make the latter legitimate rather than treating every conflict as mergeable. Test a conflicting concurrent writer as well.",
+    "route_choices": [
+      {
+        "label": "Move proposals through workers",
+        "level": 39,
+        "reason": "Preserve ownership and accounting while work crosses bounded queues."
+      },
+      {
+        "label": "Review the consistency claim",
+        "level": 42,
+        "reason": "Check precisely which state the version rule validates."
+      }
+    ],
+    "reward": "Savepoint Architect"
+  },
+  {
+    "level": 39,
+    "mission_title": "The Collector Goes Dark",
+    "scene": "Ferrum's workers are fast enough to overwhelm their collector. Bounded channels keep queues small until the collector fails, after which the coordinator waits for workers and the workers wait for result capacity. Every allocation still has a valid owner, yet the city stops. This boss tests the difference between safe memory and a live shutdown protocol. The escape route follows who can close each queue and who observes that closure.",
+    "objective": "Make collector failure terminate a bounded finite pipeline without detached workers or a cyclic wait.",
+    "loadout": [
+      19,
+      20,
+      21,
+      26,
+      28
+    ],
+    "win_conditions": [
+      "Trace the wait graph when the result receiver disappears under backpressure.",
+      "Join every worker and classify undelivered versus previously accepted jobs honestly.",
+      "Reproduce collector failure with deterministic synchronization at small queue capacities."
+    ],
+    "boss_title": "The Silent Result Chamber",
+    "boss_brief": "Adapt the worker pipeline so its collector can return an ordinary error after receiving a chosen result. The result queue and input queues are bounded. Arrange a test where dispatch is still active at that moment. Specify how closing the result receiver reaches workers, how workers stop accepting further work, and how a coordinator blocked in send eventually observes disconnection. Join every thread even after the first failure. Distinguish the message returned by a failed send from jobs that a worker previously accepted or started. For pure finite computations, define which abandoned jobs may be retried; for external effects, allow an uncertain classification. Your solution must not rely on a cancellation flag waking an unrelated blocking operation.",
+    "constraints": [
+      "Assume each active computation eventually returns; do not promise interruption of arbitrary blocking I/O.",
+      "Every remaining sender and receiver owner has a documented shutdown role.",
+      "Error reporting must not introduce a second bounded queue that nobody drains."
+    ],
+    "debrief": "Dropping the collector’s receiver causes workers’ pending or later result sends to fail. Workers then exit their input loops and drop receivers, allowing a coordinator blocked on an affected input send to observe disconnection. This progress argument depends on active computations eventually reaching that send or another shutdown check. Drop coordinator input senders and retain panic payloads until all joins finish. A send error returns the specific undelivered message. Track earlier accepted jobs by ID and classify their outcomes separately. An atomic cancellation flag alone does not wake a blocked send or recv. Keep any final reporting path bounded by a justified amount or independently drainable.",
+    "hint1": "Draw arrows from each blocked operation to the component that can release it. Then remove the result receiver. Which workers wake immediately, which must first finish computation, and which owner keeps the coordinator’s send connected?",
+    "hint2": "Treat channel disconnection as part of the protocol. Result-send failure should lead to dropping the relevant job receiver, rather than waiting for more jobs forever. Join every handle explicitly after admission closes. Add a test hook that confirms dispatch is active before the collector fails, and use capacities zero or one to expose hidden waiting cycles.",
+    "side_quest": "Replace pure arithmetic with a simulated remote operation that can complete before its acknowledgment is lost. Record job IDs and attempts in the simulator. Show why replaying a previously accepted job may duplicate an effect even though replaying the payload of a failed input send does not. Add a domain-specific idempotency policy and test its required peer behavior separately. Keep the admission boundary explicit throughout.",
+    "route_choices": [
+      {
+        "label": "Negotiate uncertain outcomes",
+        "level": 40,
+        "reason": "Represent what the peer may have done when local confirmation disappears."
+      },
+      {
+        "label": "Return to service supervision",
+        "level": 28,
+        "reason": "Generalize finite pipeline shutdown into a service lifecycle."
+      }
+    ],
+    "reward": "Shutdown Warden"
+  },
+  {
+    "level": 40,
+    "mission_title": "The Lost Acknowledgment",
+    "scene": "Ferrum reopens a communication route, sends a repair command, and loses the connection before an acknowledgment arrives. One operator calls the command failed and retries with a new identifier. Another calls it successful because the bytes were written. Both know less than they claim. Your protocol map needs a place for uncertainty, and the permission to retry must depend on an explicit peer contract rather than optimism.",
+    "objective": "Represent reconnect and retry decisions without confusing local transport status with confirmed remote effects.",
+    "loadout": [
+      15,
+      23,
+      26,
+      27,
+      39
+    ],
+    "win_conditions": [
+      "Model pending, confirmed, and unknown outcomes distinctly.",
+      "Preserve operation identity across a retry when the chosen protocol requires deduplication.",
+      "Test a peer that executes a command but drops its acknowledgment."
+    ],
+    "boss_title": "The Echo That May Already Exist",
+    "boss_brief": "Design a client-side command state machine for a fake peer. The peer may execute a command and then lose its reply. The client supports reconnect, querying status when the peer protocol permits it, and an explicit retry policy. Choose which transitions should consume typed capabilities and which belong in a runtime enum. A disconnect after sending must not automatically become a confirmed failure. Define the stable operation ID, the peer’s deduplication or status-retention contract, and what happens when that retention expires. Build a deterministic simulation of lost acknowledgment, duplicate delivery, and confirmed rejection before execution. Explain what your Rust types guarantee locally and what remains dependent on the peer’s behavior.",
+    "constraints": [
+      "Do not claim exactly-once execution from ownership or a successful local write.",
+      "An unknown outcome cannot silently convert into safe retry authorization.",
+      "Scope the simulator explicitly; it is not a deployed distributed transaction system."
+    ],
+    "debrief": "A local state machine can prevent phase confusion and preserve the operation ID, but it cannot infer an unseen remote outcome. After an ambiguous disconnect, move to an unknown state. Querying status or retrying with the same ID is useful only under a peer contract that retains and recognizes the necessary history. Expiration may restore uncertainty rather than prove nonexecution. Confirmed rejection before execution is a different outcome and can permit a new attempt under the stated policy. Use typed capabilities when a transition genuinely removes an operation, and runtime alternatives when a manager must hold mixed states. The fake peer should independently record effects so tests can detect duplicate execution behind lost replies.",
+    "hint1": "List what the client observed and what the peer could have done. If two remote histories produce the same local observation, the client’s next state must accommodate both unless another protocol event distinguishes them.",
+    "hint2": "Give the command a stable logical ID separate from its connection and attempt number. Simulate execution followed by a dropped reply. Reconnection alone supplies no missing acknowledgment. An explicit unknown state forces callers to choose status lookup, deduplicated retry under a real contract, or manual recovery instead of treating every error as safely repeatable.",
+    "side_quest": "Add a process restart between command execution and acknowledgment handling. Decide where the client stores operation identity and recovery state, and what the peer must retain. A process-local HashMap is not durable history. Draw the crash windows around each persistence step and describe which outcomes remain uncertain when either side loses its remembered state. Treat forgotten recovery records as uncertainty, too.",
+    "route_choices": [
+      {
+        "label": "Ship the protocol as an API",
+        "level": 41,
+        "reason": "Expose uncertainty and recovery without making accidental compatibility promises."
+      },
+      {
+        "label": "Return to cancellation terrain",
+        "level": 26,
+        "reason": "Connect dropped local computations to effects that may continue elsewhere."
+      }
+    ],
+    "reward": "Uncertainty Navigator"
+  },
+  {
+    "level": 41,
+    "mission_title": "The Downstream Gauntlet",
+    "scene": "The city’s repaired components are ready to become a library used outside Ferrum. The release candidate passes its own tests, but an integration crate no longer spawns one returned future, a minimal build imports an unavailable module, and the package omits a schema file. This gate tests whether a release is the artifact downstream users actually compile. Public promises include configurations and properties that never appear in the happy-path demonstration.",
+    "objective": "Validate a release through representative downstream callers and the packaged artifact rather than only the development checkout.",
+    "loadout": [
+      9,
+      10,
+      14,
+      16,
+      27,
+      33
+    ],
+    "win_conditions": [
+      "Create downstream compile fixtures for the public ownership, error, and future bounds you intend to support.",
+      "Exercise minimal and relevant feature configurations instead of assuming all-features covers them.",
+      "Build the packaged artifact with its declared inputs and compiler support policy."
+    ],
+    "boss_title": "The Release Candidate Hydra",
+    "boss_brief": "Prepare a small library release with a protocol core and an optional adapter. Create two consumer fixtures: one uses the minimal configuration and one requires a returned future to be Send while borrowing suitable input. Now review a proposed change that adds Rc across a suspension point, narrows a generic bound, adds a variant to an exhaustive error enum, and references a workspace-only schema in a build script. Decide which changes violate your stated promises and which require an explicit compatibility decision. Validate the actual packaged source, not just local files. Your deliverable includes the support matrix, meaningful compile checks, the package contents you inspected, and release notes written around observable caller consequences.",
+    "constraints": [
+      "Do not claim minimum compiler support without checking the declared baseline.",
+      "Keep optional features composable according to Cargo’s resolved feature behavior.",
+      "A local successful build is not evidence that omitted package inputs are available to users."
+    ],
+    "debrief": "Downstream fixtures test the interface properties callers rely on without naming anonymous future types. A helper requiring Send can detect the Rc regression; a borrowed-input fixture separately tests lifetime flexibility. Narrower bounds and exhaustive error changes need compatibility review rather than being dismissed as internal edits. Minimal configurations expose imports hidden by default or maximal builds. Package inspection and building from the package detect workspace-only assumptions. Declare generated inputs and distinguish host execution from target properties in build scripts. The compiler baseline is a separate tested dimension. Release notes should explain changed caller obligations and behavior, while avoiding claims of universal compatibility based only on one preferred configuration.",
+    "hint1": "Pretend the release archive is all the next developer receives. Which tests depend on files, features, or compiler properties that exist only in your working checkout? Write a consumer that states one promised bound directly.",
+    "hint2": "Use small compile fixtures rather than copying production implementations into tests. Require Send on the produced future through a generic helper, then separately exercise supported borrowed inputs. Test the minimal feature set and meaningful combinations, inspect packaged files, and build those files under the declared support conditions. Configuration coverage should follow concrete promises.",
+    "side_quest": "Design an upgrade guide for a deliberate breaking change to error recovery and compiler baseline. Include one short before-and-after caller example and a migration check. Then identify one implementation change that should remain invisible to consumers. Explain how documentation can accidentally turn an incidental layout, allocation count, or cancellation detail into a future compatibility commitment. Make each promised migration step verifiable.",
+    "route_choices": [
+      {
+        "label": "Face the final audit",
+        "level": 42,
+        "reason": "Combine published promises with the invariants and evidence behind them."
+      },
+      {
+        "label": "Reforge the API boundary",
+        "level": 16,
+        "reason": "Reconsider which extensibility and compatibility choices belong in public types."
+      }
+    ],
+    "reward": "Compatibility Sentinel"
+  },
+  {
+    "level": 42,
+    "mission_title": "Restore Ferrum",
+    "scene": "Ferrum’s map is connected again, but restoring each district separately did not prove the whole city coherent. A borrowed parser can retain old storage. A bounded worker queue can hide an unbounded producer. A valid local state machine can still retry an uncertain remote effect. The final encounter brings these boundaries together. Your artifact is a small working simulation and an explanation a skeptical developer can inspect, challenge, and extend.",
+    "objective": "Build and defend one coherent in-memory system whose ownership, state, progress, and verification claims agree.",
+    "loadout": [
+      6,
+      14,
+      20,
+      26,
+      31,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41
+    ],
+    "win_conditions": [
+      "Trace one request from source ownership through validation, work admission, state change, and reported outcome.",
+      "Demonstrate a deterministic failure history and preserve the documented accounting or uncertainty state.",
+      "Separate type-enforced guarantees, runtime invariants, and assumptions about another component."
+    ],
+    "boss_title": "The Last Unstated Assumption",
+    "boss_brief": "Build a finite repair simulator using the book’s ideas: immutable parsed configuration, a versioned local store, bounded work admission, and a fake remote peer that can lose replies. Choose a modest scenario such as updating station settings. Implement enough of the path to run a successful request, a stale transaction, and a lost acknowledgment. Supply an ownership diagram, a wait graph, and three precise invariants. For each invariant, name the implementation mechanism and evidence that supports it. Introduce one controlled failure after acceptance and show the reported outcome without silently losing the request or claiming the remote effect never occurred. Unsafe code is optional; if used, include its proof obligations and explain why the safe representation was insufficient.",
+    "constraints": [
+      "Keep the scope finite and runnable without a real network or deployed database.",
+      "Do not claim durability, exactly-once delivery, or proof of soundness from the simulator.",
+      "Any memory bound must name queues, payload retention, snapshots, and admitted work."
+    ],
+    "debrief": "A strong solution makes each boundary explicit rather than maximizing features. Parsed views resolve against their owning snapshot. Admission transfers a job identity and the resources needed to account for it. Store publication validates the right origin and version before committing prepared state. Worker and collector shutdown release the channel owners needed for progress. The fake peer records effects independently, so a lost reply produces an unknown outcome until the chosen protocol resolves it. Tests attack these claims with deliberate histories. Types prevent particular invalid accesses and transitions; runtime checks enforce lengths, versions, and budgets; peer assumptions govern remote semantics. The final argument should state those limits directly and connect every claimed guarantee to actual evidence.",
+    "hint1": "Choose one request and draw every owner it passes through. At each boundary ask what can fail, who still owns partial progress, and which observation authorizes the next transition. One unexplained arrow is a useful place to attack.",
+    "hint2": "Keep three columns in your review: enforced by types, checked at runtime, and assumed from a protocol. Put each invariant in the correct column, then name its test or argument. A bounded queue belongs only to part of a memory bound; a local Result belongs only to part of an outcome protocol. Use the fake peer’s independent effect log to expose that distinction.",
+    "side_quest": "Invite another developer to choose one hostile change: a retained old snapshot, a forgotten guard, a collector failure, a malformed frame, or a reused operation ID. Predict which invariant it challenges before running anything. Repair the design or narrow the promise, then update the evidence. Your final achievement is the ability to explain the repair, not merely to recover a passing test.",
+    "route_choices": [
+      {
+        "label": "New Game Plus as an Architect",
+        "level": 9,
+        "reason": "Rebuild one subsystem around a different trait or erasure boundary and compare its obligations."
+      },
+      {
+        "label": "New Game Plus as a Delver",
+        "level": 29,
+        "reason": "Revisit representation choices with the complete system’s ownership and measurement evidence."
+      }
+    ],
+    "reward": "Keeper of Explicit Invariants"
+  }
+]

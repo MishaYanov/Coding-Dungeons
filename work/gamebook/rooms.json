@@ -1,0 +1,35 @@
+[
+  {
+    "id":"archive",
+    "title":"The Vanishing Archive",
+    "brief":"A log service parses a 256 MiB input buffer. Downstream work retains only a 24-byte identifier from each selected record for several minutes. The input must then be reused for the next batch. Your benchmark rewards low allocation counts, but the incident report complains about peak live memory. Choose a representation before you inspect the consequences. Assume the selected identifiers are a small fraction of the original buffer and do not need to preserve the original allocation identity.",
+    "choices":[
+      {"label":"Keep slices into the reusable buffer","result":"The borrowing relationship prevents reuse while the slices remain usable. That compiler error identifies the incompatible storage policy. Extending annotations does not make the buffer independent. This choice works if consumers finish before reuse or if you change the owner and stop reusing this allocation; it does not meet the requirements as stated.","level":4},
+      {"label":"Retain an Arc to the whole batch","result":"Shared ownership keeps the original bytes alive for views or validated ranges. It also prevents overwriting those bytes while readers still need them, and one tiny identifier retains the entire 256 MiB. This design fits a different contract that allows a separate receive buffer and makes dense retention worth its memory cost.","level":8},
+      {"label":"Copy the selected identifiers at the queue boundary","result":"The queue owns compact strings independent of the batch. This deliberately spends allocations and byte copies to release the much larger source and permit reuse. Measure selected-byte volume and allocator costs, but compare them against peak retained memory rather than declaring zero-copy the winner by definition.","level":37}
+    ],
+    "remix":"Downstream analysis now retains nearly every byte. The producer may rotate to another receive buffer while readers retain the old one. Re-evaluate the three actions and explain how retention density and the number of live batches affect your choice."
+  },
+  {
+    "id":"payment",
+    "title":"The Ghost Payment",
+    "brief":"A request future times out after sending a payment command. The connection then disappears. Your local request value is dropped cleanly. The remote service may have processed the command, but no acknowledgement reached you. The business requires that one purchase must not be charged twice. Choose your next action. The service has a status lookup and an idempotency-key mechanism, but their retention and deduplication contracts must be checked.",
+    "choices":[
+      {"label":"Retry immediately with a fresh operation identifier","result":"A new identifier can make the retry look like a second purchase. Dropping the future did not reverse the remote effect. This action is suitable only if duplicate execution is acceptable or another layer prevents it; the stated purchase invariant does not permit that assumption.","level":26},
+      {"label":"Reuse the key and treat deduplication as automatic","result":"A stable key is useful only under the peer's documented scope, retention period, payload matching, and failure behavior. If the record expires before retry or different payloads share a key, your local type cannot repair the protocol. First establish the remote contract rather than treating the presence of a key field as a guarantee.","level":40},
+      {"label":"Record an uncertain outcome and reconcile under the peer contract","result":"Keep the original operation identity and the exact request meaning. Consult the peer's status and idempotency behavior, then retry or reconcile according to that contract. An inconclusive lookup may leave the outcome uncertain. This is an explicit protocol state, not a reason to manufacture a success or failure locally.","level":28}
+    ],
+    "remix":"Remove the status endpoint and give idempotency records a finite lifetime. Design an escalation path for an unresolved purchase approaching expiry. Identify what must become a human or business decision instead of an unbounded automatic retry."
+  },
+  {
+    "id":"cache",
+    "title":"The Hollow Lock",
+    "brief":"A shared cache calls a slow user-supplied loader while holding its global mutex. The loader can recursively request another key, and two requests for the same key can trigger an expensive external operation. Product wants low contention and one active loader per key. Choose an initial redesign. A valid answer must account for reentrancy, failure, and abandoned loads rather than merely moving a lock statement.",
+    "choices":[
+      {"label":"Keep the global lock and forbid nothing else","result":"The recursive call can attempt to acquire the mutex already held by the loader. A global lock also serializes unrelated keys. This does not satisfy the stated reentrancy and contention requirements. A non-reentrant contract could be a different design, but it must be explicit and still needs an argument for lock duration.","level":20},
+      {"label":"Release the lock and allow every miss to load","result":"This removes the global lock from user code and can be a sound, useful cache policy. It also allows duplicate loads for the same key, so it fails the one-active-loader requirement as stated. If duplicate pure work is acceptable, this simpler policy may be the right tradeoff; external effects need additional care.","level":42},
+      {"label":"Install a per-key loading state and coordinate waiters","result":"Publish ready or failed and wake waiters even if a load panics or is abandoned. Run loaders outside the global lock and impose a fixed key order: a loader may request only higher-ranked keys. Reject other nested requests before starting or waiting on a load. This prevents self-waits and cross-key cycles such as A waiting for B while B waits for A.","level":25}
+    ],
+    "remix":"Let callers cancel while waiting and permit the initiating loader to disappear. Explain how waiters get a terminal outcome and when they can retry. Test two simultaneous loaders that request each other's keys and identify which request must fail."
+  }
+]

@@ -1,0 +1,246 @@
+# Chapter 33 Foreign Interfaces as Ownership Protocols
+
+## A Calling Convention Does Not Define a Safe API
+
+An FFI declaration connects two systems that may disagree about representation, ownership, failure, and concurrency. extern C selects a calling convention appropriate to the target. It does not establish how long a pointer remains valid, which allocator owns it, whether callbacks can arrive later, or whether a foreign function mutates memory behind an apparently shared reference.
+
+The productive way to design an FFI boundary is as a protocol. Every pointer has an owner and an access duration. Every allocation has a matching destruction operation. Every callback registration has a lifetime and an unregistration rule. Every status code has a postcondition. Write these rules before converting raw pointers into Rust references, because reference creation asserts stronger facts than a foreign pointer alone provides.
+
+There are two different layers of unsafety. Declaring a foreign signature asserts that its ABI and types match the foreign implementation. Calling it may require additional preconditions about arguments and global state. A safe wrapper must discharge those preconditions for every safe caller, not merely for the examples the author expects.
+
+Edition 2024 makes some of these assertions more visible through unsafe extern blocks and unsafe attributes such as no_mangle. The syntax records responsibility; it does not validate a header or detect an allocator mismatch. The review still needs both sides of the boundary.
+
+## Use Explicit Representations for Shared Data
+
+Rust's ordinary struct layout is not a foreign ABI contract. repr(C) requests C-compatible field layout rules for the target, but it does not make every field type suitable for C. String, Vec, references with hidden validity assumptions, and trait objects are not automatically portable C interface types.
+
+A common borrowed representation is a pointer and a length. The pair still needs a validity contract. In particular, a zero-length foreign buffer may use a null pointer even though Rust slice constructors require a nonnull aligned pointer, including for empty slices. A wrapper can handle the empty case before constructing a slice.
+
+```rust
+#[repr(C)]
+pub struct ByteView {
+    pub data: *const u8,
+    pub len: usize,
+}
+
+/// # Safety
+/// For nonzero len, data must identify len initialized readable bytes
+/// in one live allocation, with total size at most isize::MAX.
+/// The bytes must not be mutated for the duration of this call.
+pub unsafe extern "C" fn sum_bytes(view: ByteView) -> u64 {
+    if view.len == 0 {
+        return 0;
+    }
+    // SAFETY: The caller supplies the documented readable allocation.
+    let bytes = unsafe {
+        std::slice::from_raw_parts(view.data, view.len)
+    };
+    bytes.iter().fold(0_u64, |sum, byte| {
+        sum.wrapping_add(u64::from(*byte))
+    })
+}
+```
+
+The function returns a wrapping sum deliberately, avoiding an arithmetic panic for very large inputs. It borrows the bytes only during the call and returns no reference. It does not validate an arbitrary nonnull pointer. A pointer can be nonnull and still be dangling, too short, or concurrently modified. Those facts cannot generally be recovered by inspecting the address.
+
+The length uses usize because the interface is intended to pair with the target C size type in a correctly matched declaration. A serialized file format or cross-process wire format should use explicitly specified widths and byte order instead. ABI compatibility on one target is not a portable serialization design.
+
+For tagged data, accept an integer tag and validate it rather than accepting an arbitrary foreign integer directly as a Rust enum. An invalid Rust enum discriminant can violate value validity before a match has a chance to reject it. repr(u8) controls representation; it does not make every u8 bit pattern a valid enum value.
+
+## Opaque Handles Keep Representation on One Side
+
+An opaque pointer lets C retain ownership of a Rust-created object without understanding its layout. The interface must provide operations and a matching destructor. The following complete Rust API uses a deliberately prefixed symbol family. Its C header would declare Counter as an incomplete struct.
+
+```rust
+pub struct Counter {
+    value: u64,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rbook_counter_new() -> *mut Counter {
+    Box::into_raw(Box::new(Counter { value: 0 }))
+}
+
+/// # Safety
+/// If either argument is null, no memory is accessed. Otherwise
+/// counter must be a live, exclusive handle from rbook_counter_new
+/// and output must be aligned, disjoint u64 storage for exclusive writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rbook_counter_add(
+    counter: *mut Counter,
+    delta: u64,
+    output: *mut u64,
+) -> i32 {
+    if counter.is_null() || output.is_null() {
+        return 1;
+    }
+    // SAFETY: The caller guarantees a live exclusively accessible handle.
+    let counter = unsafe { &mut *counter };
+    let Some(next) = counter.value.checked_add(delta) else {
+        return 2;
+    };
+    counter.value = next;
+    // SAFETY: output is valid, aligned, writable, and disjoint.
+    unsafe { output.write(next) };
+    0
+}
+
+/// # Safety
+/// A nonnull pointer must come from rbook_counter_new and must not have
+/// been destroyed. No call or reference may still use the allocation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rbook_counter_free(counter: *mut Counter) {
+    if !counter.is_null() {
+        // SAFETY: This call receives the unique original allocation.
+        drop(unsafe { Box::from_raw(counter) });
+    }
+}
+```
+
+The null checks support a defined error for missing arguments. They do not make the add function safe for arbitrary pointers, so the Rust function remains unsafe. The output pointer must be disjoint from the Counter allocation because creating &mut Counter establishes exclusive access to the entire value during its use. A C caller cannot bypass that contract by pointing output at an internal field.
+
+Status 2 leaves the counter and output unchanged because checked arithmetic happens before mutation. Status 0 updates both. The destructor accepts null as a no-op, but a stale pointer is still invalid. Double destruction is not made safe by checking nonnull because freeing an allocation does not automatically clear every foreign copy of its address.
+
+The no_mangle attribute exposes global symbol names. The prefix reduces collision risk but does not prove uniqueness across an arbitrary linked process. A real library needs a deliberate naming and versioning strategy. The unsafe attribute is a reminder that symbol identity is part of correctness, not merely linker decoration.
+
+## Allocation Must Return to the Correct Owner
+
+A pointer does not identify which allocator can free it. Memory allocated by Rust must be returned through the matching Rust ownership protocol unless an explicit compatible allocation contract says otherwise. Memory allocated by a foreign library must be destroyed with that library's corresponding operation. Even if two allocators happen to use the same system heap today, relying on that coincidence makes the interface fragile.
+
+CString offers a useful example. as_ptr borrows a nul-terminated buffer owned by the CString. into_raw transfers ownership to a raw pointer. from_raw takes that ownership back under specific requirements. It is not a generic constructor for any C string pointer.
+
+```rust
+use std::ffi::{CStr, CString};
+
+fn main() {
+    let owned = CString::new("worker-ready").unwrap();
+    let borrowed = owned.as_ptr();
+    // SAFETY: owned remains alive and the bytes remain unchanged.
+    let view = unsafe { CStr::from_ptr(borrowed) };
+    assert_eq!(view.to_bytes(), b"worker-ready");
+
+    let transferred = owned.into_raw();
+    // A foreign owner may retain transferred under an agreed protocol.
+    // SAFETY: This is the exact pointer from into_raw, returned once,
+    // with its terminating nul and string length preserved.
+    let recovered = unsafe { CString::from_raw(transferred) };
+    assert_eq!(recovered.to_str().unwrap(), "worker-ready");
+}
+```
+
+The borrowed CStr view ends before ownership is transferred in this example. Foreign code must not use the borrowed pointer after the recovered CString is dropped. If ownership is transferred, the foreign side must eventually call a designated Rust release function or otherwise return the exact pointer according to the contract.
+
+Interior nul bytes are rejected by CString::new because C string length is determined by the first nul. CStr::to_str separately checks UTF-8. Nul termination and text encoding are different invariants. A foreign API using a platform-specific encoding may require conversion rather than treating every C string as UTF-8.
+
+For raw byte buffers, include the information required for correct destruction in an opaque owner or a carefully specified descriptor. A Vec's pointer alone is insufficient to reconstruct it; length and capacity must match the original allocation contract. An opaque buffer handle is often safer than asking C callers to preserve a Rust vector's exact capacity metadata.
+
+## A Callback Recreates Code Plus Environment
+
+C callback APIs often receive a function pointer and a void context pointer. Together they represent a closure's code and captured state. A trampoline casts the context back to its original type and invokes the callback. Its safety depends on lifetime, type, exclusive access, threading, and panic behavior.
+
+The following complete example simulates a synchronous foreign driver in Rust. It demonstrates a safe wrapper around a callback that may panic, without permitting unwinding through the C ABI callback frame.
+
+```rust
+use std::any::Any;
+use std::ffi::c_void;
+use std::panic::{self, AssertUnwindSafe};
+
+struct Context<F> {
+    callback: F,
+    panic: Option<Box<dyn Any + Send>>,
+}
+
+/// # Safety
+/// The context must be a live Context<F> on visit's thread.
+/// Each call must have exclusive access through its return.
+unsafe extern "C" fn trampoline<F: FnMut(i32)>(
+    context: *mut c_void,
+    value: i32,
+) {
+    // SAFETY: The caller guarantees validity and exclusive access.
+    let context = unsafe { &mut *context.cast::<Context<F>>() };
+    if context.panic.is_some() {
+        return;
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        (context.callback)(value);
+    }));
+    if let Err(payload) = result {
+        context.panic = Some(payload);
+    }
+}
+
+fn visit<F: FnMut(i32)>(values: &[i32], callback: F) {
+    let mut context = Context { callback, panic: None };
+    let raw = (&mut context as *mut Context<F>).cast::<c_void>();
+    for &value in values {
+        // SAFETY: Same thread, serial calls, and the exact context type.
+        unsafe { trampoline::<F>(raw, value) };
+    }
+    if let Some(payload) = context.panic {
+        panic::resume_unwind(payload);
+    }
+}
+
+fn main() {
+    let mut total = 0;
+    visit(&[2, 3, 5], |value| total += value);
+    assert_eq!(total, 10);
+}
+```
+
+The driver must call on the thread running visit, with no overlap or reentry, and retain no context pointer after visit returns. Each call gets exclusive access to the live Context<F> with the exact type. A driver can wait for a callback on another thread and still be synchronous. That design needs F: Send and a synchronized transfer and return of exclusive access.
+
+catch_unwind records an unwinding panic and suppresses subsequent callback bodies. After the driver returns through the C boundary, visit resumes unwinding in ordinary Rust. AssertUnwindSafe is justified here by the narrow policy: after a callback panic, the wrapper does not treat the callback's state as successfully usable and resumes the panic rather than continuing the workflow. It does not magically repair captured application state.
+
+Aborting panics are not caught. A real foreign API may need a status return that requests early termination rather than continuing no-op callbacks. It may also have cleanup requirements before the wrapper can resume unwinding. The bridge must match those semantics, not merely reuse this trampoline mechanically.
+
+## Asynchronous Registration Requires a Stronger Lifetime Protocol
+
+If foreign code stores the context pointer, a stack-local context is insufficient. The owner must keep it alive until registration ends and every in-flight callback has finished. Unregistering future callbacks is not necessarily the same as waiting for current callbacks. Read the foreign library's exact guarantee.
+
+A robust registration guard often owns a heap-allocated context and a foreign registration token. Drop or an explicit close operation unregisters the callback and synchronizes with in-flight calls before destroying the context. If unregistration can fail or block, an explicit close method may be necessary to expose that behavior. A destructor cannot conveniently report an error to its caller.
+
+Persistent registration also needs a contract that remains sound if safe code forgets the guard. A destructor alone cannot protect borrowed captures: mem::forget can suppress unregistration, and leaking the boxed callback does not keep its borrowed referents alive. Persistent registrations normally own their callback state and require F: 'static, together with whatever Send, Sync, and invocation restrictions the foreign threading model requires. Here static constrains captured borrows; it does not require the callback allocation to live forever. A genuinely scoped registration may accept shorter borrows only if the scope itself guarantees teardown and completion before returning, even when an inner registration handle is forgotten. Do not make memory safety depend on a safe caller eventually running Drop.
+
+Threaded callbacks also change access requirements. A raw context pointer does not make FnMut safe to invoke concurrently. Use synchronization, require a thread-safe callback contract, or forward events into a Rust-owned channel. Reentrancy on one thread can violate exclusive access just as concurrency can. A foreign callback that recursively triggers another callback needs an explicit model.
+
+If the foreign library cannot guarantee that callbacks stop before destruction, a safe wrapper may need shared ownership with a separate shutdown protocol, or it may be impossible to provide the desired safe interface without leaking the context. A small leak can preserve memory safety in a deliberately limited situation, but it is not a substitute for understanding the protocol.
+
+## Unwinding Must Match the ABI Contract
+
+An ordinary C ABI boundary is not a general exception transport. A Rust panic that attempts to escape a nonunwinding ABI causes an abort under the documented behavior. A foreign exception entering Rust through a boundary that does not permit it can cause undefined behavior. C-unwind exists for interfaces intentionally designed to permit unwinding, but both sides and all intervening frames must support the chosen protocol.
+
+Rust 1.99 stabilized definitions of C-variadic functions on supported targets. Each `VaList::next_arg` requires an available argument of compatible promoted type and a value the read type can represent. Variadics need a calling protocol. `catch_unwind` does not provide portable foreign exception recovery.
+
+Panic containment is also not error rollback. If an exported operation mutates a handle and then catches a panic, it must decide whether the handle remains usable. Returning an ordinary failure code while leaving a broken invariant can turn later calls into confusing failures. Prepare changes before committing, or invalidate and destroy the affected object when recovery cannot be guaranteed.
+
+## Version the Protocol Rather Than the Compiler's Internals
+
+A C-compatible interface should describe its own stable types and functions. Do not expose Rust's trait object representation, default enum layout, or native Rust ABI as a plugin standard. Recompiling both sides with the same toolchain may make an internal interface workable, but that is a deployment constraint, not a general ABI guarantee.
+
+For extensible descriptors, include an explicit version or structure-size field with documented negotiation rules. Define whether unknown fields are ignored, whether the caller zero-initializes reserved fields, and who owns any pointed-to data. Fixed-width integers help wire protocols, while target ABI types may fit in-process interfaces. Keep those purposes separate.
+
+Test the actual boundary with the foreign compiler and target. Rust-only tests cannot validate a hand-written C header's calling convention, packing, or integer types. Exercise defined failure cases, callback shutdown races, and encoding edges. For the raw destructor above, test null and exactly-once release. A second free violates its safety contract.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A C API returns a nonnull pointer and a length. Is that enough to construct a safe Rust slice?
+
+Solution. No. The allocation must remain live, cover the full range within one allocation, contain initialized values, satisfy alignment and size limits, and have no conflicting mutation during the borrow. Null checking establishes only one small part of the contract. Handle zero length explicitly if the foreign convention permits null empty buffers.
+
+Exercise 2. A registration guard unregisters a callback and immediately frees its context. What additional guarantee is needed?
+
+Solution. Unregistration must also ensure that no callback is currently using the context or can begin afterward. Preventing future scheduling alone is insufficient if an in-flight callback still holds the pointer. The guard needs synchronization with completion before destruction.
+
+Exercise 3. Why should a foreign caller not use free on a pointer returned by CString::into_raw?
+
+Solution. The allocation belongs to Rust's CString ownership protocol. It must be returned through the matching Rust destruction path, with the exact pointer and required length properties preserved. Allocator compatibility cannot be assumed from the pointer's appearance or from one platform's current implementation.
+
+## Further Reading
+
+- [Rustonomicon FFI](https://doc.rust-lang.org/nomicon/ffi.html) discusses ownership, callbacks, representation, and unwinding at foreign boundaries.
+- [Standard library CString](https://doc.rust-lang.org/std/ffi/struct.CString.html) specifies borrowed pointers and raw ownership transfer.
+- [Rust Reference on external blocks](https://doc.rust-lang.org/reference/items/external-blocks.html) defines foreign declarations and ABI strings.
+- [Rust Edition Guide on unsafe attributes](https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-attributes.html) explains the explicit responsibility associated with exported symbols.
+- [Standard library mem::forget](https://doc.rust-lang.org/std/mem/fn.forget.html) explains why unsafe abstractions must remain sound when safe callers suppress destruction.

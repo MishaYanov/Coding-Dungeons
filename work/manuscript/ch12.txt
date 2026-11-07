@@ -1,0 +1,211 @@
+# Chapter 12 Closures as Owned Environments
+
+## A Callback Is Code Plus State
+
+A closure is easiest to understand as an unnamed struct containing captured state, together with an implementation of one or more call traits. This model explains ownership transfer, thread bounds, lifetime errors, and why two syntactically identical closures still have different types. The compiler constructs the environment type; ordinary Rust rules then apply to its fields.
+
+The environment may own a String, borrow a configuration value, or hold an exclusive borrow of a counter. Capturing a value and consuming it when called are separate questions. The move keyword determines how captures enter the environment. The body determines what kind of access is needed when the closure is invoked.
+
+This separation matters when designing callback APIs. A callback invoked once can accept more closures than one invoked repeatedly. A callback stored indefinitely needs a different lifetime contract from one used only during a call. A callback executed on another thread needs the environment to satisfy the relevant transfer requirements. These are not incidental compiler demands; they describe what the API intends to do with somebody else's state.
+
+Before choosing a callback bound, write its execution contract in ordinary language. How many times may it run? Can it mutate its own state? Does it escape the current call? On which thread can it execute? Can it return a borrow into its input? Each answer has a corresponding effect on the signature.
+
+## The Call Traits Describe Access to the Environment
+
+FnOnce consumes self when called, permitting a body to move a non-Copy capture out of its environment. FnMut calls through an exclusive borrow and permits mutation of captures without consuming the closure. Fn calls through a shared borrow. Every closure implements FnOnce; closures that support the stronger access patterns also implement the corresponding traits.
+
+The names describe the permitted receiver operation, not a runtime call counter. An FnOnce bound means the API needs permission for one consuming invocation. A particular closure satisfying it may also be callable many times if it implements FnMut or Fn. Conversely, a closure can be invoked once by application logic even if it implements Fn.
+
+```rust
+fn use_once<F, T>(operation: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    operation()
+}
+
+fn use_twice<F>(mut operation: F) -> (usize, usize)
+where
+    F: FnMut() -> usize,
+{
+    (operation(), operation())
+}
+
+fn main() {
+    let message = String::from("owned result");
+    let result = use_once(move || message);
+    assert_eq!(result, "owned result");
+
+    let mut count = 0;
+    let values = use_twice(|| {
+        count += 1;
+        count
+    });
+    assert_eq!(values, (1, 2));
+    assert_eq!(count, 2);
+}
+```
+
+The first closure owns message and moves it out. After invocation, no complete environment remains to call again. The second closure borrows count exclusively and updates it. Once use_twice returns, its closure is gone, so the exclusive borrow ends and main can read count.
+
+Choosing Fn instead of FnMut for a repeatedly invoked callback is a real restriction. It excludes ordinary stateful closures even when exclusive access would be available. Choosing FnMut instead of FnOnce for a one-shot operation excludes callbacks that transfer captured resources. Use the weakest call trait that satisfies the API's behavior.
+
+## Move Capture Does Not Imply One Shot Invocation
+
+A move closure owns its captures, but it can inspect them through shared access. Such a closure may implement Fn. This is common when configuration must travel with a worker while remaining reusable.
+
+```rust
+fn main() {
+    let prefix = String::from("job");
+    let format_name = move |id: u64| format!("{prefix}-{id}");
+
+    assert_eq!(format_name(3), "job-3");
+    assert_eq!(format_name(4), "job-4");
+}
+```
+
+The closure owns prefix because of move. Calling format! borrows the captured string for formatting rather than moving it out. The environment remains usable. If the body instead returned prefix by value, it would require FnOnce.
+
+Move also does not turn borrowed data into owned data. If a captured variable is a reference, moving that variable copies or moves the reference into the closure. The referent's lifetime still limits how long the closure may be stored. To cross a boundary requiring static captured data, own the underlying resource or use a suitable shared owner; adding move alone cannot lengthen a borrow.
+
+This distinction explains many thread-spawning errors. A thread may outlive the current stack frame, so a callback borrowing local data cannot be accepted by an unscoped spawn API. A scoped thread can express a shorter execution region and permit appropriate borrows. The lifetime contract of the executor determines the requirement; closures do not bypass it.
+
+## Captures Are Often More Precise Than Whole Variables
+
+In modern editions, closure capture can track individual fields rather than always capturing an entire struct. This can allow one field to be moved into a closure while another remains usable. Capture precision has detailed rules involving dereferencing, packed representations, and other cases, so avoid building an unsafe argument on an oversimplified whole-variable model.
+
+```rust
+struct Work {
+    payload: String,
+    retries: u32,
+}
+
+fn main() {
+    let work = Work {
+        payload: "rebuild".into(),
+        retries: 3,
+    };
+
+    let consume_payload = move || work.payload;
+    assert_eq!(work.retries, 3);
+    assert_eq!(consume_payload(), "rebuild");
+}
+```
+
+The closure moves payload. The remaining Copy field is still accessible. This precision can affect drop timing because captured fields and uncaptured fields may now belong to different owners. If an invariant depends on coordinated destruction of fields, encode that coordination in a type with appropriate methods and Drop behavior rather than relying on an informal expectation that a closure captures everything together.
+
+Capture precision also affects auto traits. A struct might contain both a thread-safe field and a thread-confined field. Capturing only the thread-safe field can produce a transferable closure. A seemingly harmless edit that references the other field can change the closure's Send status. When a callback boundary fails to compile after a refactor, inspect the actual captured places, not just the original variable's name.
+
+## Callback Lifetimes Describe Whether State Escapes
+
+A function that immediately invokes a callback can accept borrowed environments with short lifetimes. A struct storing a callback must express how long the captured borrows remain valid. A trait object introduces another explicit lifetime decision.
+
+```rust
+struct Predicate<'a> {
+    test: Box<dyn Fn(&str) -> bool + 'a>,
+}
+
+impl<'a> Predicate<'a> {
+    fn new<F>(test: F) -> Self
+    where
+        F: Fn(&str) -> bool + 'a,
+    {
+        Self { test: Box::new(test) }
+    }
+
+    fn accepts(&self, value: &str) -> bool {
+        (self.test)(value)
+    }
+}
+
+fn main() {
+    let prefix = String::from("build/");
+    let predicate = Predicate::new(|value| value.starts_with(&prefix));
+    assert!(predicate.accepts("build/linux"));
+    assert!(!predicate.accepts("test/linux"));
+}
+```
+
+The object lifetime 'a constrains the environment's captures. It does not require every input string to live for 'a. The input lifetime is independently chosen for each invocation. Confusing these two lifetimes can produce an API that unnecessarily ties temporary input data to the storage duration of the callback.
+
+Higher-ranked bounds make per-call borrowing explicit when needed. A bound such as for<'a> Fn(&'a Record) -> &'a str requires the callback to preserve the relationship between each input borrow and its result. It cannot return an arbitrary short-lived reference, and it cannot insist on only one particular input lifetime. These contracts are useful for selectors and visitors, though closure inference sometimes benefits from using a named function when the relationship is complex.
+
+## A Complete Deferred Commit Queue
+
+A queue of deferred actions demonstrates why FnOnce is a resource-management abstraction. Each action may own a value that will be consumed exactly when the action executes. The queue owns the environment until then.
+
+```rust
+struct CommitQueue<'a> {
+    actions: Vec<Box<dyn FnOnce() + 'a>>,
+}
+
+impl<'a> CommitQueue<'a> {
+    fn new() -> Self { Self { actions: Vec::new() } }
+
+    fn push<F>(&mut self, action: F)
+    where
+        F: FnOnce() + 'a,
+    {
+        self.actions.push(Box::new(action));
+    }
+
+    fn run(self) {
+        for action in self.actions {
+            action();
+        }
+    }
+}
+
+fn main() {
+    let mut output = Vec::new();
+    {
+        let mut queue = CommitQueue::new();
+        let message = String::from("committed");
+        queue.push(|| output.push(message));
+        queue.run();
+    }
+    assert_eq!(output, [String::from("committed")]);
+}
+```
+
+The callback captures an exclusive borrow of output and owns message. The queue's lifetime cannot exceed that borrow. run consumes the queue and then consumes each boxed FnOnce. The type prevents running the same action again through this owner. If the queue is dropped without running, the captured values are dropped instead; owning a closure does not imply that its body executes during destruction.
+
+The name CommitQueue is intentionally stronger than the implementation's guarantees. In a production transaction system, merely executing closures sequentially would not provide atomic commit. If an action panics, later actions may never run. If an action performs an external effect and then fails, there is no automatic rollback. This example implements deferred execution with one-shot ownership, not transactional durability. Names and documentation must make that boundary clear in real code.
+
+Changing the queue to FnMut would complicate the model. The queue would need to preserve environments after calls and define repeated execution. Changing it to Fn would reject actions that move resources into their final destination. The call trait is therefore part of the queue's semantics.
+
+## Function Pointers Have No Captured Environment
+
+A function pointer such as fn(u32) -> u32 identifies code without captured state. Noncapturing, non-async closures can coerce to matching Rust ABI function pointers. For a C ABI pointer, declare a function such as `extern "C" fn notify(_: i32) {}`. Capturing closures need an environment, which can be generic, boxed, or passed through a context pointer.
+
+A generic callback parameter can accept function pointers and closures while preserving their concrete types. A boxed dyn Fn can hold heterogeneous environments at runtime. A function pointer can be copied cheaply and has a straightforward code-only model. Select among these based on storage and extension needs, rather than treating them as interchangeable syntax.
+
+Foreign callback interfaces frequently separate a function pointer from an opaque context pointer. That pair manually recreates code plus environment. Rust must then ensure the context stays alive, the pointer has the correct type and alignment, calls obey synchronization requirements, and registration ends before destruction. Chapter 33 examines that boundary in more detail.
+
+## Reentrancy Is Separate From Repetition
+
+Fn permits invocation through shared access, but it does not promise that calling the closure recursively or concurrently is semantically sensible. Captured interior mutability may reject reentrant borrows. A Mutex may deadlock if a callback calls back into an operation while a lock is held. The call trait expresses access to the closure environment; it does not establish a complete scheduling contract.
+
+When invoking user callbacks, release internal locks and temporary borrows first whenever the algorithm permits it. Copy or move the event data into a stable representation, then call outward. If the callback can mutate the registry that owns it, define whether additions take effect during the current dispatch or the next one. These behavioral details matter as much as whether the bound says Fn or FnMut.
+
+An event dispatcher that stores FnMut callbacks cannot ordinarily hold an exclusive borrow of one callback and simultaneously permit arbitrary mutable access to the whole dispatcher. A staged design can remove a callback temporarily, invoke it, and reinsert it, but then panic and reentrancy policies need careful treatment. Often a command queue returned by callbacks makes ownership much simpler.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A move closure captures a Vec and only reads its length. Must an API require FnOnce to accept it?
+
+Solution. No. Owning the vector does not consume it during invocation. The closure can implement Fn because len requires only shared access. An FnOnce API can still accept it, but that is because Fn closures also support a consuming call.
+
+Exercise 2. Why can adding move fail to satisfy a static callback requirement when the closure captures &Config?
+
+Solution. The environment owns the reference value, not Config. The reference still carries its original lifetime. Store owned configuration, use an owner such as Arc when appropriate, or choose an API whose execution lifetime is bounded by the borrow. A keyword cannot extend the referent's lifetime.
+
+Exercise 3. A one-shot callback must run even if its owner is dropped. Is Box<dyn FnOnce()> sufficient?
+
+Solution. No. Dropping the box drops captures without invoking the body. A separate guard type could run an action in Drop, but it must define panic behavior and whether the action can be cancelled. If the action must perform fallible or asynchronous work, an explicit completion operation is usually more appropriate than relying solely on destruction.
+
+## Further Reading
+
+- [Rust Reference on closure types](https://doc.rust-lang.org/reference/types/closure.html) specifies capture modes, capture precision, and call traits.
+- [Standard library FnOnce](https://doc.rust-lang.org/std/ops/trait.FnOnce.html) documents the consuming call relationship.
+- [Rust Edition Guide on disjoint captures](https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html) explains the edition change that permits field-level capture.

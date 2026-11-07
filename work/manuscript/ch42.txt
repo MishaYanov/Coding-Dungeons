@@ -1,0 +1,178 @@
+# Chapter 42 Reviewing Rust Through Invariants
+
+Understanding advanced Rust means being able to explain why a design works when the compiler has already accepted it. Type checking removes many invalid programs, but accepted programs can still deadlock, violate domain rules, allocate without bound, duplicate effects, or expose an unsound abstraction. A useful review method follows invariants across ownership boundaries and asks what evidence supports each promise.
+
+This final chapter revisits three small designs. Each is ordinary safe Rust. None needs an exotic language feature. The point is to connect the book's concepts into a practical way of reading code: identify the capability a function receives, the state it changes, the failures it can encounter, and the observations available to callers. When unsafe code appears, the same method continues with additional memory obligations.
+
+## Begin With the Claim a Caller Relies On
+
+A function signature is a partial contract. `&mut Store` establishes exclusive access through that borrow. It does not establish that a transaction preserves a balance invariant. `Result<T, E>` exposes failure, but it does not say whether an error leaves the input unchanged. `Arc<T>` shares ownership, but it does not establish a bounded retention policy or make arbitrary interior state thread-safe.
+
+Write the semantic claim in a sentence that can be contradicted by an example. For a transfer function: if it returns an error, balances are unchanged; if it succeeds, the requested amount moved between two distinct valid accounts without arithmetic overflow. For a cache: returned values remain valid independently of later map mutation, and loading does not hold the cache lock. These claims are more useful than saying the code is clean or idiomatic.
+
+Next identify all operations that can interrupt progress: ordinary errors, panics, cancellation points, callbacks, blocking I/O, lock acquisition, and foreign calls. A claim about failure preservation must survive the relevant interruptions. It need not survive conditions outside the stated model, such as process termination, unless durability is part of the contract.
+
+## Review One Mutation at a Time
+
+Consider transferring an amount between balances. A tempting implementation subtracts from the source and then checks whether the destination can accept the addition. If the second check fails, the source is already changed. Rust prevents many aliasing mistakes here, but it permits this domain error.
+
+The complete implementation below computes every fallible arithmetic result before committing either mutation. Indices are validated before indexing. Distinctness is explicit. Assignments of the resulting `u64` values do not call user code, allocate, or perform arithmetic that could fail.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+enum TransferError {
+    InvalidAccount,
+    SameAccount,
+    InsufficientFunds,
+    DestinationOverflow,
+}
+
+fn transfer(balances: &mut [u64], from: usize,
+            to: usize, amount: u64)
+    -> Result<(), TransferError>
+{
+    if from == to {
+        return Err(TransferError::SameAccount);
+    }
+    let source = *balances.get(from)
+        .ok_or(TransferError::InvalidAccount)?;
+    let destination = *balances.get(to)
+        .ok_or(TransferError::InvalidAccount)?;
+    let new_source = source.checked_sub(amount)
+        .ok_or(TransferError::InsufficientFunds)?;
+    let new_destination = destination.checked_add(amount)
+        .ok_or(TransferError::DestinationOverflow)?;
+    balances[from] = new_source;
+    balances[to] = new_destination;
+    Ok(())
+}
+
+fn main() {
+    let mut balances = [50, 10];
+    transfer(&mut balances, 0, 1, 20).unwrap();
+    assert_eq!(balances, [30, 30]);
+    let before = balances;
+    assert_eq!(transfer(&mut balances, 0, 1, 100),
+        Err(TransferError::InsufficientFunds));
+    assert_eq!(balances, before);
+    let mut overflow = [1, u64::MAX];
+    assert_eq!(transfer(&mut overflow, 0, 1, 1),
+        Err(TransferError::DestinationOverflow));
+    assert_eq!(overflow, [1, u64::MAX]);
+}
+```
+
+The mutation appears to occur in two assignments, but no safe observer can read the slice through another live conflicting reference during the exclusive borrow. There is also no callback between the assignments. For this local in-memory contract, the prepared values are committed without an observable intermediate state through the function's safe interface.
+
+That conclusion would need revision if balances were atomic values observed concurrently, if each assignment wrote a remote database row, or if setting a balance invoked user-defined code. The proof depends on the representation and operations, not merely on the visual proximity of two lines.
+
+The function rejects same-account transfers even for zero amount. That is a policy, and the order of checks makes it take precedence over invalid-index reporting when equal invalid indices are supplied. A reviewer should decide whether that behavior matches the API rather than silently assuming another precedence. Exact error behavior often becomes part of downstream tests.
+
+## Use Types to Expose Resource Relationships
+
+Now review a cache. Returning `&String` from behind a mutex is generally incompatible with releasing the guard: later mutation could remove or replace the entry while the reference remains in use. Returning a guard would preserve access but hold the lock for the caller's entire use. Returning an owned `Arc<String>` gives the caller an independent ownership share while allowing the map lock to be released.
+
+The next complete program uses this approach. It deliberately permits duplicate loading under contention. That policy avoids holding the lock while executing a potentially slow or reentrant loader. The first installed value wins, and every successful caller receives the stored value.
+
+```rust
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Default)]
+struct Cache {
+    values: Mutex<BTreeMap<String, Arc<String>>>,
+}
+
+impl Cache {
+    fn get_or_load<F>(&self, key: &str, load: F) -> Arc<String>
+    where
+        F: FnOnce() -> String,
+    {
+        let existing = {
+            let guard = self.values.lock().unwrap();
+            guard.get(key).cloned()
+        };
+        if let Some(value) = existing {
+            return value;
+        }
+        let candidate = Arc::new(load());
+        let mut guard = self.values.lock().unwrap();
+        Arc::clone(guard.entry(key.to_owned()).or_insert(candidate))
+    }
+}
+
+fn main() {
+    let cache = Cache::default();
+    let first = cache.get_or_load("mode", || "fast".into());
+    let second = cache.get_or_load("mode", || panic!("unused"));
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(first.as_str(), "fast");
+}
+```
+
+Reviewing this implementation requires separating three properties. The returned value remains alive because the caller owns an `Arc`. The map is protected because access occurs while holding the mutex. The loader may execute more than once for one key because it runs outside the lock. None of those properties implies the others.
+
+If duplicate loads have unwanted effects, coordinate one active loader and its waiters per key. Publish failure on panic or abandonment. Releasing the map lock still permits A to wait for B while B waits for A. Give keys a fixed total order and allow each loader to request only higher-ranked keys. Reject other requests before starting or waiting on a load.
+
+The cache is also unbounded. A correct ownership story does not establish an eviction policy. Even with eviction, callers can retain values after the map removes them, so resident-map size and total live payload memory are different metrics. If the application needs a hard memory budget, shared ownership and retained external handles must participate in that budget.
+
+Mutex poisoning is handled here by panicking through `unwrap`. That is an explicit simplification of the example's recovery contract. A reusable cache should decide whether poisoned state can be inspected and repaired, discarded, or treated as fatal. Blindly replacing every `unwrap` with recovery can be as incorrect as blindly adding them, because recovery requires understanding the protected invariant.
+
+## Treat Unsafe Boundaries as Proof Boundaries
+
+When unsafe code appears, ask why safe operations cannot express the required implementation and which extra claim the caller or abstraction makes. A raw pointer does not record allocation lifetime, initialized extent, or permitted aliasing. Those facts must come from somewhere: a constructor, a borrow, a foreign contract, or an invariant maintained by earlier operations.
+
+The review should follow pointer creation, transformation, use, and destruction. An index bounds check proves only part of a dereference obligation. The pointer must also have appropriate provenance, alignment, initialization, validity for the accessed type, and compatible aliasing. Creating a reference may impose stronger requirements than merely manipulating a raw pointer. A safety comment should connect the operation to these concrete facts.
+
+Do not assume a private unsafe block is safe because all public methods are safe. A safe abstraction must preserve its invariants for every safe caller, including callers that provide unusual trait implementations, panic in callbacks, forget guards, or pass zero-sized types. If correctness requires a trait implementation to uphold memory safety, an ordinary safe trait bound may be insufficient; the contract needs an appropriate unsafe boundary or additional defensive checks.
+
+Conversely, do not add unsafe code merely to make the borrow checker accept an implementation that can be redesigned safely. A helper using `split_at_mut`, a separate owner and view, a stable handle, or a staged mutation can often make the proof visible in the types. The best reason to use unsafe is a requirement that has been identified and justified, such as an implementation primitive or measured performance need that safe alternatives cannot meet acceptably.
+
+## Match Verification to the Claim
+
+Compilation checks type relationships, trait obligations, and many ownership constraints. Unit tests check selected outcomes. Property tests explore invariants across generated inputs. Concurrency model checking explores schedules under a modeled set of primitives. Miri can detect certain undefined behaviors in executed paths. Profiling and benchmarks measure particular workloads. Each tool contributes evidence for a different claim.
+
+For the transfer function, useful tests include insufficient funds, destination overflow, invalid indices, same-account policy, and preservation on error. A property can compare the total before and after a successful transfer using a wider integer type. For the cache, use synchronization to arrange two concurrent misses and test the documented winner policy. Counting only successful lookups would miss duplicate loader execution.
+
+For unsafe code, passing tests is not a replacement for the invariant argument. Tests rarely cover every aliasing history, layout, panic point, or target. A successful Miri run means the executed paths passed that tool's checks under its current model; it is not a language-level proof of soundness. The unsettled details of Rust's memory model make precise source references and conservative implementation choices especially important.
+
+Performance claims require their own evidence. A generic iterator chain may optimize well, but that does not establish the application's latency distribution. An allocation-free parser may retain a huge source buffer. A lock-free structure may spend significant time on retries and reclamation. Review the actual workload and the cost that matters to the caller.
+
+## Read Compiler Diagnostics as Missing Relationships
+
+An ownership error often says that the program has not expressed a relationship clearly enough. A method borrowing all of `self` may hide field disjointness. A returned reference may depend on a temporary guard. A spawned task may retain a borrow of a stack frame that can end first. A generic trait object may lack a lifetime or auto-trait bound needed by its consumer.
+
+Before adding a clone, mutex, box, or `'static` bound, explain what relationship is missing. Sometimes cloning is exactly right because the consumer needs independent ownership. Sometimes a mutex is right because shared mutation is the requirement. Sometimes a narrower borrow or a handle-based representation is more accurate. The error message is a starting point for that analysis, not a request for one universal repair.
+
+The same discipline applies when code compiles unexpectedly. Nonlexical lifetimes may end a borrow before the end of a block. Reborrowing may temporarily restrict an existing mutable reference without consuming its underlying capability forever. A bound may be satisfied through a blanket implementation. Explain the accepted program in terms of these relationships rather than assuming the compiler overlooked a rule.
+
+## A Practical Review Sequence
+
+First identify the owned resources and the exact points where responsibility transfers. Then identify borrowed views and which mutation or destruction would invalidate them. Next examine state transitions and failures, including cancellation and callbacks. After that inspect concurrency progress and memory bounds. Finally examine public compatibility promises and the evidence supplied by tests and measurements.
+
+This sequence is useful because later questions depend on earlier ones. You cannot assess cancellation correctly without knowing which object owns partial progress. You cannot bound memory without knowing which shared handles retain allocations. You cannot audit a raw pointer without knowing which allocation and lifetime it comes from. Technical vocabulary helps only when it connects these facts.
+
+Rust's concepts become most powerful when used together. Ownership defines responsibility. Borrowing grants temporary access. Traits express obligations and relationships. Enums represent alternatives. Async exposes suspended computations. Pinning constrains movement for address-sensitive values. Unsafe code permits operations whose proof lies outside ordinary checks. A strong design uses each mechanism to express one part of a coherent argument.
+
+## Exercises
+
+1. Generalize `transfer` to a balance type whose arithmetic can return errors and whose assignment may run a destructor. Identify which parts of the original failure argument no longer follow automatically.
+
+2. Change the cache to return errors and allow one active loader per key. Model loading, ready, and failed. Explain panic cleanup and what happens when two active loaders request each other's keys.
+
+3. Choose a function from your own codebase and write three claims: one enforced by types, one requiring runtime validation, and one requiring a protocol with another component. Name a verification method for each.
+
+## Reasoned Solutions
+
+1. Fallible arithmetic can still be staged, but replacing old values may invoke destructors that panic or affect external state. A generic rollback promise needs stronger assumptions or a representation that commits by swapping a prepared aggregate with carefully defined destruction behavior. The simple `u64` proof cannot be transferred merely by replacing the type parameter.
+
+2. Give each load a shared entry and publish ready or failed once, including when a panic guard cleans up. Wake waiters. Apply the same strict key order to starting nested loads and waiting for existing ones. Every dependency increases in rank, so a cycle would have to increase and return to its starting rank. Test A and B loading together and reject the backwards request before it can block.
+
+3. An example type claim is that a returned view cannot outlive its source, checked through compilation. A runtime claim is that an index is within the initialized prefix, checked through validation and boundary tests. A protocol claim is that retries do not duplicate a remote effect, checked through operation identifiers, peer behavior, and fault-injection tests. No single tool establishes all three.
+
+## Further Reading
+
+- [The Rust Reference](https://doc.rust-lang.org/reference/) is the primary language reference for checking the exact rule relevant to a review.
+- [The Rustonomicon](https://doc.rust-lang.org/nomicon/) discusses the obligations involved in unsafe abstractions.
+- [Miri](https://github.com/rust-lang/miri) documents an interpreter-based tool and its supported checks and limitations.
+- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) collects public API design considerations maintained in the Rust project ecosystem.

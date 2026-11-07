@@ -1,0 +1,550 @@
+[
+  {
+    "level": 1,
+    "mission_title": "The Courier and the Sealed Cargo",
+    "scene": "The Borrowed Citadel still has power, but its couriers disagree about who owns each shipment. One console marks a cargo capsule ready while another continues editing its contents. You arrive at a loading platform covered in contradictory receipts. Your repair is an ownership protocol: every capsule needs one responsible owner, inspection must grant temporary access, and handing a capsule onward must leave no usable delivery authority behind. The city is fictional; the ownership argument you build is the real equipment you take away.",
+    "objective": "Design a cargo API that makes inspection, editing, acceptance, and rejected handoff express different ownership relationships.",
+    "loadout": [],
+    "win_conditions": [
+      "Identify the owner of the payload before, during, and after each handoff.",
+      "Show that an accepted handoff prevents reuse of the original capsule in safe caller code.",
+      "Return the original owned capsule on rejection without cloning its payload."
+    ],
+    "boss_title": "The Double Delivery",
+    "boss_brief": "Build a small in-memory loading dock model. A capsule owns a byte buffer and a destination. Inspection may read both, and an editable capsule may change its payload before submission. The dock either accepts ownership and returns a receipt or rejects the submission and returns the same capsule with a reason. A rejected capsule must remain available for correction and resubmission. An accepted capsule must not remain accessible through a second editable handle. Describe the public signatures, implement the acceptance branch with an ordinary collection, and write a caller that recovers a rejected capsule. Then create one intentionally rejected caller that tries to inspect the old capsule after success. Explain which guarantee the compiler supplies and which delivery claims belong only to your model.",
+    "constraints": [
+      "Do not implement Clone or Copy for the capsule, and do not clone its buffer.",
+      "Use a consuming submission method whose error preserves the rejected value.",
+      "Treat acceptance as an in-memory transfer, without claiming network or durable delivery."
+    ],
+    "debrief": "Give the capsule an owned payload and keep its fields private. Inspection borrows it; editing requires exclusive access; submission takes it by value. The dock can return Result<Receipt, (Capsule, RejectReason)>, so both outcomes assign responsibility explicitly. On success, the dock stores or consumes the payload and the caller keeps only a receipt. On rejection, the error owns the capsule and can return it to the correction path. The compiler prevents reuse of a moved capsule, but it does not know whether an external destination received anything. Keep that distinction in the receipt's contract. A second constructed capsule with the same identifier is a separate replay problem, so private construction or external deduplication may be needed when the model expands.",
+    "hint1": "Draw a box around the bytes and put exactly one owner's name above it at every step. A receipt should not accidentally become another editable owner of the same capsule.",
+    "hint2": "Write the success and failure types before the method body. If failure must permit resubmission, the error needs to own the rejected capsule. A reference or formatted error string cannot return the ownership you consumed. Keep the accepted storage inside the dock, and let the consuming call enforce the local handoff.",
+    "side_quest": "Add a read-only audit record that may outlive the capsule. Compare copying a small summary with sharing the entire payload through an owned reference-counted handle. Measure what each representation keeps alive. Your answer should explain why a cheap handle clone can retain a large allocation and why an audit trail containing a destination and length may need no payload ownership at all.",
+    "route_choices": [
+      {
+        "label": "Follow the borrow bridges",
+        "level": 3,
+        "reason": "Learn how temporary access can be split without duplicating ownership."
+      },
+      {
+        "label": "Investigate the cleanup airlocks",
+        "level": 6,
+        "reason": "Discover what happens when a handoff is interrupted or abandoned."
+      }
+    ],
+    "reward": "Cargo Authority — signatures that reveal where responsibility goes"
+  },
+  {
+    "level": 2,
+    "mission_title": "Three Crates One Exit",
+    "scene": "A sorting chamber in the Borrowed Citadel contains three labeled crates: header, payload, and annotation. Its old controller treats the whole chamber as either untouched or gone, even when one crate has already left. That crude model has made recovery reports unreliable. You must track initialized places individually and distinguish a value moving to a new owner from the storage it leaves behind. Every route through the chamber must end with a precise inventory of which values still exist and who will destroy them.",
+    "objective": "Explain and implement branch-dependent moves while preserving valid cleanup and an honest recovery report.",
+    "loadout": [
+      1
+    ],
+    "win_conditions": [
+      "Trace initialized and moved fields separately on at least three control-flow paths.",
+      "Return all surviving resources through an explicit result representation.",
+      "Explain why adding a custom Drop implementation changes field-move permissions."
+    ],
+    "boss_title": "The Partial Inventory",
+    "boss_brief": "Model a shipment containing three owned strings. An inspection mode consumes only the annotation and returns the untouched header and payload in a recovery package. A delivery mode consumes header and payload into a delivered record and returns the unused annotation. A rejected mode returns the entire shipment unchanged. Implement the branching function without cloning and without assuming the original aggregate remains usable after a partial move. Add a trace-only resource wrapper or equivalent explanation that identifies cleanup responsibility for every branch. Finally, consider a second version where Shipment implements Drop and needs to inspect all three fields. Show why the earlier implementation can no longer move those fields directly, and propose a representation or consuming boundary that preserves the intended behavior.",
+    "constraints": [
+      "Use safe Rust and initialized values rather than zeroed or uninitialized stand-ins.",
+      "Represent distinct surviving resource sets explicitly in enum variants or dedicated structs.",
+      "Do not use ManuallyDrop merely to bypass the compiler's objection."
+    ],
+    "debrief": "Choose the branch before destructuring the owned shipment. Each branch can then move exactly the fields it needs into a variant whose fields describe the surviving inventory. The old shipment is partially moved only inside a branch where no later operation requires the whole value. Cleanup remains attached to each initialized value's actual owner; a move does not create a second destructor obligation. A custom Drop implementation changes the argument because its destructor receives the complete aggregate and may inspect every field. A cleaner alternative is to place cleanup responsibilities in the individual owned field types, remove unnecessary aggregate Drop, or expose an explicit consuming transition that preserves a valid representation. Compiler-generated cleanup is conditional on initialization state, not on an invented placeholder value.",
+    "hint1": "Do not try to repair one partly emptied struct for all branches. Start by naming the different complete results each branch should produce, then move fields directly into those results.",
+    "hint2": "A match on the inspection mode can occur before any field leaves the shipment. Inside one arm, destructure the shipment and construct that arm's result. For the Drop variation, ask whether cleanup truly belongs to the aggregate or whether independently owned fields can perform it without needing a complete Shipment.",
+    "side_quest": "Add a branch that deliberately panics after moving the annotation into a local wrapper but before constructing its result. Predict the destruction log before running the example. Check that remaining initialized fields and the moved annotation each have one cleanup path. Discuss how aborting panics differ from unwinding and why the test does not establish that destructors run after every possible process exit.",
+    "route_choices": [
+      {
+        "label": "Enter the airlock ledger",
+        "level": 6,
+        "reason": "Extend initialization reasoning into panic safety and resource cleanup."
+      },
+      {
+        "label": "Descend to unfinished storage",
+        "level": 32,
+        "reason": "See how the same inventory argument becomes explicit for MaybeUninit."
+      }
+    ],
+    "reward": "Inventory Vision — tracking values independently from their old places"
+  },
+  {
+    "level": 3,
+    "mission_title": "The Bridge of Disjoint Regions",
+    "scene": "Two repair crews need exclusive access to different sections of the same conduit. The bridge controller can see the conduit, but the requested regions arrive as runtime ranges, and a label saying different does not prove they cannot overlap. Your job is to turn checked geometry into two access capabilities. The repair should be small enough to audit, should reject conflicting requests clearly, and should let a caller work on both accepted regions without granting access to the rest of the conduit.",
+    "objective": "Construct two mutable region borrows from validated runtime ranges without unsafe code.",
+    "loadout": [
+      1,
+      2
+    ],
+    "win_conditions": [
+      "Reject out-of-bounds, reversed, or overlapping nonempty ranges under a stated empty-range policy.",
+      "Preserve the caller's requested region order even when their positions are reversed.",
+      "Explain how splitting makes the nonoverlap argument available to safe Rust."
+    ],
+    "boss_title": "The Two Crews",
+    "boss_brief": "Write a helper that accepts one mutable slice and two half-open ranges, then grants a callback mutable access to the two selected regions. The ranges may arrive in either spatial order. Define whether empty ranges are accepted, and ensure the callback arguments still correspond to the original first and second requests. The callback must not receive access to the gap or the remaining conduit. Test adjacent ranges, reversed ordering, an overlap, a reversed range, and an endpoint beyond the slice. Explain why comparing two starting indices is insufficient for region disjointness, and identify the point at which the original whole-slice access is temporarily narrowed into separate capabilities. Keep the implementation's error policy separate from its memory-safety argument.",
+    "constraints": [
+      "Use slice splitting and bounds checks rather than raw pointers.",
+      "Do not copy the conduit or repair a detached copy instead of its original storage.",
+      "Document empty-range behavior and keep callback execution after all validation."
+    ],
+    "debrief": "Validate each range's ordering and bounds before creating selected mutable slices. Choose a simple empty-range policy, such as rejecting empty requests, to keep the first implementation's overlap rule unambiguous. Sort the two validated ranges by start position while remembering the caller's order. Require the earlier range's end to be at most the later range's start. Split at the later start; the earlier selected range belongs to the left slice, and the later selected range begins in the right slice. These independently borrowed slices carry structural nonoverlap into the callback. Reverse the callback arguments when the original requests were reversed. Runtime validation establishes the geometry; split_at_mut turns that established geometry into the safe access shape. A later version may support empty ranges with an equally explicit policy.",
+    "hint1": "The useful boundary is between the earlier region's end and the later region's start. Sort requests for the implementation, then undo that ordering when presenting arguments to the caller. Preserve that distinction.",
+    "hint2": "After bounds validation, suppose A lies before B. Split the whole slice at B.start. Select A from the left half and B from the right half using an offset relative to that half. Neither selected region needs a borrow through the original whole slice after the split. Keep both regions inside the callback's temporary access.",
+    "side_quest": "Generalize the problem to a batch of nonoverlapping repair ranges. Decide whether sorting requests is allowed to change callback order and whether you want to allocate a list of region views. Compare this with repeated one-at-a-time edits. Explain why a handle-based plan can be prepared before borrowing, while retaining mutable references during later planning would constrain the available operations. State their boundaries.",
+    "route_choices": [
+      {
+        "label": "Survey the lifetime observatory",
+        "level": 4,
+        "reason": "Learn to describe how long a granted view may remain usable."
+      },
+      {
+        "label": "Visit the lending library",
+        "level": 13,
+        "reason": "Explore interfaces that grant one temporary region at a time."
+      }
+    ],
+    "reward": "Bridge Splitter — converting checked disjointness into useful borrows"
+  },
+  {
+    "level": 4,
+    "mission_title": "The Observatory That Keeps No Guests",
+    "scene": "The Citadel's observatory decodes temporary manifests so visiting analysts can inspect them. The decoded records belong to the observatory and disappear when each inspection ends. Previous visitors tried to carry borrowed pages away; others were unnecessarily forbidden from returning any useful result. You must design an invitation that allows arbitrary owned summaries while preventing references into the temporary records from escaping. The challenge is to describe a relationship precisely enough that a caller's unrelated long-lived data remains usable without extending the observatory's storage.",
+    "objective": "Design a scoped inspection API using lifetime quantification rather than leaked storage or blanket static bounds.",
+    "loadout": [
+      1,
+      3
+    ],
+    "win_conditions": [
+      "Allow a callback to return an owned summary of locally decoded records.",
+      "Reject returning a reference into those temporary records.",
+      "Explain why an unrelated caller-owned reference may still be a valid result."
+    ],
+    "boss_title": "The Smuggled Page",
+    "boss_brief": "Implement an inspection function that owns a temporary vector of decoded records, invokes a supplied callback with borrowed access, and returns the callback's result. The function must release its temporary records before returning. Write one caller that returns an owned statistics structure and one intentionally rejected caller that tries to return a record's borrowed text. Then show a legal callback that returns a reference to unrelated caller-owned configuration. Explain why the last case does not violate the inspection boundary. Your design should make the callback work for the temporary borrow lifetime selected by the function, without forcing all captured data or all return values to be static. Describe how your signature differs from promising to return a borrowed view directly from a local vector.",
+    "constraints": [
+      "Do not leak, globally store, or reference-count the temporary records just to extend their lifetime.",
+      "Keep the result type outside the callback's quantified temporary lifetime.",
+      "Treat parsing failure as an ordinary separate result path rather than hiding it in lifetime annotations."
+    ],
+    "debrief": "The inspection function owns the decoded vector. A higher-ranked bound can require the callback to accept a record slice for the borrow lifetime chosen inside the function, while the result type R remains independent of that quantified lifetime. Owned counts, copied identifiers, or other owned summaries can leave normally. A reference into the local vector cannot become R because that would require the result type to depend on a lifetime that exists only inside the callback invocation. This does not prohibit all borrowed results: a callback may return a reference captured from a longer-lived caller owner when R already contains that valid relationship. Quantification protects the temporary dependency, not every conceivable reference. A direct function returning a view into its own destroyed vector would still lack a surviving owner.",
+    "hint1": "Ask who chooses the lifetime of the temporary slice. The caller should choose the result type, while the inspection function chooses a short borrow lifetime that fits its local storage.",
+    "hint2": "Look for the shape F: for<'scope> FnOnce(&'scope [Record]) -> R. The important feature is that R does not mention 'scope. If Record owns its text, borrowing that text through the temporary slice cannot fit into an escaping result. A captured configuration reference has a different owner and a different relationship.",
+    "side_quest": "Offer a second API that accepts a caller-owned manifest slice and returns a selected borrowed record directly. Compare its signature with the scoped inspector. Explain why neither is universally stronger: one preserves a stable external owner's data, while the other deliberately hides temporary storage and lets callers extract only results that survive independently. Include a caller that needs each version for a concrete reason.",
+    "route_choices": [
+      {
+        "label": "Enter the mirror portals",
+        "level": 5,
+        "reason": "Study which lifetime substitutions preserve an interface's promises."
+      },
+      {
+        "label": "Rebuild the borrowing parser",
+        "level": 37,
+        "reason": "Apply owner and result-lifetime relationships to a complete parser."
+      }
+    ],
+    "reward": "Scope Seal — granting temporary inspection without accidental escape"
+  },
+  {
+    "level": 5,
+    "mission_title": "The Three Mirror Portals",
+    "scene": "The Citadel's mirror chamber translates permissions between districts. One portal only produces borrowed messages, another only accepts them, and a third both accepts and returns the same lifetime-shaped view. An old operator shortened every visible lifetime by habit and created promises that could not all remain true. Your repair is a substitution audit. You will use concrete witnesses to discover which direction each portal permits, and you will separate the lifetime of an outer borrow from the lifetime embedded in its contents.",
+    "objective": "Derive covariance, contravariance, and invariance from the operations a type exposes.",
+    "loadout": [
+      3,
+      4
+    ],
+    "win_conditions": [
+      "Predict substitutions through shared outputs, function inputs, and a combined input-output position.",
+      "Demonstrate at least one accepted substitution and one rejected substitution with a reason.",
+      "Keep an outer short borrow distinct from changing a stored lifetime parameter."
+    ],
+    "boss_title": "The Portal That Both Takes and Gives",
+    "boss_brief": "Design three tiny wrapper types around lifetime-parameterized string access: a shared view, a function pointer that accepts a borrowed string, and a function pointer that both accepts and returns a string using one wrapper lifetime parameter. For each wrapper, predict whether that parameter is covariant, contravariant, or invariant. Write small substitution probes instead of relying on the type's name. Your combined wrapper should use a lifetime parameter in both the argument and result positions, rather than a higher-ranked function pointer that independently quantifies each call. Explain the difference. Finally, borrow an invariant wrapper briefly without changing its embedded lifetime and explain why that operation is still ordinary borrowing. The boss is cleared by a consistent argument, not by adding static until every example stops moving.",
+    "constraints": [
+      "Use stable safe Rust and function pointer types for the substitution probes.",
+      "Do not claim that a lifetime annotation can extend the storage behind a local string.",
+      "Keep the higher-ranked alternative separate from the wrapper's own lifetime parameter."
+    ],
+    "debrief": "A shared reference preserves substitution direction, so a read-only view can generally shorten an embedded usable lifetime when the surrounding relationship permits it. Function arguments reverse that direction: an operation able to accept every sufficiently short input can serve a more restrictive caller, while an operation requiring a static input cannot serve arbitrary temporary inputs. In a function pointer using the same lifetime parameter in both input and output, the parameter receives opposing variance requirements and becomes invariant. That does not prevent borrowing the wrapper itself for a short period; it prevents substituting a different embedded relationship. A for<'a> function pointer states a separate universal capability across calls and must be analyzed as quantification rather than silently treated as the same type. Concrete rejected witnesses expose which promise a substitution would break.",
+    "hint1": "Imagine the caller writes the most dangerous legal input after your proposed substitution. Then imagine the caller retains the most demanding legal output. A portal must satisfy both sides of its contract.",
+    "hint2": "For an input-only function, broader accepted inputs are useful to a restrictive caller. For an output-only view, a longer-valid reference can satisfy a shorter use. Combining those directions through one type parameter removes either unilateral substitution. A short reference to the wrapper changes the outer access duration, not the wrapper's internal type argument.",
+    "side_quest": "Replace the combined function pointer with a higher-ranked callback that works for every call lifetime and returns text tied to that call. Write down what callers gain and what implementations must prove. Then add a phantom marker to a numeric identifier and explain why choosing variance does not validate the identifier's arena, generation, or bounds. Keep the two proofs separate.",
+    "route_choices": [
+      {
+        "label": "Read the trait charters",
+        "level": 9,
+        "reason": "Connect substitution reasoning to obligations expressed by interfaces."
+      },
+      {
+        "label": "Descend to raw pointer contracts",
+        "level": 30,
+        "reason": "See why erased lifetime information must return as explicit invariants."
+      }
+    ],
+    "reward": "Mirror Sight — predicting which substitutions preserve permission"
+  },
+  {
+    "level": 6,
+    "mission_title": "The Airlock Ledger",
+    "scene": "Every expedition into Ferrum passes through nested airlocks: reserve a workspace, prepare a replacement, publish the result, and release the reservation. The emergency lights reveal that ordinary return, reported failure, unwinding, and abandoned guards are different exits. You must make the cleanup ledger match those exits while preserving valid state. The airlock is a teaching model of in-memory resources, so a tidy destruction log will not be mistaken for a guarantee about durable files, remote services, or cleanup after process death.",
+    "objective": "State and enforce a failure postcondition while distinguishing semantic rollback from destructor-based cleanup.",
+    "loadout": [
+      1,
+      2,
+      3
+    ],
+    "win_conditions": [
+      "Keep the published value unchanged when preparation returns an ordinary error.",
+      "Explain the observed destruction order for success and unwinding paths.",
+      "Show that forgetting an optional guard cannot make later safe operations memory-unsafe."
+    ],
+    "boss_title": "The Interrupted Replacement",
+    "boss_brief": "Create a small in-memory service holding a published configuration and a reservation counter. A repair operation obtains a reservation, prepares a replacement using a fallible callback, and publishes it only after preparation succeeds. Keep user callback execution before the publication step. Use trace resources to explain cleanup order when preparation succeeds, returns an error, or panics under unwinding. State what happens if the reservation guard is deliberately forgotten. You may allow a leaked reservation to block future repairs, but it must not expose invalid memory. Finally, consider a configuration whose destructor can panic during replacement. Revise any overly broad claim that every possible failure leaves the old value intact. Identify the narrow representation assumptions under which your ordinary-error guarantee actually holds.",
+    "constraints": [
+      "Separate preparation from publication instead of mutating the published configuration incrementally.",
+      "Do not depend on a guard destructor as the only thing preventing undefined behavior.",
+      "Report completion explicitly; do not treat Drop as a fallible transaction-commit API."
+    ],
+    "debrief": "Keep the currently published configuration owned by the service while the callback builds a separate candidate. An ordinary preparation error drops only temporary state and returns before publication, so the old configuration remains available. A reservation guard can release a logical resource during normal drop or unwinding, but safe forgetting may leak that resource; represent the leak as reduced availability rather than invalid access. Publication should be a small step without user callbacks. For ordinary owned strings or another constrained representation, this makes the error argument clear. A fully generic replacement also destroys the old value, and an arbitrary destructor can panic or perform side effects. Therefore do not promise universal rollback merely because preparation was staged. Distinguish the exact Result error contract, unwind behavior, and conditions outside the process-local model.",
+    "hint1": "List every operation that can execute user code before you decide where the commit point belongs. Preparation and destruction can both be user-code boundaries in a generic abstraction. Trace those boundaries.",
+    "hint2": "A candidate value can exist beside the published value until validation succeeds. The guard's cleanup may restore availability, but forgetting it must leave a state that remains safe even if permanently inconvenient. When evaluating a strong failure claim, inspect replacement's old-value destruction as well as the callback that builds the candidate.",
+    "side_quest": "Add an explicit finish method that returns a repair report while leaving ordinary Drop responsible only for local cleanup. Decide whether a finish failure returns the resource for retry or consumes it. Then explain why the same design would need a different protocol if publishing also changed a file and notified a remote process. A local guard cannot define that distributed agreement.",
+    "route_choices": [
+      {
+        "label": "Open the echo chamber",
+        "level": 7,
+        "reason": "Examine mutation policies and callbacks that can reenter a component."
+      },
+      {
+        "label": "Follow the cancellation rift",
+        "level": 26,
+        "reason": "Apply interruption reasoning to suspended computations and dropped futures."
+      }
+    ],
+    "reward": "Airlock Discipline — separating cleanup, rollback, and completion"
+  },
+  {
+    "level": 7,
+    "mission_title": "The Document That Answers Back",
+    "scene": "Inside the Borrowed Citadel, a document terminal can invoke a visitor's transformation plugin. Some plugins inspect the same document; a mischievous one edits it before returning its proposal. Holding a dynamic borrow across that callback jams the terminal. Releasing the borrow avoids the jam but introduces a stale-proposal problem. Your mission is to solve both layers explicitly: keep temporary access short enough for reentrancy, then validate whether the state used to compute the proposal still matches the state being changed.",
+    "objective": "Use short RefCell borrows and a generation check to distinguish access validity from proposal freshness.",
+    "loadout": [
+      3,
+      4,
+      6
+    ],
+    "win_conditions": [
+      "Allow a callback to inspect or edit the document without a retained conflicting RefCell borrow.",
+      "Reject a proposal computed from an obsolete generation before applying it.",
+      "Check generation exhaustion before changing text or its generation."
+    ],
+    "boss_title": "The Reentrant Revision",
+    "boss_brief": "Model one single-threaded document as a generation number and owned text behind a RefCell. A propose operation takes a snapshot, invokes a user callback outside the RefCell borrow, and attempts to install the proposed replacement. The callback may itself edit the original document through another safe access path. A proposal based on the old generation must then be rejected without overwriting that intervening edit. Return a structured stale-proposal result, and decide whether to preserve the candidate text for inspection or retry. Test a pure transformation, a reentrant read, and a callback that makes an intervening edit. Explain why successfully avoiding a borrow panic does not prove that the resulting document transition is semantically valid.",
+    "constraints": [
+      "Do not hold a Ref or RefMut while invoking the supplied callback.",
+      "Make every mutation path advance the generation using the same checked policy.",
+      "State that callback side effects outside the document are not rolled back by rejecting its proposal."
+    ],
+    "debrief": "Copy the current text and generation under a short shared borrow, then release that guard before calling user code. The callback works from the owned snapshot, so reentrant access does not conflict with a still-active document borrow. Reacquire exclusive access only for validation and publication. Compare the generation before replacing text, and reject stale candidates while preserving the newer document. Compute the next generation with checked arithmetic before mutation so exhaustion cannot create an unversioned change. RefCell enforces temporary access compatibility; it does not track whether a proposal was derived from current state. The generation is that separate semantic protocol. Returning an owned rejected candidate supports inspection, but a retry must reconsider the new document and any external effects already performed by the callback.",
+    "hint1": "There are two proofs here. One says no conflicting dynamic borrow is active during the callback. The other says the document has not changed since the proposal's input snapshot was taken.",
+    "hint2": "Give snapshot acquisition, callback execution, and publication visibly separate scopes. Store an ordinary generation value beside the copied text. At publication, compare that value and prepare its checked successor before assigning either field. A failed freshness check should return the candidate without pretending the callback never ran. Check every exit.",
+    "side_quest": "Avoid copying a large document by storing immutable text in Arc<str> and cloning only the handle for each proposal. Explain which allocation remains alive during long callbacks and how a retained historical view affects memory. Then compare this single-threaded protocol with a mutex-protected version: changing the guard type does not remove the need for a freshness rule. Measure sustained load.",
+    "route_choices": [
+      {
+        "label": "Map the shifting arena",
+        "level": 8,
+        "reason": "Use explicit identity when objects move or storage is reused."
+      },
+      {
+        "label": "Challenge the versioned archive",
+        "level": 38,
+        "reason": "Extend snapshot validation into transaction-level consistency."
+      }
+    ],
+    "reward": "Echo Control — safe reentrancy with an explicit freshness check"
+  },
+  {
+    "level": 8,
+    "mission_title": "The Shifting Street Atlas",
+    "scene": "Ferrum's street atlas stores junctions densely so the patrol can scan them quickly. Unfortunately, deleting one junction moves another into its place, and old street signs now point at the wrong destination. The Borrowed Citadel needs an atlas whose physical packing can change without rewriting every public identifier. Your expedition follows the gap between a record's current storage position and its logical identity. The repair must handle movement, deletion, and reuse separately, with no raw pointer offered as a shortcut through the maze.",
+    "objective": "Design stable generational handles over movable dense storage using an explicit indirection table.",
+    "loadout": [
+      1,
+      2,
+      3
+    ],
+    "win_conditions": [
+      "Preserve a live record's handle when swap removal moves its dense storage position.",
+      "Reject deleted handles even after a slot is reused.",
+      "State an arena identity and generation-exhaustion policy rather than silently assuming either away."
+    ],
+    "boss_title": "The Compaction Mimic",
+    "boss_brief": "Build an atlas with dense record storage and a separate slot table. Public handles identify slots and generations, while each live slot records its current dense position. Deleting a record may swap the last dense record into the vacancy. Repair the moved record's slot mapping without changing its public handle. A deleted handle must never resolve to the replacement record after slot reuse. Test deletion from the beginning, deletion of the final record, repeated reuse, and a surviving handle whose dense index changed. Describe how a handle from another atlas is rejected or explicitly outside the supported contract. Decide what happens when a generation cannot advance. Explain why returning a borrowed record after successful lookup still creates an ordinary access relationship that constrains mutation.",
+    "constraints": [
+      "Use safe owned collections and numeric handles rather than retaining raw element pointers.",
+      "Keep both slot-to-dense and dense-to-slot relationships consistent after compaction.",
+      "Retire an exhausted slot or provide another explicit nonwrapping identity protocol."
+    ],
+    "debrief": "Separate the handle namespace from the dense position. The slot table validates the handle generation and yields the current dense index; a reverse mapping stored with each dense record identifies which slot to update when that record moves. During swap removal, update the moved survivor's slot before making the operation available to later lookups. Mark the deleted slot absent and advance its generation before permitting reuse. If the generation is exhausted, leave that slot retired rather than wrapping into an old identity. Cross-atlas safety requires an owner identity or a scoped brand if it is part of the public guarantee. None of this keeps a record alive after a lookup borrow ends; handles defer access checks, while a returned reference resumes Rust's ordinary borrowing constraints.",
+    "hint1": "A public identifier and a vector index do not have to be the same number. Add one lookup step so compaction can update a private location without changing the public name.",
+    "hint2": "When the last dense element moves into a hole, you need to know that element's slot. Store or recover that reverse relationship before removal. The generation belongs to the logical slot history, not the record's current dense position. Validate presence and generation before producing any borrowed view. Preserve that ordering.",
+    "side_quest": "Export part of an atlas into another atlas while preserving edges among exported records. Build an old-handle-to-new-handle remapping rather than assuming equal slot numbers mean equal records. Decide what an edge to an unexported node becomes. This turns serialization and import into identity translation instead of an accidental copy of process-local coordinates. Record the remapping as an explicit import artifact.",
+    "route_choices": [
+      {
+        "label": "Explore the parser district",
+        "level": 37,
+        "reason": "Compare handle indirection with owned buffers and stored byte ranges."
+      },
+      {
+        "label": "Study the collection vaults",
+        "level": 34,
+        "reason": "Evaluate the cache and allocation costs of the storage representation."
+      }
+    ],
+    "reward": "Atlas Keeper — preserving identity while storage moves"
+  },
+  {
+    "level": 9,
+    "mission_title": "The Foundry Charter",
+    "scene": "The Trait Foundry manufactures repair plans from many kinds of sensor input. Its charter currently demands that every sensor, every plan, and every error be printable, sortable, cloneable, and interchangeable. Useful machinery has been rejected for obligations no actual operation needs. Your assignment is to rewrite the charter as a set of precise relationships. A machine should promise its real output type, a policy should name the input it can inspect, and optional reporting should pay for its own formatting requirements.",
+    "objective": "Connect associated outputs to parameterized policies while placing extra bounds on the algorithms that actually need them.",
+    "loadout": [
+      1,
+      4
+    ],
+    "win_conditions": [
+      "Express the equality between a planner's output and the policy input accepted by the pipeline.",
+      "Allow a useful non-Display plan to pass through a nonreporting path.",
+      "Explain when an input parameter permits multiple implementations and an associated output selects one relationship."
+    ],
+    "boss_title": "The Charter of Excessive Demands",
+    "boss_brief": "Design a planner interface that produces one plan type and one error type for each implementation. Design a separate inspection policy that may support several plan types. Then write a generic approve function connecting a planner to a compatible policy. The ordinary function must not require a plan to be Display merely because an optional reporting function prints it. Provide two planner implementations whose plan types differ, and one policy type with independent implementations for both. Show that a mismatched planner-policy pair is rejected. Finally, explain what would change if one planner type genuinely needed to implement several independent planning relationships distinguished by an input kind. Your explanation should locate each choice in the trait relationship rather than attaching convenience bounds indiscriminately to stored data.",
+    "constraints": [
+      "Avoid trait objects in this first implementation so the obligations remain visible in generic signatures.",
+      "Keep formatting bounds on the reporting operation rather than on every planner.",
+      "Do not use Clone to conceal a mismatch in associated output and policy input."
+    ],
+    "debrief": "A planner with one output relationship can expose associated Plan and Error types. A policy parameterized by its input can implement Policy<PlanA> and Policy<PlanB> independently, because the input choice participates in selecting the implementation. The pipeline requires the policy to accept the particular associated plan produced by its planner. Its reporting variant adds Display for that associated plan; the underlying planner trait need not exclude nonprintable plans. If one planner type truly participates in several independent input relationships, a trait parameter may identify those relationships while associated types describe each relationship's results. Decide this from the intended implementation space. Trait signatures are evidence available to generic code, and a useful implementation body cannot supply an obligation omitted from its visible bounds.",
+    "hint1": "Write down who selects each type. If the planner implementation selects one result, make that relationship explicit. If one policy supports several independent inputs, let the input help select its implementation.",
+    "hint2": "The approve function's key obligation is shaped like Policy<P::Plan>. Only the reporting function needs P::Plan: Display. Demonstrate the distinction with a plan containing a private opaque field that deliberately has no textual representation; ordinary approval should still be available. This becomes a test of interface scope, not mere formatting syntax.",
+    "side_quest": "Add a policy rejection that returns the owned plan together with its reason. Explain which component owns a rejected plan and whether the pipeline can submit it again. A type relationship can preserve the value, but it cannot certify that a policy performed no external effects before rejection. Give that behavior a separate contract. The next component must be able to distinguish these cases.",
+    "route_choices": [
+      {
+        "label": "Enter the hall of masks",
+        "level": 10,
+        "reason": "Preserve a smaller capability after hiding concrete implementation types."
+      },
+      {
+        "label": "Visit the lending archives",
+        "level": 13,
+        "reason": "Make an associated result depend on each call's borrow lifetime."
+      }
+    ],
+    "reward": "Charter Writer — placing obligations at their narrowest useful boundary"
+  },
+  {
+    "level": 10,
+    "mission_title": "The Hall of Useful Masks",
+    "scene": "The Foundry's tool hall admits repair tools from districts that compile independently. Each tool arrives wearing a different concrete type, yet the control desk needs a shared operation. Previous architects either exposed every implementation detail or erased so much that callers spent their time guessing and downcasting. You must decide what survives the mask: a useful command, a stable outcome, borrowing constraints, and only the extra capabilities the host truly needs. The mask is an interface choice, not an automatic request for heap allocation.",
+    "objective": "Create a small dyn-compatible plugin boundary without erasing ownership, lifetime, or result semantics.",
+    "loadout": [
+      4,
+      9
+    ],
+    "win_conditions": [
+      "Store heterogeneous tools behind one deliberately small dynamic interface.",
+      "Retain a tool that borrows host configuration using an explicit registry lifetime.",
+      "Separate concrete construction helpers from operations callable through the erased receiver."
+    ],
+    "boss_title": "The Shapeshifter Registry",
+    "boss_brief": "Design a registry of repair tools. Every tool performs one command against an in-memory work context and returns a shared outcome enum, but one tool owns its settings while another borrows immutable host configuration. The registry must hold both without claiming the borrowed configuration is static. A proposed trait also contains a generic configure method and a method returning Self. Decide which operations belong in the erased interface, which can be excluded from dynamic dispatch with a suitable bound, and which belong in a separate construction API. Demonstrate a borrowed dyn call without allocating a tool. Then explain which allocations come from the chosen registry storage and why a boxed trait object alone does not provide a stable foreign plugin ABI.",
+    "constraints": [
+      "Do not downcast every tool to rediscover a closed set of concrete implementations.",
+      "Do not add Send or Sync unless the registry's actual execution contract requires them.",
+      "Keep the configuration owner alive for the registry's full borrowed use."
+    ],
+    "debrief": "Expose a command method whose parameter and result can be understood without the concrete implementor. A shared outcome enum makes the dynamic result contract explicit. Store Box<dyn Tool + 'host> when owned heterogeneous storage is useful, allowing a tool's captured references to remain tied to host configuration. A temporary &mut dyn Tool can instead point to a concrete local tool and requires no box allocation. Generic configuration and concrete Self construction do not have to be dynamically callable: move them to constructors or extension APIs, or exclude appropriate methods with Self: Sized. Erasure preserves the stated lifetime and auto-trait bounds; it does not create missing ones. Rust trait-object dispatch is an in-program abstraction and does not establish a stable ABI between independently versioned foreign modules.",
+    "hint1": "Describe what the desk can do without knowing the tool's type. Construction and arbitrary generic configuration may belong outside that smaller contract, even if concrete users still need them. Choose deliberately.",
+    "hint2": "Give the registry an explicit lifetime for borrowed implementations. Make the erased operation return a common result rather than Self. Compare a local &mut dyn Tool with a Box<dyn Tool + 'host>: the dispatch boundary can be identical while storage ownership and allocation differ. Do not accidentally change the required borrow duration.",
+    "side_quest": "Replace the registry with an enum when the tool set is deliberately closed and every new tool requires editing the host. Compare exhaustive matching, inlining opportunities, variant size, and extension policy. Choose based on the expected evolution of the system, then document why repeated downcasting was evidence that the original boundary may have been misplaced. State the chosen extension policy in writing.",
+    "route_choices": [
+      {
+        "label": "Inspect occupied implementation space",
+        "level": 11,
+        "reason": "Discover how generic implementation choices constrain future adapters."
+      },
+      {
+        "label": "Inspect async tool contracts",
+        "level": 27,
+        "reason": "Extend erasure and trait-bound decisions to returned futures."
+      }
+    ],
+    "reward": "Mask Maker — hiding concrete types while preserving useful promises"
+  },
+  {
+    "level": 11,
+    "mission_title": "The Anvil That Already Belongs to Someone",
+    "scene": "At the Trait Foundry's arithmetic anvil, a vector designer wants the same notation in both directions: vector times scalar and scalar times vector. The right to add an implementation turns out to depend on more than mathematical symmetry. Some traits and types belong to other crates, and an uncovered type parameter can appear before the first local type. Your mission is to find a legal public interface that respects those ownership boundaries without reaching for an overlapping blanket rule that blocks future work.",
+    "objective": "Apply ordered orphan-rule reasoning and choose a legal adapter for symmetric generic arithmetic.",
+    "loadout": [
+      9,
+      10
+    ],
+    "win_conditions": [
+      "Explain why a local vector self type and a generic scalar self type face different orphan-rule conditions.",
+      "Provide a legal local wrapper or explicit supported-scalar strategy for the reversed operation.",
+      "Distinguish permission under orphan rules from freedom from overlapping implementations."
+    ],
+    "boss_title": "The Commutative Gate",
+    "boss_brief": "Your crate defines Vector<T> and wants multiplication by T in both orders using the standard Mul trait. Compare a generic implementation with Vector<T> as Self to one with unconstrained T as Self and Vector<T> as the right-hand operand. Explain why mentioning a local type somewhere is not enough to make the latter implementation legal. Design two alternatives: a local Scalar<T> wrapper for reversed multiplication, and explicit implementations for a deliberately supported set of primitive scalars. Describe the cost each places on callers and maintenance. Then audit whether adding a broad convenience implementation could collide with either design. You do not need to implement a full numeric library; one small coordinate type and focused compiler probes are enough to establish the implementation-space argument.",
+    "constraints": [
+      "Use stable trait rules rather than assuming general specialization is available.",
+      "Do not change standard-library types or claim mathematical commutativity overrides coherence.",
+      "Keep the concrete arithmetic bounds separate from the ownership and overlap argument."
+    ],
+    "debrief": "With a local Vector<T> self type, your crate has the local implementation anchor required for the intended foreign trait relationship, subject to the remaining rules. In the reversed generic form, an uncovered T appears as Self before the local Vector<T> is encountered, so the mere presence of that local operand does not authorize the implementation. Making Scalar<T> a local self type restores a clear local anchor and gives callers an explicit adapter. Implementing particular primitive scalar cases can also avoid the uncovered generic parameter issue, at a cost in supported cases and maintenance. Neither technique exempts the crate from overlap checks. Review blanket implementations as occupied design space, and keep an ergonomic free function available when operator notation would force an unnecessarily restrictive public commitment.",
+    "hint1": "Walk the implementation's types in the rule's relevant order rather than counting how many local names appear. Mathematical operand order and legal implementation ownership are separate questions. Respect that boundary.",
+    "hint2": "Compare impl<T> Mul<T> for Vector<T> with impl<T> Mul<Vector<T>> for T. The second begins with an uncovered generic self type. A local Scalar<T> self wrapper changes that relationship; a concrete primitive self type removes that particular uncovered parameter. Both alternatives still need ordinary overlap analysis. That second check is an independent obligation.",
+    "side_quest": "Decide whether Scalar<T> should implement Deref, Copy, or formatting traits automatically. For each choice, identify a real caller need and any compatibility promise it introduces. Then design a named multiply function that accepts an explicit policy type, allowing domain-specific behavior without relying on an increasingly broad operator implementation. Compare the resulting caller code with the operator form in one example.",
+    "route_choices": [
+      {
+        "label": "Audit public promises",
+        "level": 16,
+        "reason": "Treat implementation space and auto traits as compatibility commitments."
+      },
+      {
+        "label": "Build the release forge",
+        "level": 41,
+        "reason": "Carry legal generic design into an actual crate support matrix."
+      }
+    ],
+    "reward": "Anvil Rights — finding legal extension points without consuming all future space"
+  },
+  {
+    "level": 12,
+    "mission_title": "The Planner With a Memory",
+    "scene": "A Foundry planner may be invoked again when its first proposal conflicts with a newer city plan. Its callback owns expensive settings and keeps a counter of attempted decisions. One mechanic demands Fn because retries should be safe; another demands FnOnce because the settings moved into the closure. Both have confused a calling capability with a domain promise. Your mission is to expose exactly how the callback uses its environment and to keep repeated decision-making separate from irreversible effects.",
+    "objective": "Choose closure bounds from invocation behavior and specify retry semantics independently of those bounds.",
+    "loadout": [
+      1,
+      4,
+      9
+    ],
+    "win_conditions": [
+      "Accept a mutable callback environment when the planner may invoke it repeatedly.",
+      "Explain why owning captured settings does not by itself make invocation consume them.",
+      "Separate a returned effect description from executing that effect during speculative retries."
+    ],
+    "boss_title": "The Retrying Oracle",
+    "boss_brief": "Design a bounded retry helper for an in-memory versioned planning model. On each attempt it passes the current snapshot to a callback and receives an owned proposal. The callback may update an attempt counter and may own a large configuration value that it only reads. The helper can invoke it more than once, but must stop after a stated attempt limit. Choose the least restrictive appropriate closure bound. Then contrast a callback that consumes a captured one-shot resource during its first invocation. Explain why it cannot satisfy the same retry contract without changing the protocol. Finally, replace a callback that sends a notification immediately with one that returns an effect description to execute after acceptance. State why even Fn would not have proved purity or idempotence.",
+    "constraints": [
+      "Do not clone a consumed closure environment to manufacture another attempt.",
+      "Keep retries bounded and report exhaustion separately from proposal rejection.",
+      "Do not claim that Fn or FnMut certifies the absence of externally visible effects."
+    ],
+    "debrief": "Repeated invocation with a mutable attempt counter needs FnMut. The closure may still own its configuration because reading an owned capture does not consume it during each call. A closure that moves a one-shot resource out when called generally offers only FnOnce for that behavior, so retries require a new resource factory, a different ownership protocol, or abandoning automatic repetition. Fn is not a purity marker: interior mutability and external operations can create effects behind shared access. Returning an owned proposal plus an effect description makes speculative work easier to repeat without immediately performing those effects. Execute the description only after the local acceptance point, while separately handling interruption and duplicate-delivery concerns if execution reaches another component. The closure bound describes callable access to the environment, not the whole retry proof.",
+    "hint1": "Ask what happens to each captured value during one call, not merely how it entered the closure. Ownership of settings and consumption of settings are different operations. Track both explicitly.",
+    "hint2": "A mutable counter requires mutable access to the environment, which points to FnMut. A captured configuration read through shared access can remain owned across every call. If the body transfers a unique resource outward, that resource is absent on the next attempt; no stronger trait bound can recreate it. That absence matters.",
+    "side_quest": "Add a per-attempt budget token supplied by the helper rather than captured once by the callback. Decide whether each failed attempt consumes a token and how exhaustion is reported. Compare this explicit resource protocol with blindly rerunning a closure that happens to mutate hidden state. Explain what an API can make visible even when it cannot prove semantic idempotence. Record the outcome.",
+    "route_choices": [
+      {
+        "label": "Challenge the versioned archive",
+        "level": 38,
+        "reason": "Connect retrying decision callbacks to snapshot validation and conflicts."
+      },
+      {
+        "label": "Explore suspended environments",
+        "level": 23,
+        "reason": "See how retained captures become state in asynchronous computations."
+      }
+    ],
+    "reward": "Oracle Contract — choosing callback capabilities without inventing purity"
+  },
+  {
+    "level": 13,
+    "mission_title": "The Library of Borrowed Pages",
+    "scene": "The Trait Foundry's archive has two reading rooms. One points into a permanent manuscript, while the other decompresses each page into a reusable scratch buffer. Visitors want one inspection algorithm for both rooms, but they also want to keep every page afterward. Those requests cannot share exactly the same storage promise. Your mission is to build the common temporary reading capability and preserve a separate route for callers who genuinely need retention. The archive rewards honest ownership boundaries, not lifetime annotations that claim a scratch page never changes.",
+    "objective": "Design a lending abstraction shared by stable and reusable producers without promising simultaneous retention.",
+    "loadout": [
+      3,
+      4,
+      9
+    ],
+    "win_conditions": [
+      "Tie each common borrowed item to the particular access used to request it.",
+      "Process both producer implementations without retaining a scratch-backed item across the next request.",
+      "Offer an explicit owned or stable-source path when a consumer needs to collect results."
+    ],
+    "boss_title": "The Vanishing Collection",
+    "boss_brief": "Design a page inspection interface implemented by a stable-source reader and a scratch-buffer reader. Their borrowed view types may differ, so use a generic associated type only where that generic abstraction needs it. Write a consumer that computes owned page summaries while inspecting one view at a time. Then analyze a proposed collect-all adapter returning borrowed views from either producer. Explain why the scratch implementation cannot honor that retention contract. Offer two honest alternatives, one that copies retained data and one that exposes the stable producer's stronger source-lifetime relationship through a separate interface. Describe the relevant receiver borrow for every output. Your solution should explain why a common lending interface can deliberately expose less retention capability than one specific implementation could provide alone.",
+    "constraints": [
+      "Do not lengthen scratch-backed output lifetimes with unsafe code or invented static bounds.",
+      "Keep borrowed views scoped before asking a reusable producer for another item.",
+      "Distinguish an inherent borrowing method from a GAT needed for generic composition."
+    ],
+    "debrief": "The shared interface describes a view family parameterized by each receiver borrow, with the necessary Self: 'a relationship for that family. A generic consumer finishes inspecting one view and converts the needed information into an owned summary before requesting another. This preserves the scratch reader's right to reuse its buffer. Collecting all those borrowed views would retain overlapping access across later mutation and cannot be promised by the common abstraction. An owned collection copies or transfers retained bytes; a specialized stable-source API can instead return views tied to an external immutable owner whose lifetime is independent of a short cursor borrow. An ordinary associated type can already vary by implementation. A GAT lets each implementation choose a view type that also varies with the lifetime of each call.",
+    "hint1": "Give the temporary page view a name whose lifetime changes on each call. Then ask what the reader is allowed to mutate while that view is still being used. Follow that dependency.",
+    "hint2": "The common consumer should turn a page into an owned count, checksum, or other summary before proceeding. A stable-source reader may separately expose a longer source relationship, but requiring that relationship from scratch storage would contradict its reuse policy. Make retention an explicit API choice rather than a hidden assumption inside collect.",
+    "side_quest": "Design a callback-style inspect-next operation that exposes a view only during one invocation, and compare it with the GAT interface. Consider whether consumers need to name the view type, compose adapters, or return an owned result. Describe the ergonomic tradeoffs without assuming that every useful abstraction must imitate the standard Iterator trait exactly. Try the consumer against both producer implementations.",
+    "route_choices": [
+      {
+        "label": "Build the borrowing parser",
+        "level": 37,
+        "reason": "Choose between borrowed output, owned storage, and retained ranges."
+      },
+      {
+        "label": "Inspect representation costs",
+        "level": 34,
+        "reason": "Measure the allocation and retention consequences of each reader policy."
+      }
+    ],
+    "reward": "Page Lease — abstracting temporary views without promising impossible retention"
+  },
+  {
+    "level": 14,
+    "mission_title": "The Repair Report That Can Be Used",
+    "scene": "Ferrum's import desk reports every failure as a dramatic sentence. Operators can read the prose, but the repair system cannot distinguish invalid input, a denied policy, unavailable storage, or a conflict that needs a fresh decision. Worse, some failed imports leave a prefix applied while others leave nothing changed. Your mission is to make the error boundary carry useful structure and a clear postcondition. A good report should help the next component choose an action without parsing punctuation or guessing which resources still belong to it.",
+    "objective": "Design structured import errors with explicit failure state, preserved causes, and owned recovery data where useful.",
+    "loadout": [
+      1,
+      6,
+      9
+    ],
+    "win_conditions": [
+      "Distinguish validation, policy, storage, and conflict categories without matching error message strings.",
+      "State whether each failed operation leaves the published in-memory import state unchanged.",
+      "Preserve relevant underlying causes and identify who owns rejected input or prepared output."
+    ],
+    "boss_title": "The Ambiguous Import",
+    "boss_brief": "Design an import operation for an owned batch of records. Reading source material can fail with a standard I/O error; parsing and policy validation can reject particular records; final acceptance can conflict with a newer local state. Choose an all-or-nothing in-memory publication contract and identify the preparation boundary that supports it. Define an error representation that lets an application distinguish these categories, show a useful human message, and inspect a preserved underlying I/O cause. Decide which failures return the original batch and which return a prepared proposal that must be reconsidered before retry. Explain why returning recovery data is not equivalent to certifying that a retry is appropriate. Include tests for the failure postcondition rather than checking only that Err appears.",
+    "constraints": [
+      "Do not convert every failure to String at the reusable library boundary.",
+      "Keep user-controlled validation and preparation before the stated publication point.",
+      "Describe the process-local contract without presenting it as durable transaction recovery."
+    ],
+    "debrief": "Use domain variants or another structured classification to identify the phase and disposition while retaining source errors when cause traversal is useful. Keep parsing, policy checks, and proposal construction separate from publication so an ordinary preparation error leaves the published in-memory state unchanged. Return owned rejected inputs when callers can correct them; a prepared proposal rejected for conflict may remain inspectable but must not be applied blindly to new state. Its earlier reads and policy decision can be obsolete. Render the final human message at the reporting boundary while preserving classification beneath it. Error is an outcome category, not an automatic rollback or retry guarantee. Tests should compare state before and after each failure and verify that recovery values contain the resources the contract promises.",
+    "hint1": "Write a table in your notebook with phase, state after failure, recoverable value, and permitted next action. If one error string cannot answer those questions reliably, give the distinctions structure.",
+    "hint2": "An I/O cause can remain a source beneath a domain-level import category. A conflict should identify stale decision context rather than pretend the candidate is malformed. Returning the candidate preserves ownership, but applying it requires a fresh validation protocol. Stage all fallible preparation before publishing the accepted aggregate. Test failed publication.",
+    "side_quest": "Add a deliberately partial-import mode that commits valid records independently. Give it a different result contract reporting accepted, rejected, and unattempted records, rather than disguising partial success as the same all-or-nothing error. Explain how caller accounting and retry behavior change even though both implementations remain memory-safe Rust. Show that the accounting covers every original record exactly once after the operation ends.",
+    "route_choices": [
+      {
+        "label": "Forge valid protocol states",
+        "level": 15,
+        "reason": "Move some runtime error conditions into constructor and transition types."
+      },
+      {
+        "label": "Enter the review arena",
+        "level": 42,
+        "reason": "Audit invariants and evidence after the compiler has accepted the program."
+      }
+    ],
+    "reward": "Recovery Compass — errors that reveal state and support a deliberate next move"
+  }
+]

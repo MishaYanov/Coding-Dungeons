@@ -1,0 +1,443 @@
+{
+  "title": "Go: The Relay Guild",
+  "subtitle": "Train at the Outpost, cross the Signal Tower, and build a relay that can survive a failed job.",
+  "intro": [
+    "The Relay Guild keeps the roads open by carrying messages through a chain of outposts. Its first tests are small. Clean a recruit's badge, read a gate code, and count supplies. Later you will test the dispatch rules, keep workers from sharing state accidentally, and stop waiting when an expedition is canceled.",
+    "Start with the Outpost if you are learning Go. It covers values, functions, collections, structs and a JSON boundary. Take the Signal Tower route if you already use those comfortably. It starts at interfaces and goes through error wrapping, testing, goroutines, context and generics. The full route visits both.",
+    "Save each example in a fresh main.go and run go run main.go with Go 1.25 or newer. Use gofmt -w main.go before sharing code. At the test lesson, copy the test fragment into a separate clamp_test.go file. The GM provides challenge prompts, hints, and guided review. Run Go to compile and test your drafts."
+  ],
+  "zones": [
+    {
+      "name": "The Outpost",
+      "first": 1,
+      "last": 7,
+      "skill": "Values and Data Modeling"
+    },
+    {
+      "name": "The Signal Tower",
+      "first": 8,
+      "last": 14,
+      "skill": "Contracts and Concurrency"
+    }
+  ],
+  "paths": [
+    {
+      "id": "foundations",
+      "name": "The Outpost",
+      "description": "Learn Go by turning recruit and supply records into reliable commands. Start with values and finish at a JSON boundary.",
+      "topics": "Bindings, types, functions, errors, control flow, slices, maps, structs, methods and JSON",
+      "levels": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "id": "application",
+      "name": "The Signal Tower",
+      "description": "Build the relay services once you can read Go functions and collections. Test contracts, coordinate workers, and reason about cancellation and ownership.",
+      "topics": "Interfaces, error wrapping, table tests, channels, context, generics and a bounded dispatch pool",
+      "levels": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ]
+    },
+    {
+      "id": "full",
+      "name": "Full Relay Expedition",
+      "description": "Follow every guild mission in order, from making a first badge to dispatching concurrent work and preserving every result.",
+      "topics": "The full Go route from first programs through the worker-pool capstone",
+      "levels": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ]
+    }
+  ],
+  "lessons": [
+    {
+      "title": "A Badge for the Road",
+      "objective": "Compile a first Go program and use declarations, zero values and string operations.",
+      "body": [
+        "A runnable Go command belongs to package main and starts at func main. An import makes the exported names of another package available, as in fmt.Println. Go reports unused imports and unused local variables in ordinary local declarations. Keep the command small enough that the role of each name is clear.",
+        "Inside a function, := declares at least one new non-blank variable and infers types from the right-hand side. Use = to assign to an existing variable. A declaration such as var visits int gets the zero value 0. Booleans start at false and strings at the empty string.",
+        "A Go string is an immutable sequence of bytes. TrimSpace and ToUpper return strings, so save the result or pass it on. len reports bytes. A range loop over a string yields byte indices and decoded runes. A rune is a Unicode code point, and a visible character can contain several code points."
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\nfunc main() {\n\traw := \"  Ada  \"\n\tname := strings.ToUpper(strings.TrimSpace(raw))\n\tvar visits int\n\tvisits++\n\tfmt.Println(name, visits) // ADA 1\n}",
+      "takeaway": "Use a fresh binding for normalized data and keep byte counts separate from rune counts.",
+      "question": "What value does var visits int give visits before any assignment?",
+      "options": [
+        "1",
+        "nil",
+        "0",
+        "An unspecified value"
+      ],
+      "correct": 2,
+      "feedback": "An int has a zero value of 0. Go initializes the variable when it is declared.",
+      "challenge": "Implement badge(raw string) string. Trim leading and trailing whitespace, then uppercase the result. badge(\"  Jo \\t\") should return \"JO\". A whitespace-only input returns the empty string.",
+      "starter": "package main\n\nfunc badge(raw string) string {\n\t// Trim the recruit name, then uppercase it.\n\treturn raw\n}\n\nfunc main() {}",
+      "hint1": "The strings package contains TrimSpace and ToUpper.",
+      "hint2": "Pass the result of strings.TrimSpace(raw) to strings.ToUpper.",
+      "debrief": "Use strings.TrimSpace before uppercasing, then return the resulting string. Try an all-whitespace name to check the boundary.",
+      "sideQuest": "Print len(\"\u00e9\") and the value from a range loop over the same string. Explain the difference."
+    },
+    {
+      "title": "The Counter's Ledger",
+      "objective": "Return a value and an error, and branch before using a failed result.",
+      "body": [
+        "A Go function can return more than one value. The conventional signature (T, error) lets callers handle a failure before relying on T. A nil error signals success. The contract describes what the other returned values mean on failure.",
+        "strconv.Atoi parses a string as a base-ten int and returns a number plus an error. It accepts an optional sign. Trim outer whitespace if your input contract allows it. A negative value can parse successfully even when the business rule rejects it.",
+        "Check the error as close to the call as practical. A short declaration in an if initializer scopes the variables to that if statement and its else branches. Use a declaration before the if when the value must also be used afterward."
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"strconv\"\n\t\"strings\"\n)\n\nfunc main() {\n\tcount, err := strconv.Atoi(strings.TrimSpace(\" 12 \"))\n\tif err != nil {\n\t\tfmt.Println(\"Unreadable ledger:\", err)\n\t\treturn\n\t}\n\tfmt.Println(count + 1) // 13\n}",
+      "takeaway": "Parsing and domain validation are separate checks.",
+      "question": "Why should you check err after strconv.Atoi?",
+      "options": [
+        "An input can fail to parse or exceed int range.",
+        "Atoi always returns a negative number on failure.",
+        "An int can store nil.",
+        "Atoi only reports formatting warnings."
+      ],
+      "correct": 0,
+      "feedback": "Atoi reports syntax and range failures through its error result. The number alone cannot represent those outcomes.",
+      "challenge": "Implement parseCount(raw string) (int, error). Trim outer whitespace, parse a decimal int, and reject negative values. Return zero with a non-nil error for an invalid, overflowing, or negative input. Zero and positive counts succeed.",
+      "starter": "package main\n\nfunc parseCount(raw string) (int, error) {\n\t// Parse, check the error, then validate the count.\n\treturn 0, nil\n}\n\nfunc main() {}",
+      "hint1": "Use strconv.Atoi on strings.TrimSpace(raw).",
+      "hint2": "Return early on a parse error. Use fmt.Errorf or errors.New when a parsed count is negative.",
+      "debrief": "Try empty text, zero, a negative number, and more digits than int can represent. Each test exercises a different rule.",
+      "sideQuest": "Compare parseCount(\"+2\") with parseCount(\"2.0\") and trace which inputs reach the domain check."
+    },
+    {
+      "title": "The Watch at Dusk",
+      "objective": "Apply switch, loops, and early returns to a guard that can stop scanning.",
+      "body": [
+        "Go uses for for counted loops, condition loops and iteration over collections. Range over a slice yields the index and a copy of the element. Use _ to discard an index when the loop only needs the value.",
+        "A switch selects the first matching case. Cases finish at the end of their bodies by default. A switch with no expression is equivalent to switching on true, so it can organize a set of predicates.",
+        "Returning from inside a loop can express a decisive result. The ready check ends as soon as it sees a blocked task. The return after the loop handles the case where no blocking task was found. In that interpretation an empty list is ready."
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\nfunc summarize(states []string) (int, int) {\n\tready, blocked := 0, 0\n\tfor _, state := range states {\n\t\tswitch state {\n\t\tcase \"ready\":\n\t\t\tready++\n\t\tcase \"blocked\":\n\t\t\tblocked++\n\t\t}\n\t}\n\treturn ready, blocked\n}\n\nfunc main() {\n\tfmt.Println(summarize([]string{\"ready\", \"blocked\", \"ready\"})) // 2 1\n}",
+      "takeaway": "An early return can stop a scan as soon as the outcome is known.",
+      "question": "What happens after an ordinary Go switch case executes its body?",
+      "options": [
+        "The next case always executes.",
+        "The switch finishes unless control was redirected explicitly.",
+        "The matching case runs again.",
+        "The default case always executes."
+      ],
+      "correct": 1,
+      "feedback": "A matching case ends the switch by default. Explicit control flow such as fallthrough or return changes what happens next.",
+      "challenge": "Implement isReady(states []string) bool. Return true when every state is exactly \"ready\". Return false for any other state. The empty slice counts as ready.",
+      "starter": "package main\n\nfunc isReady(states []string) bool {\n\t// Find a state that blocks departure.\n\treturn false\n}\n\nfunc main() {}",
+      "hint1": "Use for _, state := range states.",
+      "hint2": "Return false as soon as state differs from \"ready\". Return true after the loop.",
+      "debrief": "The post-loop return covers both an empty slice and a slice containing only ready states. Put an invalid state in the middle to check the early exit.",
+      "sideQuest": "Add a separate function that returns the index of the first state that blocks departure. Choose a clear representation for no match."
+    },
+    {
+      "title": "The Shared Supply Crate",
+      "objective": "Predict when slice operations share storage and make an independent copy on purpose.",
+      "body": [
+        "An array holds a fixed number of elements and its length is part of its type. A slice describes a segment of an underlying array. Assigning a slice copies the description, which can leave two slices pointing into the same storage.",
+        "len is the number of accessible elements. cap is the number of elements the slice can extend to from its starting position. append returns a slice with its updated length. When capacity suffices, append reuses the underlying array. When capacity is too small, it allocates a new one.",
+        "Ownership matters when a function keeps or changes a slice. To produce independent storage, allocate a slice with make and copy the elements. That is a shallow copy. Elements containing pointers, maps, or slices may still share objects."
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tstock := []string{\"rope\", \"torch\"}\n\tfront := stock[:1]\n\tfront = append(front, \"map\")\n\tfmt.Println(stock) // [rope map]\n\n\towned := make([]string, len(stock))\n\tcopy(owned, stock)\n\towned[0] = \"ink\"\n\tfmt.Println(stock[0], owned[0]) // rope ink\n}",
+      "takeaway": "Use an explicit copy when callers should be able to mutate either slice independently.",
+      "question": "What does stock[1] become after appending \"map\" to stock[:1] in the example?",
+      "options": [
+        "torch",
+        "The slice index is out of bounds.",
+        "map",
+        "The element depends on map iteration order."
+      ],
+      "correct": 2,
+      "feedback": "The shorter slice still has capacity for a second element. append reuses that storage and overwrites the slot stock also sees.",
+      "challenge": "Implement withTag(tags []string, tag string) []string. Return a slice containing the original tags followed by tag. The result must have its own storage, including when the input has spare capacity. An empty input produces a one-element result.",
+      "starter": "package main\n\nfunc withTag(tags []string, tag string) []string {\n\t// Allocate independent storage for every returned tag.\n\treturn append(tags, tag)\n}\n\nfunc main() {}",
+      "hint1": "Allocate a slice of length len(tags)+1.",
+      "hint2": "Copy tags into the new slice and assign tag at index len(tags).",
+      "debrief": "Check the result with an input made using make([]string, 1, 3). Mutate result[0] afterward and verify the input is unaffected.",
+      "sideQuest": "Append to stock[:1:1] and explain what the third index changes. Compare the result with editing front[0] before the append."
+    },
+    {
+      "title": "The Quartermaster's Map",
+      "objective": "Count values in a map and distinguish missing entries from zero-valued entries.",
+      "body": [
+        "A map connects keys to values. Key types must be comparable, so strings and integers work directly. A lookup for an absent key yields the zero value of the value type. Use the two-result form v, ok := m[k] when a stored zero must be distinguished from absence.",
+        "A nil map permits lookups, len and range. Writing a new entry requires an initialized map, created with make or a map literal. Counting with counts[key]++ works on an initialized map because a missing count reads as zero.",
+        "Map iteration order is unspecified. To present stable output, gather the keys into a slice and sort them, then look up each key in that order. Sharing a map with concurrent writers calls for synchronization or a single owner."
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n)\n\nfunc main() {\n\tcounts := map[string]int{}\n\tfor _, crate := range []string{\"ink\", \"rope\", \"ink\"} {\n\t\tcounts[crate]++\n\t}\n\tkeys := make([]string, 0, len(counts))\n\tfor key := range counts {\n\t\tkeys = append(keys, key)\n\t}\n\tsort.Strings(keys)\n\tfor _, key := range keys {\n\t\tfmt.Println(key, counts[key]) // ink 2, then rope 1\n\t}\n}",
+      "takeaway": "Use an initialized map for writes and a sorted key slice for deterministic iteration.",
+      "question": "What is ok in n, ok := counts[\"missing\"] when the key is absent?",
+      "options": [
+        "true because n exists",
+        "false",
+        "nil",
+        "The value of n"
+      ],
+      "correct": 1,
+      "feedback": "The lookup returns the element zero value and false when the key is absent.",
+      "challenge": "Implement tally(items []string) map[string]int. Return a non-nil map of exact string counts. Ignore empty strings. Preserve case and whitespace in every other key. A nil input gives an empty map.",
+      "starter": "package main\n\nfunc tally(items []string) map[string]int {\n\t// Count nonempty keys.\n\treturn map[string]int{}\n}\n\nfunc main() {}",
+      "hint1": "Initialize a result map and range over items.",
+      "hint2": "Skip the empty string with continue. Update other keys with counts[item]++.",
+      "debrief": "Verify that \"rope\" and \"Rope\" occupy separate entries. Use the map's keys and values in tests so iteration order is irrelevant.",
+      "sideQuest": "Add a display helper that lists counts in descending order with alphabetic tie-breaking."
+    },
+    {
+      "title": "The Hero Registry",
+      "objective": "Model a hero with a struct and choose value or pointer receivers deliberately.",
+      "body": [
+        "A struct groups named fields into a value. A keyed literal such as Hero{Name: \"Mira\"} describes which fields are set and leaves other fields at their zero values. Assigning a struct copies its fields. A field that refers to shared storage, such as a slice, still shares it after that copy.",
+        "A method has a receiver before its name. A value receiver receives a copy of the receiver value. A pointer receiver can change the original struct through that pointer. Go can automatically take the address of an addressable variable for a pointer-receiver method call.",
+        "A constructor is an ordinary function. NewHero can normalize names and reject invalid input before a record is accepted. When an invariant matters across package boundaries, keeping fields unexported can prevent direct writes by callers."
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\ntype Hero struct {\n\tName string\n\tXP   int\n}\n\nfunc (h *Hero) Earn(amount int) {\n\th.XP += amount\n}\n\nfunc (h Hero) Label() string {\n\treturn fmt.Sprintf(\"%s (%d XP)\", h.Name, h.XP)\n}\n\nfunc main() {\n\th := Hero{Name: \"Mira\"}\n\th.Earn(5)\n\tfmt.Println(h.Label()) // Mira (5 XP)\n}",
+      "takeaway": "Use a pointer receiver for a method that updates the caller's struct fields.",
+      "question": "Which receiver lets Earn update h.XP on the original hero?",
+      "options": [
+        "(h Hero)",
+        "(h *Hero)",
+        "(h string)",
+        "(h int)"
+      ],
+      "correct": 1,
+      "feedback": "A pointer to the original Hero allows its field to be updated. A value receiver would copy the int field.",
+      "challenge": "Implement NewHero(raw string) (Hero, error). Trim the name, reject it if empty, and return Hero{Name: cleaned, XP: 0} on success. Return the zero Hero and a non-nil error on failure.",
+      "starter": "package main\n\ntype Hero struct {\n\tName string\n\tXP   int\n}\n\nfunc NewHero(raw string) (Hero, error) {\n\t// Normalize and validate the name before constructing a hero.\n\treturn Hero{Name: raw}, nil\n}\n\nfunc main() {}",
+      "hint1": "Use strings.TrimSpace to normalize the name.",
+      "hint2": "Return Hero{} with an error for an empty name. Otherwise the keyed literal can omit XP because its zero value is 0.",
+      "debrief": "Try a name with internal spaces. Trimming preserves the middle of a name while removing accidental padding.",
+      "sideQuest": "Copy a Hero with a slice of tags. Change a tag through the copy and trace why the original can see it."
+    },
+    {
+      "title": "The Courier's JSON",
+      "objective": "Decode external data into a Go struct and validate the resulting values.",
+      "body": [
+        "encoding/json.Unmarshal decodes a JSON value into storage you provide. Pass the address of your target and check the returned error before using it. For a struct, exported fields are eligible for decoding and json tags can choose external names.",
+        "Successful decoding checks the JSON shape and conversion rules that the decoder enforces. It does not check application requirements such as a nonempty name or nonnegative XP. A missing field on a fresh struct has its Go zero value. Use a pointer field or explicit presence check when a missing field must differ from a provided zero.",
+        "Unmarshal ignores unknown object fields by default. A json.Decoder can call DisallowUnknownFields to enforce a stricter object format. For a single-message boundary, also make sure the decoder has no further JSON value. Choose strictness intentionally when senders and readers evolve separately."
+      ],
+      "code": "package main\n\nimport (\n\t\"encoding/json\"\n\t\"fmt\"\n)\n\ntype Hero struct {\n\tName string `json:\"name\"`\n\tXP   int    `json:\"xp\"`\n}\n\nfunc main() {\n\tvar h Hero\n\terr := json.Unmarshal([]byte(`{\"name\":\"Mira\",\"xp\":5}`), &h)\n\tif err != nil {\n\t\tfmt.Println(err)\n\t\treturn\n\t}\n\tfmt.Println(h.Name, h.XP) // Mira 5\n}",
+      "takeaway": "Decode, check for a conversion error, then enforce your domain rules.",
+      "question": "Can json.Unmarshal succeed when a required application field is missing?",
+      "options": [
+        "Yes, because a struct field can keep its zero value.",
+        "Yes, because every missing field becomes nil.",
+        "No, because Go requires all struct fields in JSON.",
+        "Only when the field is unexported."
+      ],
+      "correct": 0,
+      "feedback": "A missing field stays unchanged. In a fresh Hero, an omitted name is empty and must be rejected by your own validation.",
+      "challenge": "Implement decodeHero(raw string) (Hero, error). Decode one JSON object, trim the name, and reject blank names or negative XP. Missing XP is accepted as zero. Return Hero{} and a non-nil error on failure. Unknown fields are allowed.",
+      "starter": "package main\n\ntype Hero struct {\n\tName string `json:\"name\"`\n\tXP   int    `json:\"xp\"`\n}\n\nfunc decodeHero(raw string) (Hero, error) {\n\t// Decode into a local Hero, then validate its fields.\n\treturn Hero{}, nil\n}\n\nfunc main() {}",
+      "hint1": "Declare var h Hero and pass &h to json.Unmarshal.",
+      "hint2": "Trim h.Name and reject an empty name or an XP value below zero after decoding succeeds.",
+      "debrief": "Use malformed JSON, valid JSON with the wrong XP type, and valid JSON with negative XP to exercise separate failures.",
+      "sideQuest": "Change XP to *int and compare an omitted xp field, an explicit null, and a numeric zero."
+    },
+    {
+      "title": "The Relay Interface",
+      "objective": "Accept the behavior a function needs and reason about method sets and nil.",
+      "body": [
+        "An interface describes behavior. A concrete type satisfies an ordinary interface when its method set includes the required methods with matching signatures. A function that accepts io.Reader can read a string in a test and a file in a command while keeping the same implementation.",
+        "A value of a defined type T has the methods declared with receiver T. A value of type *T has the methods declared with receiver T or *T. The compiler can automatically take the address for some direct method calls, but a T stored in an interface still needs its own method set to satisfy that interface.",
+        "An interface value carries a dynamic type and a dynamic value. Storing a nil *T in an interface retains the dynamic type, so comparing that interface to nil gives false. This matters for error returns. Return a literal nil on the success path when the function returns error."
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"strings\"\n)\n\nfunc ReadName(r io.Reader) (string, error) {\n\tbytes, err := io.ReadAll(r)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\treturn strings.TrimSpace(string(bytes)), nil\n}\n\nfunc main() {\n\tname, err := ReadName(strings.NewReader(\"  Mira  \"))\n\tfmt.Println(name, err) // Mira <nil>\n\n\tvar p *strings.Reader\n\tvar r io.Reader = p\n\tfmt.Println(p == nil, r == nil) // true false\n}",
+      "takeaway": "Accept a narrow interface and distinguish a nil interface from one holding a nil pointer.",
+      "question": "Why is r == nil false after assigning a nil *strings.Reader to r?",
+      "options": [
+        "io.Reader cannot hold a pointer.",
+        "r holds the dynamic type *strings.Reader.",
+        "Assigning p allocates a reader.",
+        "All interfaces compare unequal to nil."
+      ],
+      "correct": 1,
+      "feedback": "The dynamic type is present even though the dynamic pointer value is nil.",
+      "challenge": "Implement ReadName(r io.Reader) (string, error) for a non-nil reader with bounded input. Read to EOF, trim outer whitespace, and reject an empty result. Return an empty string and a non-nil error if the read fails or the name is blank.",
+      "starter": "package main\n\nimport \"io\"\n\nfunc ReadName(r io.Reader) (string, error) {\n\t// Read from r, then validate the trimmed name.\n\treturn \"\", nil\n}\n\nfunc main() {}",
+      "hint1": "Use io.ReadAll, then check its error before converting the bytes to a string.",
+      "hint2": "After trimming, return errors.New for an empty name. Test success with strings.NewReader.",
+      "debrief": "Use a reader that returns an error to check propagation separately from blank input. io.ReadAll is suitable here because the caller supplies bounded input.",
+      "sideQuest": "Define a reader whose Read method has a pointer receiver. Write a compile-time assertion using var _ io.Reader = (*YourReader)(nil)."
+    },
+    {
+      "title": "A Gate Error With a Trail",
+      "objective": "Wrap an error with context while preserving the failure a caller can inspect.",
+      "body": [
+        "Errors are values. A sentinel such as ErrSealed identifies a failure that callers may handle in a distinct way. Give that sentinel a stable identity by constructing it once. Creating another error with the same message does not give it the same identity.",
+        "Use fmt.Errorf with %w when you want to attach context and let callers inspect the underlying error. errors.Is looks for a matching error through wrappers and can use a custom Is method. errors.As finds a compatible error type when the caller needs its fields.",
+        "Wrapping an error is part of the caller-facing contract when callers branch on it. Decide which details to expose. The gate example exposes ErrSealed, so a caller can request a key without parsing the human-readable message."
+      ],
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nvar ErrSealed = errors.New(\"gate is sealed\")\n\nfunc openGate(name string, hasKey bool) error {\n\tif hasKey {\n\t\treturn nil\n\t}\n\treturn fmt.Errorf(\"open %s: %w\", name, ErrSealed)\n}\n\nfunc main() {\n\terr := openGate(\"north\", false)\n\tfmt.Println(err)\n\tfmt.Println(errors.Is(err, ErrSealed)) // true\n}",
+      "takeaway": "Wrap with %w when callers need to recognize the cause with errors.Is.",
+      "question": "How should a caller identify ErrSealed under the wrapper?",
+      "options": [
+        "err == ErrSealed",
+        "err.Error() == ErrSealed.Error()",
+        "errors.Is(err, ErrSealed)",
+        "errors.New(err.Error()) == ErrSealed"
+      ],
+      "correct": 2,
+      "feedback": "The wrapper and sentinel are different values. errors.Is can inspect the wrapped cause.",
+      "challenge": "Implement openGate(name string, hasKey bool) error. Return nil if hasKey is true. Otherwise return an error whose message contains name and that matches the provided ErrSealed under errors.Is.",
+      "starter": "package main\n\nimport \"errors\"\n\nvar ErrSealed = errors.New(\"gate is sealed\")\n\nfunc openGate(name string, hasKey bool) error {\n\t// Include the gate name and preserve the sentinel on failure.\n\treturn nil\n}\n\nfunc main() {}",
+      "hint1": "Return early with nil when the key is present.",
+      "hint2": "Use fmt.Errorf with %s for the gate name and %w for ErrSealed.",
+      "debrief": "Check the message and errors.Is separately. Replacing %w with %v would preserve the text and lose the wrapped sentinel.",
+      "sideQuest": "Define a GateError struct that stores a gate name, implements Error and Unwrap, and can be inspected with errors.As. With Go 1.26 or newer, try errors.AsType[*GateError] if you used a pointer receiver."
+    },
+    {
+      "title": "The Trial Table",
+      "objective": "Translate a function contract into named table-driven tests.",
+      "body": [
+        "The go test command discovers Test functions in files ending in _test.go. Test functions take *testing.T. Table-driven tests group input and expected values in rows, then use t.Run to name the result of each case.",
+        "For a clamp function, test a value below the bounds, at each bound, between them, and above them. Equal bounds are valid. Reversed bounds need an error. A table records expectations before you look at the implementation and makes it easy to add a missed case.",
+        "The Go program below runs independently. To execute the embedded test, copy the lines inside the final comment to clamp_test.go and run go test main.go clamp_test.go. Add a row with reversed bounds and verify that err is non-nil. Run go test -race when testing code that shares memory across goroutines. It reports races it observes during execution."
+      ],
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nfunc clamp(value, low, high int) (int, error) {\n\tif low > high {\n\t\treturn 0, errors.New(\"invalid bounds\")\n\t}\n\treturn min(max(value, low), high), nil\n}\n\nfunc main() {\n\tfmt.Println(clamp(14, 0, 10)) // 10 <nil>\n}\n\n/*\npackage main\n\nimport \"testing\"\n\nfunc TestClamp(t *testing.T) {\n\tcases := []struct {\n\t\tname                   string\n\t\tvalue, low, high, want int\n\t}{\n\t\t{\"below\", -1, 0, 10, 0},\n\t\t{\"inside\", 4, 0, 10, 4},\n\t\t{\"above\", 14, 0, 10, 10},\n\t}\n\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tgot, err := clamp(tc.value, tc.low, tc.high)\n\t\t\tif err != nil || got != tc.want {\n\t\t\t\tt.Fatalf(\"got %d, %v; want %d, nil\", got, err, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}\n*/",
+      "takeaway": "Test the contract at and around each boundary, including invalid input.",
+      "question": "Which pair of bounds should your clamp test expect to produce an error?",
+      "options": [
+        "low = 0, high = 0",
+        "low = -1, high = 1",
+        "low = 10, high = 1",
+        "low = 1, high = 10"
+      ],
+      "correct": 2,
+      "feedback": "The lower bound exceeds the upper bound. Equal bounds form a valid single-value interval.",
+      "challenge": "Implement clamp(value, low, high int) (int, error). Return 0 and a non-nil error when low exceeds high. Otherwise return the value limited to the inclusive interval with a nil error. Add a table-driven test in clamp_test.go locally.",
+      "starter": "package main\n\nfunc clamp(value, low, high int) (int, error) {\n\t// Validate the interval and handle both boundaries.\n\treturn value, nil\n}\n\nfunc main() {}",
+      "hint1": "Test low > high before applying either boundary.",
+      "hint2": "For each table row include whether an error is expected. Compare the result only when its value is part of the contract.",
+      "debrief": "Add cases with equal bounds and negative values. Change the function deliberately to return the input unchanged and check that the table catches it.",
+      "sideQuest": "Write a fuzz test that verifies a valid clamp result is between the bounds and stays unchanged when clamped again."
+    },
+    {
+      "title": "Signals on the Wire",
+      "objective": "Send work over a channel, drain the values, and close from the producer side.",
+      "body": [
+        "A go statement starts a goroutine. The goroutine can run independently, so main must wait for any result it needs. An unbuffered channel send waits for a receiver. A buffered send can proceed while space is available.",
+        "Range over a channel receives until the channel is closed and all buffered values have been drained. The sender should arrange closure when it can guarantee there will be no further sends. A send on a closed channel panics. A receive from a closed and drained channel gives the element zero value with ok equal to false in the two-result form.",
+        "With one producer and one receiver, the producer can defer close and the receiver can range. With many producers, a separate coordinator can wait for them before closing. In Go 1.22 and newer language modes, loop variables declared with := are new each iteration. A predeclared variable reused with = is still shared."
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\nfunc squares(nums []int) <-chan int {\n\tout := make(chan int)\n\tgo func() {\n\t\tdefer close(out)\n\t\tfor _, n := range nums {\n\t\t\tout <- n * n\n\t\t}\n\t}()\n\treturn out\n}\n\nfunc main() {\n\tfor n := range squares([]int{2, 3, 4}) {\n\t\tfmt.Println(n) // 4, then 9, then 16\n\t}\n}",
+      "takeaway": "Designate a channel closer who knows every send has finished.",
+      "question": "When does a for range loop over a channel finish?",
+      "options": [
+        "As soon as the buffer is empty.",
+        "When a received value equals zero.",
+        "When the channel is closed and drained.",
+        "When the channel loses its last sender reference."
+      ],
+      "correct": 2,
+      "feedback": "An empty open channel can receive more values. Range stops only after closure and delivery of remaining buffered values.",
+      "challenge": "Implement squareAll(nums []int) []int. Start one goroutine that sends the squares of nums over a channel and closes it. Collect the squares in input order. Return an empty slice for empty input. Assume every square fits in int.",
+      "starter": "package main\n\nfunc squareAll(nums []int) []int {\n\t// Start a sender, drain its channel, and collect results.\n\treturn []int{}\n}\n\nfunc main() {}",
+      "hint1": "Create the channel before starting the goroutine. Close it from the sender when the loop finishes.",
+      "hint2": "Range over the channel in squareAll and append each received value.",
+      "debrief": "Try an empty slice. The sender must still close the channel so the receiver can finish. A consumer that stops early needs a way to tell the producer to exit.",
+      "sideQuest": "Replace the output channel with a buffer of size one and trace which sends can complete before the receiver runs."
+    },
+    {
+      "title": "The Recall Signal",
+      "objective": "Carry cancellation through a blocking operation and handle channel closure separately.",
+      "body": [
+        "A context carries a deadline, a cancellation signal, and request-scoped values. Pass it as the first argument to a function that honors cancellation. Create a derived context with context.WithTimeout or context.WithCancel and call its cancel function when the operation is done.",
+        "Cancellation is cooperative. A select can unblock when ctx.Done closes. Its cancellation case can return ctx.Err, which reports context.Canceled or context.DeadlineExceeded. The function that receives a context should keep its own blocking operations cancellable where practical.",
+        "If several select cases are ready, Go chooses one ready case pseudo-randomly. Checking ctx.Err before select gives already-canceled contexts priority at that check. Afterward, if a signal and cancellation become ready together, either result can be valid. A closed signal channel needs its own two-result receive so an empty string can still be a real message."
+      ],
+      "code": "package main\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\t\"io\"\n)\n\nfunc waitForRune(ctx context.Context, signals <-chan string) (string, error) {\n\tif err := ctx.Err(); err != nil {\n\t\treturn \"\", err\n\t}\n\tselect {\n\tcase <-ctx.Done():\n\t\treturn \"\", ctx.Err()\n\tcase signal, ok := <-signals:\n\t\tif !ok {\n\t\t\treturn \"\", io.EOF\n\t\t}\n\t\treturn signal, nil\n\t}\n}\n\nfunc main() {\n\tctx, cancel := context.WithCancel(context.Background())\n\tdefer cancel()\n\tsignals := make(chan string, 1)\n\tsignals <- \"north\"\n\tfmt.Println(waitForRune(ctx, signals)) // north <nil>\n\tcancel()\n\tfmt.Println(waitForRune(ctx, signals)) // context canceled\n}",
+      "takeaway": "Give cancellation its own select case and use ok to detect a closed input.",
+      "question": "What happens if both channel cases are ready when select chooses a case?",
+      "options": [
+        "The first source-order case always runs.",
+        "The cancellation case always runs.",
+        "One of the ready cases is selected pseudo-randomly.",
+        "The program panics."
+      ],
+      "correct": 2,
+      "feedback": "Case order does not give a select branch priority. An initial ctx.Err check only handles cancellation already observed at entry.",
+      "challenge": "Implement waitForRune(ctx context.Context, signals <-chan string) (string, error). Return ctx.Err for an already canceled context. Otherwise wait for a signal or ctx.Done. Return io.EOF if the signal channel closes without a value, and allow the empty string as a successful signal.",
+      "starter": "package main\n\nimport \"context\"\n\nfunc waitForRune(ctx context.Context, signals <-chan string) (string, error) {\n\t// Check cancellation and wait on both channels.\n\treturn \"\", nil\n}\n\nfunc main() {}",
+      "hint1": "Check ctx.Err at entry, then select between ctx.Done() and a receive from signals.",
+      "hint2": "Use signal, ok := <-signals to distinguish a real empty signal from a closed and drained channel.",
+      "debrief": "Test with a buffered signal, a closed channel, and a canceled context. A canceled context can be constructed without any sleep.",
+      "sideQuest": "Build a signal producer that selects on ctx.Done as well as its send. Check that stopping the consumer also allows the producer to exit."
+    },
+    {
+      "title": "One Pattern, Many Types",
+      "objective": "Use type parameters when the same collection algorithm works across element types.",
+      "body": [
+        "Type parameters let a function state relationships between input and output types. A transform can take a slice of T and a function from T to U, then produce a slice of U. Both types remain visible to the caller and can often be inferred at the call site.",
+        "A constraint describes the types a parameter can represent and the operations the implementation can use on it. Use any to store and pass values when you need no arithmetic or comparison. The predeclared comparable constraint lets a function compare values or use them as map keys. An interface key can still panic if it contains a non-comparable dynamic value.",
+        "A generic helper should state what it does with the input and output. This transform allocates its own output slice and visits inputs in order. If callback results contain pointers or slices, the output values may still reference existing objects."
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"strconv\"\n)\n\nfunc mapValues[T, U any](items []T, transform func(T) U) []U {\n\tresult := make([]U, len(items))\n\tfor i, item := range items {\n\t\tresult[i] = transform(item)\n\t}\n\treturn result\n}\n\nfunc main() {\n\tlabels := mapValues([]int{2, 3, 4}, strconv.Itoa)\n\tfmt.Printf(\"%q\\n\", labels) // [\"2\" \"3\" \"4\"]\n}",
+      "takeaway": "Use the weakest constraint that supplies the operations the implementation needs.",
+      "question": "What lets mapValues use any for both type parameters?",
+      "options": [
+        "Go checks every transform at runtime only.",
+        "The values are passed to the supplied function and stored without type-specific operations.",
+        "Go converts every item to a string.",
+        "The compiler requires that T and U are equal."
+      ],
+      "correct": 1,
+      "feedback": "The transform already states the relationship between T and U. The loop does not compare or add values of either type.",
+      "challenge": "Implement mapValues[T, U any](items []T, transform func(T) U) []U. Transform each item once in input order and return a fresh slice. Return a non-nil empty slice for a nil or empty input. Assume transform is non-nil.",
+      "starter": "package main\n\nfunc mapValues[T, U any](items []T, transform func(T) U) []U {\n\t// Allocate a result and apply transform once for each item.\n\treturn []U{}\n}\n\nfunc main() {}",
+      "hint1": "Allocate make([]U, len(items)) and use range to get each index and item.",
+      "hint2": "Assign transform(item) to the matching output index.",
+      "debrief": "Test an int-to-string transform and a struct-to-bool transform. The same function should compile for both sets of types.",
+      "sideQuest": "Write a generic frequency function and explain why its key parameter needs comparable."
+    },
+    {
+      "title": "Capstone \u2014 Dispatch the Relay",
+      "objective": "Bound active work, collect a result for each job, and keep stable input positions.",
+      "body": [
+        "The dispatcher uses a channel of indices as its work queue. Use sync.WaitGroup.Go to start and track at most limit workers. Each worker finishes its current job before receiving another index. Send every index, close the channel, and wait for all workers before returning.",
+        "Store results in a preallocated slice so completion order does not change their positions. Each job index is sent once, so workers write to distinct elements. Keep the slice structure fixed while they run. WaitGroup synchronization makes completed writes visible to the caller after the wait.",
+        "Each result holds the value and error returned by its own job. A failed job does not stop the other jobs. The capstone assumes jobs are non-nil, terminate, and synchronize any state they share with each other. Test the limit by tracking active jobs with atomic operations or a mutex. Use channels to coordinate progress in tests."
+      ],
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"sync\"\n)\n\ntype Result struct {\n\tValue int\n\tErr   error\n}\n\nfunc dispatch(jobs []func() (int, error), limit int) ([]Result, error) {\n\tif limit < 1 {\n\t\treturn nil, errors.New(\"limit must be positive\")\n\t}\n\tresults := make([]Result, len(jobs))\n\tindexes := make(chan int)\n\n\tvar workers sync.WaitGroup\n\tfor range min(limit, len(jobs)) {\n\t\tworkers.Go(func() {\n\t\t\tfor i := range indexes {\n\t\t\t\tvalue, err := jobs[i]()\n\t\t\t\tresults[i] = Result{Value: value, Err: err}\n\t\t\t}\n\t\t})\n\t}\n\tfor i := range jobs {\n\t\tindexes <- i\n\t}\n\tclose(indexes)\n\tworkers.Wait()\n\treturn results, nil\n}\n\nfunc main() {\n\tjobs := []func() (int, error){\n\t\tfunc() (int, error) { return 8, nil },\n\t\tfunc() (int, error) { return 0, errors.New(\"broken signal\") },\n\t\tfunc() (int, error) { return 13, nil },\n\t}\n\tresults, err := dispatch(jobs, 2)\n\tfmt.Println(results, err)\n\t// [{8 <nil>} {0 broken signal} {13 <nil>}] <nil>\n}",
+      "takeaway": "A fixed worker count bounds active work. Index each result by its original job.",
+      "question": "Why does the dispatcher write each result at results[i]?",
+      "options": [
+        "Channel sends always arrive out of order.",
+        "Workers may finish in a different order from job submission.",
+        "WaitGroup reverses the result slice.",
+        "Go requires every slice write to use the channel value."
+      ],
+      "correct": 1,
+      "feedback": "The result position records input order. Worker timing can change without changing the output layout.",
+      "challenge": "Implement dispatch(jobs []func() (int, error), limit int) ([]Result, error). Reject limit below 1 even when there are no jobs. Assume all jobs are non-nil and return normally. Run every job exactly once with at most limit active. Preserve both job return values in input order and continue after a job error. Return a non-nil empty slice for no jobs with a valid limit.",
+      "starter": "package main\n\ntype Result struct {\n\tValue int\n\tErr   error\n}\n\nfunc dispatch(jobs []func() (int, error), limit int) ([]Result, error) {\n\t// Validate the limit, distribute indices, and join all workers.\n\treturn []Result{}, nil\n}\n\nfunc main() {}",
+      "hint1": "Allocate the results and start min(limit, len(jobs)) workers. Send indices through a channel.",
+      "hint2": "Each worker loops over indices. After sending every index, close the channel and wait before returning results.",
+      "debrief": "Use blocking test jobs to control completion order and track the peak active count. Include a failing job and verify that a later job still runs.",
+      "sideQuest": "Add context-aware jobs and define a result for each unstarted index. Decide when cancellation should stop the sender and what happens to in-flight jobs."
+    }
+  ]
+}

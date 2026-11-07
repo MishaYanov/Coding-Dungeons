@@ -1,0 +1,172 @@
+# Chapter 5 Variance Subtyping and Phantom Types
+
+## Why a longer lived reference can fit a shorter use
+
+Suppose a function needs a string for one operation. A string literal, available for the program's lifetime, should be acceptable. The function does not need to exploit the literal's full availability. Rust permits a reference with a sufficiently long validity relationship to be used where a shorter one is required. This is lifetime subtyping.
+
+Variance answers whether that substitution remains legal after the reference is placed inside another type. A shared collection of long lived references can often be viewed through shorter lived references. A mutable slot containing a long lived reference cannot freely be treated as a slot for a shorter lived reference, because a caller might write the shorter reference into it. The outer type's operations determine whether the substitution would preserve its promises.
+
+This is not object oriented subclassing. Rust's ordinary lifetime subtyping and its higher ranked relationships are much narrower than a general hierarchy of user defined data types. A `Dog` is not automatically a subtype of an `Animal` struct. Trait implementation supplies behavior through different mechanisms. Keeping these ideas separate prevents misleading analogies.
+
+```rust
+fn shorten<'a>(text: &'static str) -> &'a str {
+    text
+}
+
+fn main() {
+    let local = String::from("local");
+    let always = shorten("always available");
+    let pair = [local.as_str(), always];
+    assert_eq!(pair[1], "always available");
+}
+```
+
+The function does not shorten the actual allocation's lifetime. It supplies a reference that clients are entitled to use under a shorter contract. The underlying literal still exists. Losing permission to rely on a longer duration is harmless for a reader; it is a restriction on what can be assumed, not a mutation of the referent.
+
+## Covariance preserves the direction
+
+A generic type is covariant in a parameter when a subtype substitution in that parameter passes through the containing type. Shared references are covariant in their lifetime and in their referent type. Many owning collections are covariant in their element type as well. Their public mutation APIs remain safe because mutating the collection requires an exclusive borrow of the particular instantiated type.
+
+```rust
+fn borrow_words<'a>(words: Vec<&'static str>) -> Vec<&'a str> {
+    words
+}
+
+fn main() {
+    let words = vec!["red", "green", "blue"];
+    let shortened = borrow_words(words);
+    assert_eq!(shortened.len(), 3);
+}
+```
+
+This moves the complete vector into a type whose references are usable under a potentially shorter contract. It does not allow a caller retaining a vector of static references to observe arbitrary short references written into that same vector. Ownership of the vector itself transferred. If a shared reference to a vector is shortened, its shared access does not permit inserting a new element.
+
+The distinction between changing an owned value's apparent lifetime and changing a mutable alias's referent type is the heart of variance reasoning. Read operations can safely forget some information. Write operations may need to preserve the original information for other users of the storage.
+
+Variance is inferred for ordinary structs and enums from their fields. You do not annotate a user type as covariant in the way some languages allow. The compiler composes the variance of each field's type, and conflicting uses can make a parameter invariant. Therefore a private field can affect which public conversions compile even if clients never inspect that field.
+
+## Invariance prevents replacing a strong promise with a weak one
+
+An exclusive reference is covariant in its own borrow lifetime but invariant in the type of the value it points to. These are separate parameters. A short reborrow of a mutable integer is ordinary. Reinterpreting a mutable slot that stores `&'static str` as one storing `&'short str` would allow a lasting promise to be overwritten with a temporary one.
+
+```rust,compile_fail
+fn overwrite<'a>(slot: &mut &'static str, incoming: &'a str) {
+    *slot = incoming;
+}
+
+fn main() {
+    let mut slot: &'static str = "permanent";
+    let temporary = String::from("temporary");
+    overwrite(&mut slot, &temporary);
+}
+```
+
+If this were accepted, the caller could keep using `slot` as a static reference after `temporary` had been destroyed. The assignment would hide a short relationship behind a type that promises a long one. Invariance blocks the proposed substitution.
+
+Interior mutable storage has the same issue even when the outer access is shared. `Cell<T>` and `UnsafeCell<T>` are invariant in `T`, because writes can occur through a shared reference to the container. A shared reference to an ordinary immutable slot is a reader; a shared reference to an interior mutable slot can authorize replacement through the container's API.
+
+You can borrow an invariant container for a short operation. Rust 1.98 also permits shortening the borrow lifetime during certain unsizing coercions, such as `Cell<&'long mut i32>` to `Cell<&'short mut dyn Send>`. That coercion leaves the rule for subtyping through `Cell<T>` intact.
+
+An advanced review should identify which parameter is varying before making a claim about a type. Saying mutable references are invariant is incomplete: they are invariant in the referent type and covariant in the reference's own lifetime. That detail is exactly what makes reborrowing useful without allowing invalid replacement.
+
+## Function inputs reverse the direction
+
+A function able to process any short lived string can certainly process a static string. A function accepting only static strings cannot necessarily process a short lived one: it may store its argument somewhere that requires static validity. Function input types therefore introduce contravariant positions. Function results introduce covariant positions.
+
+```rust
+fn length(text: &str) -> usize {
+    text.len()
+}
+
+fn accepts_static_only(operation: fn(&'static str) -> usize) -> usize {
+    operation("permanent input")
+}
+
+fn main() {
+    assert_eq!(accepts_static_only(length), 15);
+}
+```
+
+The `length` function is sufficiently general for this restricted caller. Reading function types as sets of accepted calls can make the reversed direction intuitive: an implementation that accepts more kinds of input can satisfy a client that will provide fewer kinds.
+
+Higher ranked function types add another layer. A `for<'a> fn(&'a str) -> &'a str` must preserve the input and output relationship for each possible chosen lifetime. A function returning only a static string can sometimes satisfy borrowed output uses through shortening, but a function requiring a static input does not become general merely because its output is static. Input requirements and output guarantees must each be checked.
+
+Variance can compose. A function taking a function argument introduces another reversal. Rather than memorizing nested cases, work from the operation: what may the client supply, what may the implementation store, and what promise will another component rely on afterward? This behavioral derivation scales better than counting symbols without understanding them.
+
+## PhantomData records a relationship without storing a value
+
+Some types logically depend on a parameter even when their runtime representation does not contain that parameter directly. An iterator may hold raw pointers into borrowed storage. A typed identifier may contain only an integer but should not mix identifiers from different domains. `PhantomData` lets the type express a relationship that affects checking without allocating a value of that parameter.
+
+```rust
+use std::marker::PhantomData;
+
+struct Id<T> {
+    index: usize,
+    kind: PhantomData<fn() -> T>,
+}
+
+impl<T> Id<T> {
+    fn new(index: usize) -> Self {
+        Self { index, kind: PhantomData }
+    }
+
+    fn index(&self) -> usize {
+        self.index
+    }
+}
+
+enum User {}
+enum Project {}
+
+fn main() {
+    let user = Id::<User>::new(3);
+    let project = Id::<Project>::new(3);
+    assert_eq!(user.index(), project.index());
+}
+```
+
+The marker makes `Id<User>` and `Id<Project>` different types. It does not prove the index is in bounds, prevent an identifier from one user arena being passed to another user arena, or guarantee the referenced record still exists. Those are separate invariants. A generation, arena identity, or validated access operation may be required.
+
+Why use `PhantomData<fn() -> T>` rather than `PhantomData<T>`? The latter models an ownership relationship with `T` for relevant analyses, including automatic thread safety traits. A pure numeric identifier does not own a `T`; requiring `T` to be thread safe merely to transfer its index would often be unnecessary. A function return marker expresses covariance in `T` without pretending to store or own a `T`. The choice should follow the actual logical relationship, not a recipe copied from another crate.
+
+## Phantom lifetimes and borrowing contracts
+
+For a raw pointer based borrowed view, a marker such as `PhantomData<&'a T>` can express that the view is constrained by a shared borrow of `T` for `'a`. It contributes lifetime, variance, and automatic trait relationships. It does not validate the pointer. The constructor must still prove that the pointer refers to an appropriate live allocation, that the length is correct, and that no forbidden mutation occurs while the view is usable.
+
+An invariant lifetime marker can be written using a parameter in both an input and an output position, for example `PhantomData<fn(&'a ()) -> &'a ()>`. This is useful in specialized branded APIs where accidental lifetime shortening would break a type level identity scheme. It is not a universal improvement over covariance. Making a lifetime invariant can unnecessarily reject useful clients if no invariant requires it.
+
+Think of a phantom marker as part of the type's proof vocabulary. It tells the compiler which relationships matter; it does not establish them from runtime facts. A public constructor accepting any raw pointer and any lifetime chosen by the caller remains unsound if it returns a safe reference without requiring proof of validity. The marker does not repair that missing precondition.
+
+The same caution applies to thread safety. Adding a marker that causes a type to lose `Send` or `Sync` can correctly preserve a thread affinity invariant. Choosing a marker that happens to produce convenient automatic traits without understanding why can hide a data race or an unnecessarily restrictive API. Start with the desired ownership and access model, then choose the representation that matches it.
+
+## Variance and destruction
+
+Destruction creates uses that may be less obvious than explicit reads in a function body. A destructor might inspect a stored borrowed value. Rust's drop checking therefore considers whether generic relationships remain valid when destruction occurs. A marker can influence this analysis when a type logically owns values that are represented indirectly.
+
+For ordinary application code, the safest approach is to use real owning fields where possible. A `Vec<T>` already encodes ownership, destruction, variance, and allocation behavior. Replacing it with a raw pointer and a length requires reconstructing all those relationships. `PhantomData<T>` is one necessary piece in some designs, but allocation and cleanup invariants remain the implementation's responsibility.
+
+Avoid assuming every subtle drop checking rule can be summarized as a single phantom table. Compiler rules and unstable escape hatches have details that should be checked against current documentation when implementing low level containers. Stable safe abstractions let most code avoid those details entirely. The advanced skill is knowing which guarantee the existing abstraction already provides and which guarantee a new unsafe layer must reestablish.
+
+When diagnosing an unexpected lifetime error, draw the nested types and mark reading and writing positions. Shared references generally preserve the direction; exclusive referents and interior mutable storage often make it invariant; function inputs reverse it. Then connect the derived rule to a concrete operation that would become possible if the substitution were allowed. That concrete counterexample is the most reliable explanation.
+
+## Exercises
+
+1. Explain why `&mut &'static str` cannot be treated as a mutable slot for an arbitrary local string, even when the outer mutable borrow itself is short.
+
+2. A typed numeric handle does not own, borrow, or access its parameter `T`. What unintended restriction might `PhantomData<T>` impose compared with a function return marker? What guarantees does neither marker provide?
+
+3. A wrapper contains `Cell<&'a str>`. Why is the wrapper invariant in `'a`, and why does borrowing the wrapper for a short time remain possible?
+
+## Reasoned Solutions
+
+1. The outer borrow's duration controls how long the slot is exclusively accessed. The inner static lifetime controls what may remain stored in the slot after that access ends. Allowing a local reference to be written would violate the promise the caller retains about the slot's content. A short write can create a long lasting invalid state.
+
+2. An ownership marker participates in automatic trait and ownership analyses as though the type owns a `T`, potentially making the numeric handle unavailable across threads when `T` is not thread safe. A function return marker models a different relationship. Neither checks index validity, record identity, generation freshness, or arena membership.
+
+3. `Cell` can replace its content through shared access, so shortening the inner lifetime would permit writing a temporary reference into storage otherwise expected to hold a longer reference. Invariance prevents changing that embedded relationship. A short borrow of the wrapper does not change the type of its stored reference and is therefore a different, ordinary operation.
+
+## Further Reading
+
+- [The Rust Reference on subtyping and variance](https://doc.rust-lang.org/reference/subtyping.html) gives the language's variance relationships.
+- [The Rust standard library PhantomData documentation](https://doc.rust-lang.org/std/marker/struct.PhantomData.html) explains marker effects and intended uses.
+- [The Rustonomicon on drop checking](https://doc.rust-lang.org/nomicon/dropck.html) discusses destruction related constraints for unsafe abstractions.

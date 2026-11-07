@@ -1,0 +1,182 @@
+# Chapter 20 Locks Protect Invariants Over Time
+
+A mutex is often introduced as permission to mutate shared data. That description misses the hardest part of using it well. A mutex protects a relationship between operations over an interval. The interval begins when a guard is acquired and ends when the guard is dropped. During that interval, intermediate states may exist that other threads must not observe. Good lock design starts by naming those states and the invariant that must hold whenever the guard becomes available to another thread.
+
+Suppose an account has an available balance and a reserved balance. Protecting each number with a separate mutex makes each update individually race free, but a reservation changes both values. A reader that observes the fields separately can see an impossible combination. Thread safety at the field level does not imply consistency at the operation level. The correct synchronization boundary is usually the smallest boundary containing the entire invariant.
+
+## Guards Define the Critical Section
+
+Rust makes lock ownership visible as a value. A `MutexGuard` gives access to the protected data and releases the lock when dropped. This makes lexical blocks useful for expressing critical sections, but a guard can also remain alive longer than expected because it is stored in a local or retained inside a larger expression.
+
+Consider a queue whose lock is needed only to remove one item. The following complete example deliberately moves expensive processing outside the critical section.
+
+```rust
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+fn take_job(queue: &Mutex<VecDeque<String>>) -> Option<String> {
+    let mut jobs = queue.lock().unwrap();
+    jobs.pop_front()
+}
+
+fn process(job: String) -> usize {
+    job.chars().filter(|c| !c.is_whitespace()).count()
+}
+
+fn main() {
+    let queue = Mutex::new(VecDeque::from([
+        String::from("parse one"),
+        String::from("parse two"),
+    ]));
+    let job = take_job(&queue).unwrap();
+    assert_eq!(process(job), 8);
+    assert_eq!(queue.lock().unwrap().len(), 1);
+}
+```
+
+The helper returns owned data. It does not return a reference into the queue, so it can release the guard before processing begins. This is more than a performance adjustment: callbacks or downstream work cannot accidentally reenter the queue while its lock is held. The API's ownership decision enforces a useful concurrency boundary.
+
+Returning a guard is sometimes appropriate, but then the caller controls the critical section. That exposes lock ordering and contention to code outside the abstraction. A library should make that tradeoff consciously. Methods such as `with_state` also expose a risk: user supplied closures can block, panic, recursively call the library, or invoke foreign code while the guard is held. A closure API does not make the critical section inherently short.
+
+## Atomic Operations at the Domain Level
+
+The following reservation model uses a single lock to protect a two field invariant. The calculation validates failure conditions before mutating state.
+
+```rust
+use std::sync::Mutex;
+
+#[derive(Debug, PartialEq)]
+struct Balance {
+    available: u64,
+    reserved: u64,
+}
+
+struct Account {
+    balance: Mutex<Balance>,
+}
+
+impl Account {
+    fn reserve(&self, amount: u64) -> Result<(), &'static str> {
+        let mut state = self.balance.lock().unwrap();
+        let available = state.available.checked_sub(amount)
+            .ok_or("insufficient balance")?;
+        let reserved = state.reserved.checked_add(amount)
+            .ok_or("reserved balance overflow")?;
+        state.available = available;
+        state.reserved = reserved;
+        Ok(())
+    }
+
+    fn snapshot(&self) -> (u64, u64) {
+        let state = self.balance.lock().unwrap();
+        (state.available, state.reserved)
+    }
+}
+
+fn main() {
+    let account = Account {
+        balance: Mutex::new(Balance {
+            available: 100,
+            reserved: 0,
+        }),
+    };
+    account.reserve(30).unwrap();
+    assert_eq!(account.snapshot(), (70, 30));
+    assert!(account.reserve(80).is_err());
+    assert_eq!(account.snapshot(), (70, 30));
+}
+```
+
+There are two forms of atomicity here. The mutex prevents another lock respecting participant from observing the update halfway through. The validation order ensures that a reported ordinary error leaves the old state unchanged. The lock alone does not provide the second guarantee. If the function subtracted first and then discovered overflow, returning an error could expose a damaged account after guard release.
+
+The code uses `unwrap` on lock acquisition, choosing to propagate poisoning as a panic. A production application might instead expose a domain failure, restore state, or terminate the affected component. The right choice depends on whether the protected state can be reconstructed and what callers may safely assume after an interrupted operation.
+
+## Poisoning Is Evidence of Possible Damage
+
+The standard mutex usually becomes poisoned when a thread panics while holding its guard. Poisoning signals that the invariant may have been interrupted. It is advisory: the error contains access to the guard, and code can choose to inspect or repair the data. It is not a memory safety mechanism, and unsafe code must not rely on poisoning as the sole barrier against invalid access. There are cases in which panic detection does not behave like a simple universal flag.
+
+An important distinction is between a valid Rust value and a valid domain state. A vector can remain memory safe while its entries violate application rules. Recovering a poisoned guard is memory safe through the standard API, but using its contents without checking may be logically wrong. Conversely, a panic might occur after all state changes have completed, leaving the invariant intact. Poisoning conservatively reports uncertainty rather than diagnosing the exact stage of failure.
+
+Here is a complete recovery example for a reconstructible cache. The recovery policy discards cached values rather than pretending an interrupted mutation was completed.
+
+```rust
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let cache = Arc::new(Mutex::new(vec![1_u32, 2, 3]));
+    let other = Arc::clone(&cache);
+    let result = thread::spawn(move || {
+        let mut values = other.lock().unwrap();
+        values.push(99);
+        panic!("cache rebuild interrupted");
+    }).join();
+    assert!(result.is_err());
+
+    let mut values = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            guard.clear();
+            cache.clear_poison();
+            guard
+        }
+    };
+    values.push(7);
+    assert_eq!(&*values, &[7]);
+}
+```
+
+Clearing the poison flag is justified by a concrete repair operation. It should not be a habitual response added to every lock error. An authoritative financial ledger cannot be repaired by clearing its vector. A cache can often be invalidated because its source of truth lives elsewhere. This relationship between ownership, authority, and reconstruction determines the recovery strategy.
+
+## Lock Ordering and Reentrancy
+
+Deadlock is a progress failure, not necessarily a data race. Two threads may each hold one valid guard and wait indefinitely for the other's lock. Rust's type system prevents many invalid references but does not infer an application's global lock order.
+
+Assign an order to locks that may be acquired together. For account transfers, one common rule is to lock accounts by a stable account identifier. The identifier must be unique within the synchronization domain; an ordering that compares equal for distinct locks needs a defined tie breaker. The same object case must be handled before trying to lock the same mutex twice.
+
+Reentrant acquisition can arise without an obvious second `lock` in the same function. A logging callback can consult shared state. A destructor can access a registry. A notification hook can call back into the object that invoked it. Therefore, avoiding user code under a lock is a useful design rule when feasible. Build an owned notification while holding the guard, release the guard, then deliver it.
+
+Releasing the guard before a callback introduces a new semantic question: the state may change again before the callback runs. Include a version or event identifier if observers need to relate the notification to a particular transition. A short critical section is beneficial only when its resulting observation model is clear.
+
+`try_lock` does not solve lock ordering automatically. Repeated failed attempts can create livelock or starvation. A retry loop needs a scheduling policy and a reason it will eventually make progress. Adding arbitrary sleeps can hide contention during development while leaving the protocol unspecified.
+
+## Reader Writer Locks Have a Workload Contract
+
+An `RwLock` permits multiple readers or one writer. That can improve throughput when read operations are substantial, mutation is uncommon, and the implementation's behavior fits the workload. It can also be slower than a mutex when reads are tiny or contention patterns make bookkeeping dominant. The standard library does not promise a universal reader or writer priority policy; relying on one across platforms is a portability error.
+
+Read access must actually be read access to the protected invariant. A read guard may expose a payload containing other interior mutability, but that payload needs its own synchronization rules. A cache lookup that updates recency counters might not fit the simple many readers model unless those counters are independently synchronized or the design tolerates approximate accounting.
+
+Upgrading a read lock to a write lock is another source of subtle bugs. Dropping the read guard and acquiring a write guard creates an interval in which another thread can change the state. Recheck the condition after obtaining exclusive access. Keeping the read guard and trying to acquire a write guard can deadlock; do not assume implicit upgrade support.
+
+Snapshotting is an alternative. A reader briefly clones an `Arc` to an immutable state, then traverses that state without holding a central lock. Writers build a new version and replace the current one. This moves cost to allocation and retained versions. It is attractive when reads are long and stable snapshots are useful, but old snapshots can retain substantial memory. The synchronization primitive is only one part of the resource model.
+
+## Condition Variables Protect Predicates
+
+A condition variable waits for a predicate protected by a mutex. The notification itself is not the state. A consumer should loop while the queue is empty and the service remains open, because wakeups may be spurious and another consumer may remove the item first. The predicate must be checked while holding the same mutex that protects the corresponding state transition.
+
+The usual sequence is: acquire the guard, inspect the predicate, wait if necessary, and inspect again after waking. Waiting atomically releases the mutex and later reacquires it. This connects the decision to sleep with the producer's change to the protected state. Checking a separate boolean outside the lock and then waiting creates a lost notification window.
+
+Shutdown belongs in the predicate. A waiter that asks only whether a queue is nonempty can remain blocked forever after the last producer exits. A useful predicate is often `queue is nonempty OR service is closed`. A notification wakes the consumer so that it can discover either reason to stop waiting.
+
+## Exercises
+
+1. Two counters represent free slots and occupied slots in a fixed capacity pool. Each counter has its own mutex. Explain why a snapshot can violate the capacity invariant without any data race, and redesign the state.
+
+2. A method locks state, updates it, and invokes an observer closure before releasing the guard. Identify two progress or correctness problems. Propose a notification design that makes the timing explicit.
+
+3. A read lock finds a missing cache entry. The code releases the read guard, acquires a write guard, and inserts an expensive value unconditionally. Explain the race and a reasonable repair.
+
+## Reasoned Solutions
+
+1. A reservation updates both counters, but separate lock acquisitions allow a reader to combine one old value with one new value. Put the counters in one struct protected by one mutex and take snapshots under a single guard. Alternatively derive one counter from capacity and the other counter, reducing the number of independent facts that must remain synchronized.
+
+2. The observer can reenter the object and deadlock, or perform slow work that blocks unrelated users. It can also panic while the invariant is in a state not designed for interruption. Construct an owned event containing the transition's version while locked, release the guard, then invoke the observer. Document that later state may already exist when the event is delivered, and include ordering machinery if observers require stronger delivery guarantees.
+
+3. Another writer can populate the entry during the gap. Recheck under the write guard and use the existing entry if present. If constructing the value is expensive, decide whether duplicate speculative construction is acceptable or whether a per entry initialization protocol is needed. Holding the global write guard during construction avoids duplication but can serialize unrelated keys.
+
+## Further Reading
+
+- [Mutex](https://doc.rust-lang.org/std/sync/struct.Mutex.html) documents guard behavior and the limits of poisoning.
+- [RwLock](https://doc.rust-lang.org/std/sync/struct.RwLock.html) describes reader and writer access and platform dependent priority.
+- [Condvar](https://doc.rust-lang.org/std/sync/struct.Condvar.html) documents predicate loops and spurious wakeups.

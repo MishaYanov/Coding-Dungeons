@@ -1,0 +1,163 @@
+# Appendix B A Glossary of Relationships
+
+These entries emphasize the relationship a term describes. The topic index points to chapters that develop the corresponding rules, examples, and limitations.
+
+## Address Sensitive State
+
+A state whose correctness depends on a value remaining at a particular memory location. Self references and intrusive links are examples. Pinning can support an address-stability contract, but the implementation must still establish and preserve the relevant invariant.
+
+## Affine Ownership
+
+A useful description of ownership that permits a value to be consumed at most once through a particular noncopyable binding while also allowing it to be discarded. Rust does not generally require every value to be used exactly once or every destructor to execute.
+
+## Aliasing
+
+Multiple access paths that can reach overlapping storage. Whether particular accesses are permitted depends on reference and pointer rules, interior mutability, liveness, and the operations performed. The mere existence of two addresses is not a complete aliasing analysis.
+
+## Associated Type
+
+A type selected by an implementation of a trait for a particular implementation relationship. It lets an interface describe connected types, such as an iterator and its item, without making every use choose an independent type parameter.
+
+## Auto Trait
+
+A trait whose implementation is often derived structurally from a type's components, subject to the trait's rules and explicit implementations. `Send`, `Sync`, and `Unpin` are central examples. Auto-trait behavior can become part of a public type's compatibility surface.
+
+## Borrow
+
+Temporary access to a value under constraints that preserve valid use. A borrow relates the access to an owner and to potentially conflicting operations. It does not transfer the owner's ordinary responsibility for the borrowed resource.
+
+## Capability
+
+A value or access relationship that grants a particular operation. An exclusive reference grants access under exclusivity constraints; a typestate value may grant permission to send protocol data. The interpretation is useful only when construction and duplication preserve the intended authority.
+
+## Coherence
+
+The set of rules that allows trait implementation selection to remain unambiguous across crates. Overlap checks and orphan rules shape which implementations may exist. A broad implementation can restrict future implementation choices even when its current body is small.
+
+## Contravariance
+
+A relationship in which substituting a subtype reverses direction through a type constructor. Function argument positions provide an important example. Variance describes permitted substitutions; it does not mean the compiler can arbitrarily lengthen the lifetime of actual storage.
+
+## Covariance
+
+A relationship in which subtype substitution is preserved through a type constructor. Shared references are covariant over relevant parameters. This supports shortening a usable lifetime when appropriate, while preserving the requirement that the underlying value remains valid.
+
+## Drop Check
+
+Compiler analysis that considers whether borrowed data may still be accessed when an owning value's destructor runs. The fact that ordinary methods no longer use a reference does not always end the relationship relevant to destruction.
+
+## Drop Flag
+
+A conceptual or implementation mechanism for tracking whether a place currently contains an initialized value requiring destruction. Conditional initialization and partial moves require cleanup behavior to depend on which values actually exist at the cleanup point.
+
+## Dyn Compatibility
+
+The conditions under which a trait can support a trait-object interface. Erased dispatch must have enough information to invoke permitted methods without knowing the concrete implementing type. Some trait operations cannot be represented through that interface.
+
+## Erasure
+
+Hiding a concrete type behind an interface that preserves selected operations and bounds. A trait object erases the implementor while retaining its trait contract, associated choices, lifetime constraints, and requested auto traits. Erasure is a design boundary rather than the absence of types.
+
+## Exclusive Access
+
+Access whose validity depends on restricting conflicting access paths for the relevant duration. `&mut T` is the principal safe-language expression of this relationship. Exclusivity can matter even when an operation performs no write.
+
+## Future
+
+A value representing a computation that can be polled toward completion. It may retain local state and borrows between polls. Creating a future does not generally execute its async body to completion or assign it an operating-system thread.
+
+## Generic Associated Type
+
+An associated type that has its own generic parameters. A lending interface can use a lifetime parameter to connect each returned item to the particular borrow of the producer used by that call.
+
+## Happens Before
+
+An ordering relationship used to reason about effects across threads, assembled from the relevant sequencing and synchronization rules. Atomicity alone does not establish every required edge. An ordering proof must identify the actual operations that publish and observe state.
+
+## Higher Ranked Bound
+
+A bound quantified over a family of lifetimes, commonly written with `for<'a>`. It can require a callback or trait relationship to work for every lifetime selected under that quantification rather than one lifetime chosen by the caller.
+
+## Interior Mutability
+
+Mutation made available through shared access under an abstraction's rules. `UnsafeCell` supports the core language exception, while types such as `Cell`, `RefCell`, and synchronization primitives impose different safe access protocols. Shared access does not thereby authorize arbitrary unsynchronized mutation.
+
+## Invariance
+
+A relationship that does not permit subtype substitution through the relevant parameter. Mutable access and interior-mutability representations often require invariance over stored types so one lifetime or type choice cannot be replaced by an incompatible one.
+
+## Lending
+
+An interface pattern in which an output borrows from the producer's current access, often preventing another operation while that output remains in use. It supports reusable internal storage whose contents cannot safely back several simultaneously retained items.
+
+## Lifetime Bound
+
+A constraint on which borrowed data a type or reference may contain and how long it may be used. A lifetime annotation expresses a relationship; it does not allocate storage, extend a local variable's existence, or run a destructor.
+
+## Monomorphization
+
+Generating specialized code for concrete generic instantiations. It can expose optimization opportunities and increase code size or compilation work. The resulting machine-code cost depends on optimization and usage rather than on generic syntax alone.
+
+## Nonlexical Lifetime
+
+A borrow-analysis behavior in which relevant uses and control-flow constraints can determine the borrow's duration more precisely than the enclosing lexical block. It explains why an owner can sometimes be mutated after a reference's last use within the same block.
+
+## Pinning
+
+A contract that constrains movement of a pointee once the relevant promise is established, including obligations around destruction. Moving a pinned pointer handle is different from moving its pointee. Projection determines which fields participate in structural pinning.
+
+## Place
+
+An expression category describing a storage location, such as a local variable, field, or indexed element. Moves, borrows, assignments, and partial initialization operate on places. Distinguishing a place from a produced value clarifies many ownership rules.
+
+## Poisoning
+
+A synchronization mechanism that records a possible invariant interruption after a panic while protected state is accessed. It is advisory evidence for a recovery decision. Clearing or ignoring poison does not itself repair the application's invariant.
+
+## Provenance
+
+Information associated with pointers that concerns their origin and permitted relationship to allocations and accesses. An address alone is not a complete description of permission to dereference. Exact pointer operations must follow their documented contracts and Rust's evolving memory-model requirements.
+
+## Reborrow
+
+A borrow created through an existing reference, often with a shorter usable duration. It can temporarily grant access while restricting use of the original reference. This allows mutable references to participate in repeated calls without being permanently consumed each time.
+
+## Representation
+
+The layout and ABI-related choices for values, including size, alignment, field placement, and discriminants where specified. A representation attribute provides particular guarantees; it does not automatically validate bytes or make an arbitrary Rust type safe for every foreign interface.
+
+## Sound Abstraction
+
+An abstraction whose safe use cannot cause undefined behavior when its unsafe implementation's obligations and documented unsafe caller contracts are respected. Soundness is stronger than passing tests and different from being free of ordinary logic errors.
+
+## Structural Pinning
+
+A choice that a field participates in its enclosing type's pinning guarantee. Exposing a pinned projection commits the implementation to preserving that relationship across mutation, destruction, and `Unpin` behavior. It is not an automatic property of every field.
+
+## Subtyping
+
+A relationship permitting one type to be used where another is required under language rules. Lifetime subtyping and variance are important in Rust. Subtyping should not be confused with inheritance of data fields or arbitrary implicit conversion.
+
+## Typestate
+
+Representing a resource's protocol phase through types so different operations are available in different phases. Consuming transitions can prevent reuse of an old capability. Runtime state machines remain useful when states must be stored or selected dynamically.
+
+## Undefined Behavior
+
+Behavior outside the program's permitted language and library contracts, invalidating ordinary reasoning about the resulting execution. Unsafe blocks do not make undefined behavior acceptable. Preventing it requires satisfying all relevant validity, access, lifetime, concurrency, and boundary obligations.
+
+## Unpin
+
+An auto trait indicating that a type does not need the pinning restriction for soundness. It allows safe pinned access to recover ordinary mutable access in applicable APIs. It concerns the pointee's requirements rather than whether a pointer handle itself can move.
+
+## Validity
+
+The requirements for bytes and metadata to constitute an allowed value of a type. A valid allocation and sufficient size do not imply a valid `bool`, reference, enum, or string. Creating a typed value may impose obligations before any later semantic use.
+
+## Waker
+
+A handle through which a task can be scheduled for another poll after relevant progress becomes possible. A wake is a notification, not the result itself and not necessarily a one-to-one request for an immediate poll. Correct registration must avoid lost notifications.
+
+## Zero Sized Type
+
+A type whose values require zero bytes of storage, though the type still has alignment and semantic behavior. Such values can participate in ownership, destruction, and generic algorithms. Zero size does not justify ignoring the contracts of references, pointers, or allocators.

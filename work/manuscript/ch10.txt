@@ -1,0 +1,237 @@
+# Chapter 10 Dispatch and Type Erasure
+
+## Choose Where Concrete Types Stop Mattering
+
+A generic function preserves the concrete type of its argument through type checking and, ordinarily, through monomorphization. A trait object deliberately forgets that identity and retains a selected interface. This is an architectural choice about how far implementation details travel through a program. Runtime cost is one consequence, but compile time, binary size, dependency boundaries, and ownership are equally relevant.
+
+Imagine an application that loads several output destinations from configuration. One destination writes to a file, another buffers in memory, and another forwards to an existing service. The application needs to store them together and choose among them at runtime. A generic parameter cannot vary independently for every element of one homogeneous vector. An enum can represent a closed set of alternatives. A trait object can represent an open set whose members satisfy one dyn-compatible contract.
+
+The open set is not dynamic linking by itself. A boxed trait object inside a program does not establish a stable plugin ABI, and Rust trait object layout is not a portable foreign interface. Type erasure solves a language-level representation problem: callers can own or borrow values without carrying their concrete Rust types in every surrounding signature.
+
+Start by asking which operations remain meaningful after identity is forgotten. Construction, cloning into the same concrete type, and arbitrary generic operations often need information that the erased interface does not retain. Designing the erased boundary first prevents later surprises when a seemingly ordinary trait refuses to become dyn Trait.
+
+## Static Dispatch Preserves Optimization Opportunities
+
+For a generic function, rustc can generate specialized machine code for the concrete instantiations that are needed. This makes implementation details available to optimization. Calls may inline, constants may propagate, and abstractions may disappear. None of these optimizations is guaranteed by writing a generic signature. Large generic bodies can also multiply generated code and increase compilation work.
+
+```rust
+trait Metric {
+    fn observe(&mut self, value: u64);
+}
+
+#[derive(Default)]
+struct Total(u64);
+
+impl Metric for Total {
+    fn observe(&mut self, value: u64) {
+        self.0 += value;
+    }
+}
+
+fn record<M: Metric>(metric: &mut M, values: &[u64]) {
+    for &value in values {
+        metric.observe(value);
+    }
+}
+
+fn main() {
+    let mut metric = Total::default();
+    record(&mut metric, &[3, 5, 8]);
+    assert_eq!(metric.0, 16);
+}
+```
+
+The loop can be compiled with knowledge of Total. If the abstraction is used in a hot inner loop, that visibility may matter. If the loop spends its time writing to a slow device, specialization may have no measurable effect. Performance reasoning should begin with the work performed per call, the frequency of calls, and the optimizer's ability to see surrounding code.
+
+Argument-position impl Trait offers similar generic behavior with different naming ergonomics. A parameter written as impl Metric accepts one caller-chosen concrete type for that parameter. It does not create a trait object. Return-position impl Trait instead hides one implementation-chosen concrete type behind declared bounds. Different branches must still agree on that hidden type unless the branches themselves construct a shared representation.
+
+## Dynamic Dispatch Retains a Method Contract
+
+A reference to dyn Metric carries access to the underlying value and information needed to dispatch the trait's methods. It is useful to think of this as data plus a method table, while avoiding assumptions about a stable raw layout. Calling a method selects the implementation at runtime. The data may live on the stack, in a Box, or inside another owner; dyn does not itself imply heap allocation.
+
+```rust
+trait Metric {
+    fn observe(&mut self, value: u64);
+    fn current(&self) -> u64;
+}
+
+struct Maximum(u64);
+
+impl Metric for Maximum {
+    fn observe(&mut self, value: u64) {
+        self.0 = self.0.max(value);
+    }
+
+    fn current(&self) -> u64 { self.0 }
+}
+
+fn record(metric: &mut dyn Metric, values: &[u64]) {
+    for &value in values {
+        metric.observe(value);
+    }
+}
+
+fn main() {
+    let mut maximum = Maximum(0);
+    record(&mut maximum, &[3, 5, 8]);
+    let view: &dyn Metric = &maximum;
+    assert_eq!(view.current(), 8);
+}
+```
+
+This example performs no allocation for the trait object. The maximum remains a local variable. The reference erases its concrete type for the duration of the call. Ownership stays with the caller, and the borrow checker continues to enforce access restrictions across the erased boundary.
+
+Box<dyn Metric> adds owned indirection and usually an allocation for a nonzero-sized concrete value. It lets a container store heterogeneous implementations with one known outer size. The box owns its concrete allocation and invokes the appropriate destructor when dropped. Type erasure therefore need not erase destruction behavior, although it hides the concrete destructor from ordinary source-level callers.
+
+## Dyn Compatibility Follows from What a Caller Knows
+
+A trait object caller knows the erased interface and any specified associated types. It does not know the concrete Self. A dispatchable method cannot require the caller to manufacture an arbitrary concrete Self or select from infinitely many type-specialized method instances. These constraints explain many dyn compatibility rules more usefully than memorizing an error list.
+
+A method returning Self needs a concrete result layout. A method with a type parameter would require generic dispatch that ordinary trait object method tables do not provide. An associated constant is not an instance method selected through a receiver. An async method or a method returning impl Trait introduces an opaque return representation that the ordinary erased contract does not specify.
+
+Some methods can remain on the trait while being excluded from the object interface with Self: Sized. The trait can then provide both an erased operational surface and concrete-only conveniences.
+
+```rust
+trait Destination {
+    fn write(&mut self, bytes: &[u8]);
+
+    fn empty() -> Self
+    where
+        Self: Sized;
+
+    fn write_value<T: AsRef<[u8]>>(&mut self, value: T)
+    where
+        Self: Sized,
+    {
+        self.write(value.as_ref());
+    }
+}
+
+struct Buffer(Vec<u8>);
+
+impl Destination for Buffer {
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+
+    fn empty() -> Self { Self(Vec::new()) }
+}
+
+fn main() {
+    let mut buffer = Buffer::empty();
+    buffer.write_value("hello");
+    let destination: &mut dyn Destination = &mut buffer;
+    destination.write(b" world");
+    assert_eq!(buffer.0, b"hello world");
+}
+```
+
+The erased interface includes write. It excludes empty and write_value. This is a practical design when generic convenience can delegate to a small, stable core operation. It also keeps the runtime interface understandable: callers passing through dyn pay for one operation that they could already express without knowing Self.
+
+Associated types are compatible with many trait objects when their values are specified. A dyn Iterator<Item = u8> hides the iterator implementation while preserving the item representation. An unspecified associated type would leave the caller unable to know what next returns. Generic associated types impose additional restrictions on dyn compatibility; do not assume that replacing one associated type with a family of types preserves an existing trait object API.
+
+## A Complete Heterogeneous Routing Boundary
+
+Suppose a router accepts a sequence of sinks selected from configuration. Each sink must receive the same byte message. The router should not become generic over the number or concrete types of sinks. Its boundary can own erased sinks while exposing concrete implementations for testing.
+
+```rust
+trait Sink {
+    fn send(&mut self, message: &[u8]) -> Result<(), String>;
+}
+
+struct MemorySink {
+    messages: Vec<Vec<u8>>,
+}
+
+impl Sink for MemorySink {
+    fn send(&mut self, message: &[u8]) -> Result<(), String> {
+        self.messages.push(message.to_vec());
+        Ok(())
+    }
+}
+
+struct LimitedSink {
+    remaining: usize,
+}
+
+impl Sink for LimitedSink {
+    fn send(&mut self, message: &[u8]) -> Result<(), String> {
+        if message.len() > self.remaining {
+            return Err("capacity exhausted".into());
+        }
+        self.remaining -= message.len();
+        Ok(())
+    }
+}
+
+struct Router<'a> {
+    sinks: Vec<Box<dyn Sink + 'a>>,
+}
+
+impl<'a> Router<'a> {
+    fn new(sinks: Vec<Box<dyn Sink + 'a>>) -> Self {
+        Self { sinks }
+    }
+
+    fn broadcast(&mut self, message: &[u8]) -> Vec<String> {
+        let mut failures = Vec::new();
+        for sink in &mut self.sinks {
+            if let Err(error) = sink.send(message) {
+                failures.push(error);
+            }
+        }
+        failures
+    }
+}
+
+fn main() {
+    let memory = MemorySink { messages: Vec::new() };
+    let limited = LimitedSink { remaining: 3 };
+    let mut router = Router::new(vec![
+        Box::new(memory),
+        Box::new(limited),
+    ]);
+    assert!(router.broadcast(b"abc").is_empty());
+    assert_eq!(router.broadcast(b"x").len(), 1);
+}
+```
+
+The lifetime parameter is deliberate. Box<dyn Sink> in an ordinary type position commonly implies a static object lifetime bound. That does not mean the box lives forever; it means the hidden value cannot contain nonstatic borrows. Router<'a> permits sink implementations that borrow configuration or an external buffer for at least 'a. The router cannot outlive those borrows.
+
+The failure policy is also visible. Broadcasting continues after a failure and returns all failure strings. A fail-fast policy would produce different external effects because later sinks would not be called. Dynamic dispatch does not determine this behavior. Good abstraction design keeps dispatch choice separate from consistency and recovery policy.
+
+## Erasure Can Happen Once Rather Than Everywhere
+
+A large generic pipeline may propagate dozens of concrete adapter types into high-level code. Erasing at a coarse boundary can reduce the amount of code that depends on those types. Conversely, erasing each tiny operation can introduce frequent indirect calls and lose opportunities to combine work. The useful boundary is often a batch operation: process a buffer, execute a request, or produce a block of results.
+
+An enum is often preferable when the implementation set is intentionally closed. It permits direct matching, carries variant-specific data, and can make exhaustive handling part of the design. A trait object is attractive when independently written implementations should participate without editing the central enum. These choices express different extension models, not simply fast versus slow.
+
+Type erasure also affects discoverability. Once a value is dyn Sink, methods unique to MemorySink are unavailable. Downcasting can recover concrete identity when an Any-based interface permits it, but routine downcasting suggests the erased interface may not match what callers actually need. Before adding a downcast, ask whether the operation belongs on the trait, whether the caller should retain a separate typed handle, or whether the set should be an enum.
+
+## Ownership and Thread Bounds Survive Erasure
+
+A Box<dyn Sink + Send> promises that the hidden value can be transferred between threads. A Box<dyn Sink> makes no such promise. Erasure does not automatically retain every auto trait of the original concrete value. Include the capabilities that the boundary requires in the object type.
+
+Similarly, Arc<dyn Sink + Send + Sync> can share ownership, but the methods still determine access. A send method taking &mut self cannot be called through an ordinary shared Arc without a synchronization or ownership strategy. Wrapping a value in Arc does not make exclusive mutation available. The receiver contract remains in force after both reference counting and type erasure.
+
+When comparing implementations, measure the complete design. A boxed sink may allocate once during startup, making allocation irrelevant to steady-state throughput. An enum may increase every element's size to fit its largest variant, affecting cache behavior. A generic pipeline may create enough specialized code to pressure instruction caches. Dispatch is one variable in a representation problem.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A trait has fn duplicate(&self) -> Self. A library wants to store Box<dyn Trait>. What design choices are available?
+
+Solution. Exclude duplicate from dynamic dispatch with a Self: Sized bound, or provide an erased operation returning Box<dyn Trait> with an explicit ownership and lifetime policy. Another choice is a separate cloning trait designed for erased values. Replacing Self with a box changes semantics and allocation behavior, so it should be a deliberate API decision.
+
+Exercise 2. Does changing a parameter from &mut T where T: Sink to &mut dyn Sink require heap allocation?
+
+Solution. No. The reference can point to a concrete local value, as in the Maximum example. Allocation depends on the owner and storage representation. The change affects dispatch and the information available to optimization, while borrowing and the underlying value's location can remain the same.
+
+Exercise 3. A heterogeneous registry repeatedly downcasts every object to one of four known types. Should it keep using trait objects?
+
+Solution. A closed enum is likely clearer if all valid cases are centrally known and variant-specific behavior is essential. Trait objects still fit if external extensions matter and downcasting is occasional optional behavior. The deciding question is whether the primary contract is a shared capability or a closed classification.
+
+## Further Reading
+
+- [Rust Reference on dyn compatibility](https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility) specifies which trait items participate in trait objects.
+- [Rust Reference on trait objects](https://doc.rust-lang.org/reference/types/trait-object.html) describes erased trait types and object lifetime bounds.
+- [Standard library dyn keyword](https://doc.rust-lang.org/std/keyword.dyn.html) introduces dispatch and representation tradeoffs.

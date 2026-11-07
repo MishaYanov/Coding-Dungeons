@@ -1,0 +1,215 @@
+# Chapter 7 Interior Mutability as a Controlled Access Policy
+
+## Shared access can include an update protocol
+
+A shared reference normally rules out mutation of ordinary bytes reachable through it while the relevant shared access remains active. Interior mutability provides a deliberate exception through types built around `UnsafeCell`. This permits useful contracts such as a cache updated during a read, a counter changed through a shared handle, or a dynamically checked borrow of a graph node.
+
+The exception is local and structured. Wrapping one field in a cell does not make every neighboring field mutable through shared access. `UnsafeCell` relaxes the shared immutability rule for its contents; it does not make simultaneous conflicting exclusive references valid, make raw pointers automatically safe, or provide synchronization between threads.
+
+The important design question is which policy replaces ordinary exclusive access. `Cell` moves values in and out without lending ordinary references to the stored value. `RefCell` tracks active borrowing at runtime and returns guards. A mutex supplies synchronized access across threads. Atomic types permit specific concurrent operations with memory ordering rules. These are different policies, not progressively stronger forms of a single universal tool.
+
+Choose the narrowest policy that matches the invariant. A counter does not usually need a dynamically borrowed struct. A field that can be swapped as a whole may not need a guard. A component already accessed exclusively may need no interior mutability at all.
+
+## Cell avoids references to the changing value
+
+For `Copy` values, `Cell::get` returns a copy and `set` replaces the stored value. Because clients do not receive a shared reference to the changing inner value, the API can safely replace it through a shared reference to the cell. For some noncopyable values, operations such as `take` and `replace` similarly transfer ownership rather than lend a reference.
+
+```rust
+use std::cell::Cell;
+
+struct Meter {
+    reads: Cell<u64>,
+    value: String,
+}
+
+impl Meter {
+    fn value(&self) -> &str {
+        let count = self.reads.get();
+        self.reads.set(count.saturating_add(1));
+        &self.value
+    }
+
+    fn reads(&self) -> u64 {
+        self.reads.get()
+    }
+}
+
+fn main() {
+    let meter = Meter {
+        reads: Cell::new(0),
+        value: String::from("payload"),
+    };
+    assert_eq!(meter.value(), "payload");
+    assert_eq!(meter.value(), "payload");
+    assert_eq!(meter.reads(), 2);
+}
+```
+
+The returned string borrows `value`, whose bytes do not change. The counter's update is confined to another field's policy. Saturating arithmetic makes the counter's overflow behavior explicit; instrumentation should not unexpectedly panic because it exceeded an integer limit.
+
+This component is not automatically shareable through `&Meter` across threads because `Cell` is not `Sync`. The compiler prevents using this unsynchronized counter as if it were an atomic. If cross thread observations are required, choose an atomic counter or synchronized owner and define whether counts need exact ordering with the payload operation.
+
+For a noncopyable value, a cell can implement a temporary ownership slot. Taking an `Option<String>` leaves `None`, so the container always remains a valid value. This is useful when moving a callback or resource out before invoking other code. The absence state must still have a clear meaning, especially during reentrancy.
+
+```rust
+use std::cell::Cell;
+
+fn main() {
+    let pending = Cell::new(Some(String::from("work")));
+    let work = pending.take().unwrap();
+    assert!(pending.take().is_none());
+    pending.set(Some(work.to_uppercase()));
+    assert_eq!(pending.take().as_deref(), Some("WORK"));
+}
+```
+
+Nothing guarantees restoration if later code panics or abandons the operation. The valid `None` state prevents an invalid representation, but the domain may require a state enum distinguishing empty, running, failed, and completed work. Interior mutability does not remove the need to model interrupted transitions.
+
+## RefCell turns borrowing into a runtime protocol
+
+`RefCell<T>` permits shared access to a container while dynamically enforcing compatible inner borrows. A shared borrow returns a `Ref<T>` guard, and an exclusive borrow returns `RefMut<T>`. The guards retain the runtime borrow state until they are dropped. An incompatible request through the panicking API causes a panic; the `try_borrow` variants report failure instead.
+
+This is not a runtime version of data race prevention. `RefCell` is designed for single threaded sharing and is not `Sync`. It addresses access patterns the static checker cannot conveniently express, such as graph navigation where ownership and local mutation are separated. A mutex solves a different concurrency problem and also has different blocking and failure behavior.
+
+```rust
+use std::cell::{Ref, RefCell};
+
+struct Document {
+    lines: RefCell<Vec<String>>,
+}
+
+impl Document {
+    fn first(&self) -> Option<Ref<'_, str>> {
+        let lines = self.lines.borrow();
+        if lines.is_empty() {
+            None
+        } else {
+            Some(Ref::map(lines, |lines| lines[0].as_str()))
+        }
+    }
+
+    fn append(&self, line: String) -> Result<(), String> {
+        match self.lines.try_borrow_mut() {
+            Ok(mut lines) => {
+                lines.push(line);
+                Ok(())
+            }
+            Err(_) => Err(line),
+        }
+    }
+}
+
+fn main() {
+    let document = Document {
+        lines: RefCell::new(vec![String::from("first")]),
+    };
+    let first = document.first().unwrap();
+    assert!(document.append(String::from("second")).is_err());
+    assert_eq!(&*first, "first");
+    drop(first);
+    assert!(document.append(String::from("second")).is_ok());
+}
+```
+
+`Ref::map` narrows the exposed view while retaining the original borrow guard. Returning an ordinary `&str` from the same temporary guard would be wrong: the guard would release the dynamic borrow while the reference remained usable. A later mutation could then invalidate that reference. The guard is part of the result's access permission, not an implementation detail that can be discarded.
+
+The append error returns the unsaved line, preserving ownership for a retry. A richer API might distinguish busy access from allocation or validation errors. Treating a dynamic borrow failure as an ordinary recoverable condition is sensible only if callers have a defined retry or abandonment policy. Otherwise the failure may reveal an unexpected reentrant operation that should be fixed structurally.
+
+## Reentrancy is the hidden source of many borrow panics
+
+A function that holds `RefMut` while calling user code exposes itself to reentrancy. The callback may invoke another method on the same component and request an incompatible borrow. The program is single threaded, but the call stack can still revisit shared state before the outer operation has completed.
+
+One useful policy is to snapshot owned callback handles, release the container borrow, and only then invoke callbacks. The snapshot defines which listeners participate in the current event. Changes made by callbacks affect the next event, rather than mutating the collection currently being traversed.
+
+```rust
+use std::cell::RefCell;
+use std::rc::Rc;
+
+type Listener = Rc<dyn Fn()>;
+
+#[derive(Default)]
+struct Bus {
+    listeners: RefCell<Vec<Listener>>,
+}
+
+impl Bus {
+    fn subscribe(&self, listener: Listener) {
+        self.listeners.borrow_mut().push(listener);
+    }
+
+    fn emit(&self) {
+        let snapshot = self.listeners.borrow().clone();
+        for listener in snapshot {
+            listener();
+        }
+    }
+}
+
+fn main() {
+    let bus = Rc::new(Bus::default());
+    let weak_bus = Rc::downgrade(&bus);
+    bus.subscribe(Rc::new(move || {
+        if let Some(bus) = weak_bus.upgrade() {
+            bus.subscribe(Rc::new(|| println!("later listener")));
+        }
+    }));
+    bus.emit();
+    assert_eq!(bus.listeners.borrow().len(), 2);
+}
+```
+
+The temporary borrow used to clone the vector ends before iteration begins. Each cloned `Rc` keeps a listener alive independently of collection changes. A weak link in the callback avoids making the bus own a listener that strongly owns the bus. This resolves one ownership cycle without changing listener invocation semantics.
+
+Snapshotting has a cost proportional to the number of handles, and it means removed listeners can still run if they were captured by the current snapshot. If immediate cancellation is required, each listener can have a separate active flag checked before invocation. That introduces another state policy. The correct design depends on whether mutation during dispatch should be deferred, immediately observed, rejected, or queued.
+
+Allowing recursive `emit` can still cause unbounded recursion or unexpected ordering. Releasing `RefCell` guards prevents a borrow panic; it does not prove the event protocol is sensible. A dispatching flag plus an event queue may be needed to turn recursive emission into iterative processing.
+
+## Once initialization has a different invariant
+
+Some shared updates happen at most once. A lazily computed index or parsed configuration can use a once initialization abstraction rather than unrestricted replacement. For single threaded code, `std::cell::OnceCell` provides a cell whose initialized value can be borrowed without keeping a runtime borrow guard.
+
+The reason is structural: once initialized, the shared API does not permit arbitrary replacement of the value while shared references exist. Its invariant is stronger and narrower than `RefCell`. A cross thread counterpart provides the required synchronization for shared initialization.
+
+Choose once initialization when the cached value is genuinely stable. If a schema can change and invalidate its cache, pretending initialization is permanent simply moves the inconsistency elsewhere. An invalidatable cache needs a generation relationship, a mutable owner, or a policy that returns independent snapshots.
+
+Initialization callbacks can also panic or attempt recursive initialization. Read the chosen abstraction's contract rather than assuming every lazy container handles reentrancy the same way. In particular, a cache fill operation should not silently depend on invoking itself to supply its own missing value.
+
+## UnsafeCell is a primitive rather than an access policy
+
+`UnsafeCell<T>` permits obtaining a raw pointer to its contents from shared access to the cell. The caller of unsafe pointer operations must still establish compatible access, initialization, alignment, and lifetime. It provides no borrow counter, no lock, no wakeup mechanism, and no automatic proof that a returned reference can coexist with other operations.
+
+A wrapper that exposes `fn get_mut(&self) -> &mut T` for arbitrary shared callers is generally unsound. Two calls through shared aliases could return overlapping exclusive references. The wrapper needs a mechanism that prevents this situation, such as an exclusive receiver, a dynamic guard, an ownership token, or a properly synchronized protocol.
+
+`UnsafeCell` also does not permit a type to be safely transmuted into every enclosing representation that contains it. Niche optimizations and layout choices of an outer enum can differ. Having the same size and alignment as `T` is not a general license to reinterpret `Option<T>` as `Option<UnsafeCell<T>>`. Representation guarantees must be checked at the actual containing type.
+
+Most application code should use the standard safe cells. Writing a new cell abstraction is justified when its narrower protocol provides something concrete that those abstractions do not express. The proof should describe how every safe method preserves that protocol, including failure paths and reentrant callbacks.
+
+## Interior mutability changes the public meaning of a read
+
+An API taking `&self` communicates that callers may share access, but it does not guarantee observational purity. A read may populate a cache, advance a cursor, record statistics, or consume a pending callback. Document effects that matter to clients, especially effects influencing latency, ordering, or repeated results.
+
+At the same time, do not expose interior mutability merely to avoid threading `&mut` through a design. If one component owns the state and updates occur sequentially, ordinary exclusive access gives simpler invariants and removes runtime borrow failures. Interior mutability earns its place when shared ownership or an external callback boundary makes a different access protocol useful.
+
+The strongest designs confine it. Keep a cell field private, expose a small set of domain operations, and avoid returning broad guards when a copied result or narrow mapped view is sufficient. This reduces the number of states clients can hold across callbacks and makes both performance and correctness more predictable.
+
+## Exercises
+
+1. Why cannot a method borrow a string from a `RefCell<String>`, drop the `Ref` guard, and return a plain reference to that string?
+
+2. A notification bus holds a mutable borrow of its listener list while invoking every callback. Describe a reentrant failure and a snapshot based policy that avoids it. State one semantic cost of the snapshot.
+
+3. A cache is initialized once and never invalidated. Compare the borrowing behavior of a once cell and a `RefCell<Option<T>>`. What additional problem appears when the cached source becomes mutable?
+
+## Reasoned Solutions
+
+1. Releasing the guard removes the runtime reservation that prevents conflicting mutation. Another caller could replace or grow the string while the returned reference remained in use. Returning a mapped `Ref<str>` keeps the access policy active; returning an owned string removes the dependency at the cost of copying.
+
+2. A callback that subscribes or unsubscribes requests another mutable borrow while the outer borrow is active, causing failure. Clone owned listener handles under a short borrow, release it, then invoke the snapshot. A removed listener can still run during the current dispatch, so immediate cancellation needs another explicit mechanism.
+
+3. A once cell's shared API preserves an initialized value, allowing ordinary borrowed access without a dynamic borrow guard. A `RefCell` must track borrowing because it permits later replacement. If the source changes, cached results can become stale; initialization policy alone does not express a dependency between source generation and cached generation.
+
+## Further Reading
+
+- [The Rust standard library cell module](https://doc.rust-lang.org/std/cell/index.html) compares the safe interior mutability policies.
+- [The Rust standard library UnsafeCell documentation](https://doc.rust-lang.org/std/cell/struct.UnsafeCell.html) states the primitive's remaining obligations.
+- [The Rust standard library Ref documentation](https://doc.rust-lang.org/std/cell/struct.Ref.html) documents mapped views that preserve runtime borrowing.

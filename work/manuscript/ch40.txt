@@ -1,0 +1,227 @@
+# Chapter 40 Protocol State Machines and Resource Ownership
+
+Protocol code often begins with an enum named `State` and ends with checks scattered across dozens of methods. A method verifies that negotiation has finished. Another verifies that shutdown has not begun. A third assumes a request identifier has already been assigned. As the protocol grows, the same conditions become duplicated and occasionally disagree.
+
+Rust offers several ways to represent these conditions. An enum can represent a runtime state and force exhaustive handling of its variants. A generic state parameter can make different operations available on different types. Ownership can make a transition consume the previous state, preventing later use of the old capability. These techniques are most useful when they expose the actual protocol, including failure and retry behavior.
+
+This chapter develops a local model of a framed connection. It is not a networking implementation. Its transport records frames in memory so that the ownership and state transitions are visible without an I/O runtime. We will then examine what changes when a transition sends bytes to another process, where local type changes alone cannot establish remote agreement.
+
+## Separate State From Evidence
+
+A connection is initially negotiating. Successful negotiation permits data frames. Closing consumes that permission. The important question is what evidence justifies each transition. A local caller passing a supported version is evidence only in this model. A real connection would need to validate a received peer message, perhaps after several reads and writes.
+
+The state type should therefore describe a fact the implementation has established, rather than a fact the caller merely wishes were true. If a public constructor can create `Connection<Established>` without negotiation, the type no longer proves negotiation happened. Private fields and controlled constructors are part of the design.
+
+State also includes runtime data. An established connection needs a next sequence number. Using a marker type alone would hide that relationship in an unrelated optional field. Instead, the established state owns the counter it needs. The negotiating state owns its offer count. The closed state owns neither because no further protocol operation is permitted.
+
+## A Complete Local Model
+
+The model below keeps unsupported negotiation recoverable by returning the original connection. Data send validates its arguments before changing the sequence number. Closing consumes the established connection and returns a closed value whose transcript can be inspected.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+enum Frame {
+    Offer(u16),
+    Data { sequence: u32, payload: Vec<u8> },
+    Close,
+}
+
+#[derive(Debug)]
+struct Negotiating {
+    offers: usize,
+}
+
+#[derive(Debug)]
+struct Established {
+    next_sequence: u32,
+}
+
+#[derive(Debug)]
+struct Closed;
+
+#[derive(Debug)]
+struct Connection<S> {
+    transcript: Vec<Frame>,
+    state: S,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SendError {
+    PayloadTooLarge,
+    SequenceExhausted,
+}
+
+impl Connection<Negotiating> {
+    fn new() -> Self {
+        Self {
+            transcript: Vec::new(),
+            state: Negotiating { offers: 0 },
+        }
+    }
+
+    fn negotiate(mut self, version: u16)
+        -> Result<Connection<Established>, Self>
+    {
+        self.state.offers += 1;
+        self.transcript.push(Frame::Offer(version));
+        if version != 1 {
+            return Err(self);
+        }
+        Ok(Connection {
+            transcript: self.transcript,
+            state: Established { next_sequence: 0 },
+        })
+    }
+}
+
+impl Connection<Established> {
+    fn send(&mut self, payload: Vec<u8>)
+        -> Result<u32, (SendError, Vec<u8>)>
+    {
+        if payload.len() > 1024 {
+            return Err((SendError::PayloadTooLarge, payload));
+        }
+        let sequence = self.state.next_sequence;
+        let Some(next) = sequence.checked_add(1) else {
+            return Err((SendError::SequenceExhausted, payload));
+        };
+        self.transcript.push(Frame::Data { sequence, payload });
+        self.state.next_sequence = next;
+        Ok(sequence)
+    }
+
+    fn close(mut self) -> Connection<Closed> {
+        self.transcript.push(Frame::Close);
+        Connection { transcript: self.transcript, state: Closed }
+    }
+}
+
+impl Connection<Closed> {
+    fn transcript(&self) -> &[Frame] {
+        &self.transcript
+    }
+}
+
+fn main() {
+    let negotiating = Connection::new();
+    let negotiating = negotiating.negotiate(2).unwrap_err();
+    let mut ready = negotiating.negotiate(1).unwrap();
+    assert_eq!(ready.send(vec![10, 20]), Ok(0));
+    let closed = ready.close();
+    assert_eq!(closed.transcript().len(), 4);
+    assert_eq!(closed.transcript().last(), Some(&Frame::Close));
+}
+```
+
+The method sets differ between states. There is no `send` method on a negotiating or closed connection. There is no successful way to keep using the original established connection after `close`, because closing takes ownership. An alias to the same resource would undermine that exclusivity, so the connection itself is not cloneable.
+
+The error returns the unsent payload. This is often preferable to discarding a caller-owned buffer on a validation failure. It also makes a useful distinction: the error means the local model did not enqueue a data frame. A real transport error might occur after some bytes were written and could not make the same promise without tracking write progress.
+
+The model rejects a send when incrementing the sequence would overflow. Consequently the maximum integer value is never used as a frame sequence. That is an explicit exhaustion policy. An alternative could use the maximum once and transition to an exhausted state. Wrapping silently would reuse identifiers and could confuse duplicate detection, so it should not be introduced casually as an arithmetic convenience.
+
+## A Transition Consumes a Capability
+
+An established connection is a capability to emit data under the modeled protocol. Consuming it during close revokes that capability locally. This is more precise than a Boolean checked on every send, but it also changes ergonomics. Callers must handle a different return type, and a container cannot store all states under one concrete generic instantiation.
+
+That is a useful trade when application control flow already has clear phases. A setup function can return an established resource. A worker can own it for the duration of a session. Shutdown can consume it and return a report. The compiler then helps prevent phase confusion across those boundaries.
+
+Typestate becomes less convenient when many independently scheduled events can change the state at runtime. A connection manager may store thousands of connections in different phases. Representing the manager as a generic type for every possible combination would be impractical. An enum containing state-specific structures is usually a better representation at that boundary.
+
+The two approaches can cooperate. A dynamic manager matches on a runtime enum and invokes phase-specific methods on the contained typed resource. That preserves a finite runtime representation while keeping each state's operations locally precise. The objective is to make illegal transitions hard to express in the part of the program that performs them, not to maximize the number of generic parameters.
+
+## Runtime State Must Be Exhaustive
+
+The next complete example uses an owned enum to represent a request that can be started or completed. Failed transitions return the original request unchanged. This makes the rejected event recoverable and keeps ownership explicit.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+enum Request {
+    Queued { id: u64, body: Vec<u8> },
+    Running { id: u64, body: Vec<u8> },
+    Done { id: u64, status: u16 },
+}
+
+impl Request {
+    fn start(self) -> Result<Self, Self> {
+        match self {
+            Self::Queued { id, body } => {
+                Ok(Self::Running { id, body })
+            }
+            other => Err(other),
+        }
+    }
+
+    fn finish(self, status: u16) -> Result<Self, Self> {
+        match self {
+            Self::Running { id, .. } => {
+                Ok(Self::Done { id, status })
+            }
+            other => Err(other),
+        }
+    }
+}
+
+fn main() {
+    let request = Request::Queued { id: 7, body: vec![1, 2] };
+    let running = request.start().unwrap();
+    let done = running.finish(200).unwrap();
+    assert_eq!(done, Request::Done { id: 7, status: 200 });
+    assert!(done.start().is_err());
+}
+```
+
+Ownership makes it easy to move payloads between variants without cloning. A transition taking `&mut self` would need a temporary replacement, an `Option`, or a more specialized representation to move out the payload. Such designs can be valid, but the temporary state then becomes part of the panic-safety argument. Taking `self` is often the simplest expression when the caller can accept a returned state.
+
+Returning `Err(original)` is not always the right policy. A malformed network event may require closing the connection rather than preserving the old state. A timeout may move a request into an indeterminate state because the peer could have accepted it. The return type should express those possibilities directly. Using the same generic error for every failed transition can erase the most important information.
+
+## Local State and Remote State Can Diverge
+
+Consider sending a close frame over a socket. The local method may serialize the frame, write some bytes, and then encounter an error. Did the peer receive the close? It may have received all of it even if the local operation failed to observe completion. Dropping the local connection cannot answer that question. A `Closed` marker proves only the condition that the implementation actually establishes.
+
+Useful protocols often distinguish closing, locally closed, peer acknowledged, and fully finished. Whether all these states need separate Rust types depends on which distinctions affect allowed operations. If application code may retry a close but may not send more data, a closing state with a retry method can be appropriate. If the resource will simply be discarded, a detailed public state machine may add complexity without changing useful behavior.
+
+The same issue appears with requests. A cancelled future may have written a request completely before being dropped. Retrying with a new identifier can execute the request twice. Retrying with the same identifier only helps if the peer stores and recognizes that identifier under the required failure conditions. Types can carry the identifier through transitions, but they cannot create a deduplication guarantee on the remote side.
+
+This is why protocol review should include a table of observable events and uncertain outcomes. For each write, timeout, disconnect, and cancellation, ask what the local endpoint knows and what the peer may have done. An unknown outcome is a legitimate state. Pretending it is a simple failure often causes incorrect automatic retries.
+
+## Cancellation Must Leave a Representable State
+
+An async transition may suspend after modifying local state or after sending part of a frame. If the future owns the connection and is dropped, dropping the connection may be an acceptable cancellation policy. If the future merely borrows the connection, cancellation must leave the borrowed object in a state that later methods understand.
+
+One robust approach stores write progress in the connection itself. The future advances an offset into an owned frame buffer. If cancelled, the offset and buffer remain, and a later operation can resume or explicitly abort the connection. Another approach makes the resource unusable for further protocol traffic after any interrupted write. That is simpler but should be visible in the API's failure behavior.
+
+Avoid placing indispensable progress only in a temporary future while leaving the connection marked established. Dropping that future could lose the information needed to continue the byte stream correctly. This is a semantic invariant, even if the underlying memory remains safe. The cancellation analysis from the async chapters applies directly to state-machine representation.
+
+Dropping a connection also cannot perform arbitrary asynchronous cleanup. A destructor can release local resources, but it cannot wait through ordinary async suspension points. If graceful protocol completion matters, provide an explicit async close operation and define what ordinary drop does when close is skipped. Blocking indefinitely inside drop would move the problem into unrelated scopes and can deadlock an executor thread.
+
+## Keep State Spaces Manageable
+
+It is tempting to encode every independent property as a generic parameter: authenticated, compressed, encrypted, writable, registered, draining. Six Boolean properties already describe sixty-four combinations before runtime counters enter the picture. Many combinations may be impossible, but the public API can still become difficult to name and understand.
+
+Group properties that transition together into one semantic state. Keep independent runtime policy in ordinary fields when it does not affect method availability. Use newtypes for important validated values such as a nonempty stream identifier or checked frame length. A small number of meaningful capabilities usually communicates more than a large product of marker parameters.
+
+Error design can simplify the state space as well. If any transport failure permanently invalidates a session, consuming the session and returning an error is honest and easy to reason about. If recovery is required, return the exact recoverable resource. Do not force a complex recovery type into an API whose callers always discard it, and do not hide a recoverable buffer when callers genuinely need to retry.
+
+Testing should follow transitions and invariants. Generate sequences of events and assert that accepted transitions preserve identifier uniqueness, frame ordering, and resource accounting. Compile-fail tests can check that a closed typed connection has no send operation. Runtime tests must still examine malformed peer messages and interrupted I/O because those enter through values rather than through the method set.
+
+## Exercises
+
+1. Modify the local connection model so the maximum `u32` sequence number may be used exactly once. Decide whether exhaustion is a field inside the established state or a separate state type.
+
+2. Design an async write operation that may be cancelled after a partial write. Specify which object owns the frame and offset, and which subsequent operations remain legal.
+
+3. A manager must store both negotiating and established connections. Design an enum boundary that permits polling either state while exposing data send only after the established variant has been matched.
+
+## Reasoned Solutions
+
+1. Store `Option<u32>` as the next sequence, taking `Some(max)` for the last send and replacing it with `None`. Future sends return exhaustion without emitting a frame. A separate exhausted type gives a stronger method distinction but complicates a method that normally borrows `&mut self`; it is most useful if callers benefit from owning the exhausted resource explicitly.
+
+2. Put the frame buffer and current offset in the connection's pending-write state. A future borrows and advances that state. After cancellation, allow only resuming the pending write or aborting the connection until framing is restored. Do not allow a new data frame to interleave with the unfinished bytes.
+
+3. Use an enum with variants containing `Connection<Negotiating>` and `Connection<Established>`, plus any closing states required by the protocol. A match gives access to the state-specific value. Transition code consumes one variant and returns another; rejected negotiation either restores the negotiating resource or produces a terminal error according to policy.
+
+## Further Reading
+
+- [Enums](https://doc.rust-lang.org/reference/items/enumerations.html) documents the representation of runtime alternatives.
+- [The Future trait](https://doc.rust-lang.org/std/future/trait.Future.html) defines the polling interface at which async transitions can suspend.
+- [Drop](https://doc.rust-lang.org/std/ops/trait.Drop.html) documents synchronous destruction and its role in resource cleanup.

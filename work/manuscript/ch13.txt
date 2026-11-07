@@ -1,0 +1,211 @@
+# Chapter 13 Iteration Lending and Generic Associated Types
+
+## An Iterator Fixes Its Item Type Before Each Call
+
+Iterator is a powerful abstraction partly because its item type is independent of the temporary borrow used to call next. After a call returns, a caller can usually call next again while retaining the earlier item. A collection iterator can yield references into a backing collection because the implementing type already carries the collection's borrow lifetime. The result stays valid across calls that advance the iterator.
+
+This distinction is easy to miss because both interfaces can look like a loop that returns references. An iterator over a slice hands out access to stable external storage. A streaming parser that reuses one internal buffer hands out access that must end before the parser changes that buffer. The first fits Iterator naturally. The second needs a lending relationship, an owned result, or a callback that limits the borrow's scope.
+
+Generic associated types provide a vocabulary for a family of output types indexed by a lifetime. They do not eliminate borrowing restrictions. They let a trait express precisely the restriction that a returned value may borrow from the current exclusive receiver borrow.
+
+The design question is therefore not whether GATs are more advanced than Iterator. It is whether callers should be allowed to retain several items simultaneously, and who owns the storage those items use. Start with that ownership decision before choosing an iteration trait.
+
+## Borrowed Iterators Can Return Long Lived Items
+
+The following iterator stores a shared borrow of its backing slice. Its next call briefly borrows the iterator itself, but its result carries the backing lifetime.
+
+```rust
+struct EveryOther<'data, T> {
+    remaining: &'data [T],
+}
+
+impl<'data, T> Iterator for EveryOther<'data, T> {
+    type Item = &'data T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (first, rest) = self.remaining.split_first()?;
+        self.remaining = if rest.is_empty() { rest } else { &rest[1..] };
+        Some(first)
+    }
+}
+
+fn main() {
+    let values = [10, 20, 30, 40];
+    let mut iter = EveryOther { remaining: &values };
+    let first = iter.next().unwrap();
+    let second = iter.next().unwrap();
+    assert_eq!((*first, *second), (10, 30));
+}
+```
+
+Keeping first while asking for second is valid because both are shared references into values. The iterator advances its own slice view; it does not modify the referenced elements. Its mutable receiver protects iteration state, while the shared backing borrow protects the collection data. These are separate resources with separate lifetimes.
+
+The standard mutable slice iterator can similarly produce several mutable references because it partitions the backing slice into disjoint regions. Each yielded reference refers to a region removed from the iterator's future access. The implementation must preserve nonoverlap. This is why iter_mut can support collecting mutable references, while an iterator of overlapping mutable windows cannot use the same unrestricted item relationship.
+
+Owning iteration is another distinct contract. IntoIterator for Vec<T> moves elements out, while iteration over &Vec<T> borrows elements and iteration over &mut Vec<T> lends disjoint mutable access through a standard iterator. The visible for syntax hides these different ownership paths. When a loop unexpectedly moves a collection, inspect the type of the expression passed to IntoIterator.
+
+## Overlapping Mutable Windows Need a Shorter Result Borrow
+
+With a one-element step, adjacent windows overlap when their width exceeds one. Returning both as unrestricted mutable slice references would allow simultaneous exclusive access to the same element. A lending interface ties each window to the receiver borrow for that call.
+
+```rust
+trait LendingIterator {
+    type Item<'a>
+    where
+        Self: 'a;
+
+    fn next<'a>(&'a mut self) -> Option<Self::Item<'a>>;
+}
+
+struct WindowsMut<'data, T> {
+    data: &'data mut [T],
+    width: usize,
+    position: usize,
+}
+
+impl<'data, T> WindowsMut<'data, T> {
+    fn new(data: &'data mut [T], width: usize) -> Self {
+        assert!(width > 0);
+        Self { data, width, position: 0 }
+    }
+}
+
+impl<T> LendingIterator for WindowsMut<'_, T> {
+    type Item<'a> = &'a mut [T] where Self: 'a;
+
+    fn next<'a>(&'a mut self) -> Option<Self::Item<'a>> {
+        if self.width > self.data.len().saturating_sub(self.position) {
+            return None;
+        }
+        let start = self.position;
+        self.position += 1;
+        Some(&mut self.data[start..start + self.width])
+    }
+}
+
+fn main() {
+    let mut values = [1, 2, 3, 4];
+    {
+        let mut windows = WindowsMut::new(&mut values, 2);
+        while let Some(window) = windows.next() {
+            window[0] += window[1];
+        }
+    }
+    assert_eq!(values, [3, 5, 7, 4]);
+}
+```
+
+The associated type is now a family. For each lifetime 'a, the implementation supplies a corresponding borrowed slice type. The where Self: 'a clause permits that family to borrow from a Self that remains valid for 'a. The method chooses 'a through its exclusive borrow of self. A caller holding the returned window therefore keeps that exclusive borrow active and cannot obtain the next window until the first is no longer used.
+
+Notice what this interface does not prove. It does not declare that windows overlap, and it does not reason about the arithmetic in the implementation. The ordinary safe slice operation checks bounds, while the receiver lifetime enforces sequential access. GATs describe the output relationship; they do not replace invariant design.
+
+The width assertion is also part of the contract. Zero-width windows could be supported, but their count and advancement policy would need a definition. Rejecting zero here avoids a distracting special case. Production interfaces should document that panic or return a validation error if width comes from untrusted configuration.
+
+## The Borrow Checker Enforces the Lending Contract
+
+The following complete example deliberately fails. It uses a concrete lending-style method without a trait so the conflict is easy to isolate.
+
+```rust,compile_fail
+struct Buffer(Vec<u8>);
+
+impl Buffer {
+    fn view(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+fn main() {
+    let mut buffer = Buffer(vec![1, 2, 3]);
+    let first = buffer.view();
+    let second = buffer.view();
+    first[0] += second[0];
+}
+```
+
+The second borrow conflicts because first is used afterward. If first were no longer used, nonlexical lifetime analysis could end its borrow before the next call. A lending loop works because each iteration finishes using the current item before advancing. The restriction concerns actual borrow use, not merely the fact that two variable names appear in one lexical block.
+
+This is why standard Iterator adapters cannot automatically be copied to a lending trait. collect intends to retain items. zip may need to retain items from separate sources while advancing them. filter may repeatedly borrow the source while deciding which value to return. Some adapters are expressible, but their signatures and implementation limits deserve independent analysis. A trait family is not a drop-in replacement for a fixed associated type.
+
+Avoid promising an extensive generic lending ecosystem merely because one concrete iterator compiles. Advanced associated-type projections and higher-ranked bounds can encounter compiler limitations or produce surprising diagnostics. A small concrete interface or callback can sometimes give users a more stable and comprehensible API than a deeply generic adapter stack.
+
+## Reusing a Parser Buffer
+
+A line reader that reuses one String is a practical lending interface. Its output is valid until the next mutable operation on the reader. A normal Iterator returning owned String values would allocate or transfer a separate buffer for each retained line. That may be exactly what callers need, but it is a different storage policy.
+
+```rust
+use std::io::{self, BufRead};
+
+struct LineReader<R> {
+    input: R,
+    buffer: String,
+}
+
+impl<R: BufRead> LineReader<R> {
+    fn new(input: R) -> Self {
+        Self { input, buffer: String::new() }
+    }
+
+    fn next_line(&mut self) -> io::Result<Option<&str>> {
+        self.buffer.clear();
+        if self.input.read_line(&mut self.buffer)? == 0 {
+            return Ok(None);
+        }
+        let line = self.buffer.as_str();
+        let body = line.strip_suffix("\r\n").or_else(|| line.strip_suffix('\n'));
+        Ok(Some(body.unwrap_or(line)))
+    }
+}
+
+fn main() -> io::Result<()> {
+    let input = io::Cursor::new(b"alpha\r\nbeta\nend\r");
+    let mut reader = LineReader::new(input);
+    let mut lengths = Vec::new();
+    while let Some(line) = reader.next_line()? {
+        lengths.push(line.len());
+    }
+    assert_eq!(lengths, [5, 4, 4]);
+    Ok(())
+}
+```
+
+No GAT is required for this concrete inherent method. Lifetime elision already ties the returned reference to &mut self. Introduce a lending trait only when several implementations need to participate in generic algorithms. Advanced language machinery is valuable when it expresses a relationship shared across implementations, not simply because the relationship is sophisticated.
+
+Like `BufRead::lines`, the reader strips LF or CRLF and preserves a lone final carriage return. It uses `read_line`, so invalid UTF-8 produces an I/O error. A binary protocol reader can use byte buffers and validate text at an explicit layer.
+
+The error path also deserves attention. read_line can append data before reporting some errors. This method clears the buffer on the next call but makes no transactional guarantee about the underlying stream position. A parser that needs recoverable framing must define what input has been consumed when an error occurs. Borrowing efficiency does not provide recovery semantics automatically.
+
+## Callbacks Can Express a Temporary View Without a Trait Family
+
+An alternative is to pass each borrowed item to a callback whose invocation finishes before the buffer is reused. The producer controls the loop, and the callback cannot retain a reference unless the signature supplies an appropriate longer lifetime. This can be easier to compose when the consumer only needs aggregate results.
+
+A callback-based scanner can expose visit_lines taking FnMut(&str), read into one buffer, invoke the callback, and then clear the buffer. A consumer can count records, update a hash, or copy selected records. The important tradeoff is control flow. The consumer may need an explicit return enum to stop early, propagate an error, or request a pause. With an iterator, the consumer naturally owns advancement.
+
+Choose among owned iteration, borrowing from external storage, lending from internal storage, and callbacks by considering retention and control. If callers need random access to all records later, owned storage or an arena may be appropriate. If callers process each record once and discard it, a lending view can avoid unnecessary allocations. If callers need a mixture, offer an explicit to_owned operation at the point where retention begins.
+
+## Laziness Does Not Mean Work Is Free
+
+Iterator adapters usually build a description of future work. The terminal operation executes it. This can improve composition, but it can also hide repeated traversal, side effects, or allocation in an apparently small expression. Review an iterator chain as an algorithm: how many elements are visited, which closures run, where errors stop processing, and what is retained.
+
+try_fold and collection into Result provide structured short-circuiting, but partial work may already have occurred. A map closure that updates external state is not rolled back when a later element fails. A filter that calls an expensive function may run that function every time the iterator is traversed. A size_hint is an optimization hint with documented constraints, not an authority to perform unchecked memory writes in arbitrary unsafe code.
+
+The distinction between exact length and trusted initialization is especially important for custom collections. A safe Iterator implementation can be buggy. Unsafe consumers must not assume undocumented stronger guarantees from a safe trait. Optimization-specific unsafe contracts require an appropriate unsafe abstraction and careful proof.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. Why can slice::Iter return two references that remain alive together while WindowsMut cannot return two overlapping mutable windows?
+
+Solution. Shared slice references may overlap, and their lifetime comes from the stable backing slice. Overlapping mutable windows would grant simultaneous exclusive access to the same elements. The lending method ties each mutable window to the receiver borrow, forcing sequential use. Disjoint mutable iteration is possible because each yielded region is removed from future access.
+
+Exercise 2. A caller wants to collect every line from LineReader into Vec<&str>. What should the API do?
+
+Solution. The reusable buffer cannot support those retained references. The caller should collect owned strings, or the design should retain the entire input or use stable backing storage such as an arena. Trying to lengthen the result lifetime would misrepresent the storage's validity. Ownership must change if retention requirements change.
+
+Exercise 3. Does adding a GAT to LineReader improve the concrete next_line method?
+
+Solution. Not by itself. The inherent method already expresses a result borrowing from self. A GAT becomes useful when a trait must abstract over several implementations whose borrowed result types differ. The abstraction should solve a real generic composition requirement, and its adapters should be designed around the lending lifetime rather than copied mechanically from Iterator.
+
+## Further Reading
+
+- [Standard library Iterator](https://doc.rust-lang.org/std/iter/trait.Iterator.html) specifies fixed item types, adapters, and size hints.
+- [Rust Reference on generic associated types](https://doc.rust-lang.org/reference/items/associated-items.html#associated-types) specifies associated type families and required where clauses.
+- [Standard library BufRead](https://doc.rust-lang.org/std/io/trait.BufRead.html) documents buffered borrowing and consumption operations.

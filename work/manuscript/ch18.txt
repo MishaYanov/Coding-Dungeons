@@ -1,0 +1,250 @@
+# Chapter 18 Constant Evaluation and Const Generic Design
+
+## Compile Time Is an Execution Environment With Rules
+
+Rust can evaluate selected expressions during compilation. A const context requires this evaluation; an ordinary runtime context may merely offer an optimization opportunity. Understanding that distinction prevents two common mistakes: assuming const fn always runs during compilation, and assuming an optimizer's ability to fold an expression makes it legal in a const context.
+
+Constant evaluation uses the language's compile-time rules, with restrictions on operations, references, destruction, and generic expressions. It is not a general permission to run arbitrary application code during the build. Reading a configuration file, consulting a network service, or allocating an unrestricted runtime object graph belongs to another mechanism. The fact that a build script can execute those operations does not make them constant evaluation.
+
+The useful applications are structural. Array lengths belong in types. Lookup tables can be derived from a small definition. Fixed protocol constants can be validated before a program is built. Const generics let one implementation work across a family of compile-time sizes. These capabilities can remove runtime checks or represent useful distinctions, but they can also multiply type instantiations and complicate APIs.
+
+Ask which property genuinely needs to be known during compilation. A packet buffer's capacity may justify a const parameter in an embedded system with fixed storage. A user-selected batch size usually belongs in a runtime value. Moving configuration into a type changes where choices can be made and how values can be stored together.
+
+## Const Functions Can Also Run at Runtime
+
+A const fn promises that its body is suitable for constant evaluation under the applicable rules. Calling it in an ordinary function does not require compile-time execution. The same function can validate a literal configuration during compilation and process dynamic input later.
+
+```rust
+const fn parse_port(input: &[u8]) -> Option<u16> {
+    if input.is_empty() {
+        return None;
+    }
+    let mut value = 0_u16;
+    let mut index = 0;
+    while index < input.len() {
+        let byte = input[index];
+        if byte < b'0' || byte > b'9' {
+            return None;
+        }
+        value = match value.checked_mul(10) {
+            Some(value) => value,
+            None => return None,
+        };
+        value = match value.checked_add((byte - b'0') as u16) {
+            Some(value) => value,
+            None => return None,
+        };
+        index += 1;
+    }
+    Some(value)
+}
+
+const DEFAULT_PORT: u16 = match parse_port(b"8080") {
+    Some(port) => port,
+    None => panic!("invalid default port"),
+};
+
+fn main() {
+    assert_eq!(DEFAULT_PORT, 8080);
+    let dynamic = String::from("65535");
+    assert_eq!(parse_port(dynamic.as_bytes()), Some(65535));
+    assert_eq!(parse_port(b"65536"), None);
+}
+```
+
+The parser uses checked arithmetic, so its failure behavior is explicit in both environments. DEFAULT_PORT must be evaluated during compilation. The call using dynamic input executes as part of the program unless optimization can prove otherwise. The const modifier does not require duplicating the algorithm or changing its error model.
+
+The function avoids the question mark and generic parsing traits because its compile-time interface is intentionally simple. The set of const-capable operations evolves, so examples intended for a supported compiler range should use operations that range actually supports. A stable runtime method being available does not automatically mean it is callable in a const fn.
+
+A failed assertion in a required constant is a build error. In an ordinary runtime call, a panic follows the runtime panic strategy. This difference is useful for validating fixed configuration, but it should not turn user input into a requirement to rebuild the application.
+
+## Constants Are Values and Statics Are Storage
+
+A const item names a value expression that can be used in many places. It is not a promise of one unique address for that value. A static item names a storage location with program-wide duration and additional rules about its type and initialization. Choose a static when shared identity or a stable storage location is part of the design.
+
+This distinction matters for caches and synchronization. A const containing a constructible synchronization object can produce separate instances at different use sites rather than one shared lock. A static synchronization object identifies shared state. Conversely, a small numeric constant normally needs no storage identity and is appropriately a const.
+
+Both const and static initializers involve constant evaluation, but their reference and interior-mutability rules differ in important ways. Avoid reasoning from superficial syntax such as an ampersand in an initializer. A reference must still satisfy validity and lifetime requirements, and compile-time pointer operations have restrictions that do not mirror arbitrary runtime address arithmetic.
+
+For address identity among statics, use distinct statics of nonzero size. An immutable static can share an address with a promoted or constant value. Two uses of a constant can also share storage. Comparing the addresses of promoted values is therefore unsuitable as an identity protocol. Use an explicit identifier if identity must survive the lifetime of an allocation or be compared across program runs.
+
+## Derive Tables From One Algorithm
+
+A compile-time lookup table can make a runtime operation simple without requiring a manually maintained list. The table's derivation remains ordinary code that can be reviewed and tested.
+
+```rust
+const fn hex_table() -> [u8; 256] {
+    let mut table = [u8::MAX; 256];
+    let mut digit = 0;
+    while digit < 10 {
+        table[b'0' as usize + digit] = digit as u8;
+        digit += 1;
+    }
+    let mut letter = 0;
+    while letter < 6 {
+        table[b'a' as usize + letter] = (10 + letter) as u8;
+        table[b'A' as usize + letter] = (10 + letter) as u8;
+        letter += 1;
+    }
+    table
+}
+
+const HEX: [u8; 256] = hex_table();
+
+fn decode_hex(input: &[u8]) -> Option<Vec<u8>> {
+    if input.len() % 2 != 0 {
+        return None;
+    }
+    let mut output = Vec::with_capacity(input.len() / 2);
+    for pair in input.chunks_exact(2) {
+        let high = HEX[pair[0] as usize];
+        let low = HEX[pair[1] as usize];
+        if high == u8::MAX || low == u8::MAX {
+            return None;
+        }
+        output.push((high << 4) | low);
+    }
+    Some(output)
+}
+
+fn main() {
+    assert_eq!(decode_hex(b"0aFF"), Some(vec![10, 255]));
+    assert_eq!(decode_hex(b"0x"), None);
+    assert_eq!(decode_hex(b"a"), None);
+}
+```
+
+The sentinel is outside the valid nibble range. Every input byte safely indexes the 256-entry table because converting u8 to usize produces a value from zero through 255. The table converts syntax classification into one lookup, but whether that is faster than arithmetic or matching depends on the workload and target. Compile-time generation guarantees consistency, not performance superiority.
+
+The decoder allocates output at runtime because its length depends on runtime input. Its capacity calculation is bounded by the input length, and it rejects odd-length input before processing pairs. If invalid input appears late, an allocated partially filled vector is dropped. The API returns no partial bytes, which is a useful failure postcondition for this small operation.
+
+The same table can be generated by a build script or stored as a literal, but constant evaluation keeps the derivation close to its use without adding a host executable or file-generation step. For substantially larger generated data, build time, object size, and incremental rebuild behavior may change the best choice.
+
+## Const Parameters Make Values Part of Type Identity
+
+Packet<32> and Packet<64> are different types. The compiler can use their sizes when laying out enclosing values and checking array accesses. A const parameter is not merely a constructor argument stored in a field.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+struct WrongLength {
+    expected: usize,
+    actual: usize,
+}
+
+struct Packet<const N: usize> {
+    bytes: [u8; N],
+}
+
+impl<const N: usize> Packet<N> {
+    fn from_slice(input: &[u8]) -> Result<Self, WrongLength> {
+        let bytes: [u8; N] = input.try_into().map_err(|_| WrongLength {
+            expected: N,
+            actual: input.len(),
+        })?;
+        Ok(Self { bytes })
+    }
+
+    fn as_slice(&self) -> &[u8] { &self.bytes }
+
+    fn checksum(&self) -> u8 {
+        self.bytes.iter().fold(0, |sum, byte| sum.wrapping_add(*byte))
+    }
+}
+
+fn main() {
+    let packet = Packet::<4>::from_slice(&[1, 2, 3, 4]).unwrap();
+    assert_eq!(packet.checksum(), 10);
+    assert_eq!(packet.as_slice().len(), 4);
+    assert!(Packet::<4>::from_slice(&[1, 2]).is_err());
+}
+```
+
+The type carries exact length after construction. Conversion from a dynamic slice performs the one necessary runtime check. Methods can then rely on the array length without repeatedly validating the same property. This is a good example of moving a dynamic boundary into a statically represented invariant.
+
+The packet does not allocate its byte array separately. It stores the array inline wherever the packet itself lives. A large N can therefore make stack frames or enclosing structures large. Box<Packet<N>> changes storage ownership but not the type's exact-size identity. Avoid presenting const generics as automatically cheaper than a Vec; representation and allocation tradeoffs depend on sizes and lifetimes.
+
+Different N values also complicate heterogeneous storage. A vector cannot directly hold Packet<32> and Packet<64> as one element type. An enum, trait object, or erased byte representation can bridge that boundary. If sizes vary freely at runtime, a single dynamic type is often the simpler architecture.
+
+## Arithmetic in Values Is Not the Same as Arithmetic in Types
+
+Stable const generics support many useful size parameters, but arbitrary expressions involving generic parameters in type-level array lengths have restrictions. A function may calculate N + 1 as an ordinary value while an array type [u8; N + 1] is rejected in the supported language subset used here.
+
+```rust,compile_fail
+fn extended<const N: usize>() -> [u8; N + 1] {
+    [0; N + 1]
+}
+```
+
+This is a language expressiveness limit, not evidence that the arithmetic is mathematically ambiguous. Supporting general generic constant expressions requires the compiler to track validity and equality of expressions across generic instantiations. Overflow, evaluation requirements, and normalization all become part of type checking.
+
+Do not work around the restriction by introducing unsafe layout tricks unless the representation independently justifies them. Often the clean design stores a header separately from [u8; N], accepts the total capacity as another const parameter, or uses a runtime Vec. A struct containing header: u8 and body: [u8; N] may express the domain better than an array whose extra element is hidden in arithmetic.
+
+An associated constant can still calculate values from N when used in a permitted value context. That does not automatically make the associated constant usable as a generic array length. Keeping value computation and type formation separate helps interpret compiler diagnostics accurately.
+
+## Compile Time Assertions Have a Scope
+
+An inline const block can check a property during the relevant compile-time evaluation. In generic code it can refer to generic parameters under its applicable rules, allowing checks such as a nonzero fixed capacity. The check is valuable when the API intentionally treats an invalid const argument as a programming error.
+
+```rust
+struct NonEmpty<const N: usize> {
+    values: [u8; N],
+}
+
+impl<const N: usize> NonEmpty<N> {
+    fn new(values: [u8; N]) -> Self {
+        const { assert!(N > 0, "capacity must be nonzero"); }
+        Self { values }
+    }
+
+    fn first(&self) -> u8 { self.values[0] }
+}
+
+fn main() {
+    let values = NonEmpty::new([7, 8, 9]);
+    assert_eq!(values.first(), 7);
+}
+```
+
+The constructor is the proof boundary. If the struct fields are private outside the implementation's module, callers must pass through the check. The existence of a generic type name NonEmpty<0> alone is not necessarily rejected merely because its constructor would fail to instantiate. The assertion belongs to the evaluated code path, not to an imaginary universal theorem attached to the type's spelling.
+
+If an API needs a globally valid nonzero capacity representation, consider whether a runtime NonZeroUsize or a different type structure provides a clearer contract. A compile-time assertion can improve diagnostics for fixed configurations, but it should not be described as an unrestricted const-generic where predicate if the language does not provide that predicate.
+
+Also distinguish a checked precondition from an optimization assumption. Safe indexing in first still checks according to the language's rules unless optimization proves the bound. The constructor's assertion gives the programmer a useful invariant, but it does not justify unchecked access in unrelated code without a complete argument about all construction paths.
+
+## Build Scripts and Constant Evaluation Solve Different Problems
+
+A build script executes on the host during the build and can produce files, compiler configuration, or link instructions. Constant evaluation computes Rust values under target-aware language rules. Cross compilation makes the distinction concrete: the machine executing the build script may differ from the machine that will run the program.
+
+Do not infer a target's pointer width or byte order from the build script host's ordinary runtime types. Use Cargo's target configuration information and explicit target data when generating code. A generated binary layout that accidentally uses host usize can work locally and fail on another target.
+
+Build scripts also introduce reproducibility concerns. Reading arbitrary environment variables or external files without correctly declaring rebuild dependencies can make stale output appear valid. Network-dependent generation can make builds nonreproducible or unavailable offline. Constant evaluation of a pure table avoids those particular dependencies, although it can still consume substantial compilation resources.
+
+Choose the mechanism that matches the input. Pure fixed Rust data is often suitable for const evaluation. Native library discovery and foreign code generation belong to build tooling. User configuration belongs to runtime loading unless the product intentionally builds a separate binary for each configuration.
+
+## Compile Time Work Still Has a Cost
+
+Moving computation into compilation does not remove it from the engineering system. Large tables can increase compile time and binary size. Many const-generic instantiations can increase generated code. A complex const parser may produce difficult build diagnostics. A small runtime calculation executed once at startup may be cheaper overall than a large compile-time framework.
+
+Measure the dimension that matters. Embedded firmware may prioritize zero dynamic allocation and predictable storage. A frequently rebuilt developer tool may prioritize incremental compile time. A server may amortize a small startup cost over days of execution. The same const-generic design can be appropriate in one setting and burdensome in another.
+
+The most durable use of const features is expressing a real structural invariant with a simple implementation. A fixed digest length, a protocol field width, or a small derived classification table communicates meaning and reduces duplicated checks. If the type-level machinery becomes harder to explain than the property, reconsider whether the property belongs in a runtime value.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A const fn computes a checksum from a runtime slice. Is the checksum necessarily computed during compilation?
+
+Solution. No. const fn permits constant evaluation when used in a const context and may be optimized elsewhere. A runtime input generally requires runtime execution. The modifier describes eligibility, not a universal scheduling guarantee.
+
+Exercise 2. Why might Packet<N> be a poor representation for messages whose lengths come from the network?
+
+Solution. Each N is a distinct compile-time type, while arbitrary network lengths are runtime data. A dynamic buffer or a bounded buffer with a runtime used length usually matches that variability better. Const generics fit fixed protocol sizes or fixed capacity families, not every dynamic size.
+
+Exercise 3. A build script uses std::mem::size_of::<usize>() to generate the target's file format. What can go wrong?
+
+Solution. The build script runs for the host, whose pointer width may differ from the target. File formats should use explicitly specified widths, and target-dependent generation should consult target configuration rather than host assumptions. Constant evaluation and build-script execution have different environments.
+
+## Further Reading
+
+- [Rust Reference on constant evaluation](https://doc.rust-lang.org/reference/const_eval.html) specifies const contexts and permitted operations.
+- [Rust Reference on generic parameters](https://doc.rust-lang.org/reference/items/generics.html#const-generics) describes const parameter types and expression restrictions.
+- [Cargo build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html) explains host-side build execution and rebuild instructions.

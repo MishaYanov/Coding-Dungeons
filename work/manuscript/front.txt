@@ -1,0 +1,59 @@
+# Reading This Book
+
+Rust asks a developer to make resource relationships explicit. A value has an owner. A reference grants access under constraints. A trait expresses obligations that an implementation must satisfy. An asynchronous operation can retain state while suspended. An unsafe abstraction makes promises that ordinary type checking cannot verify. Understanding these relationships is more useful than memorizing a collection of compiler-error repairs.
+
+This book is written for developers who already understand programming, functions, data structures, and ordinary control flow. It assumes you can read Rust's basic syntax or consult a syntax reference when needed. It concentrates on the logic behind ownership, lifetimes, generic interfaces, concurrency, async execution, memory layout, and systems boundaries. Basic syntax appears inside examples only when it supports those subjects.
+
+The central method is to connect a mechanism to the invariant it helps maintain. A mutable reference is useful because it grants exclusive access through a particular relationship. A transaction version is useful because it validates a particular history. A bounded queue is useful because it limits particular retained messages. Each mechanism also has limits. Exclusive access does not prove a domain invariant, a version does not validate external services, and a bounded queue does not bound every allocation in a process.
+
+## How the Book Develops
+
+Part 1 develops ownership as resource logic. It moves from permissions and initialization to reborrowing, lifetime constraints, variance, destruction, interior mutability, and graph representations. These chapters supply the vocabulary needed to explain what a Rust API permits and why a borrow may outlast the line that created it.
+
+Part 2 develops type and API design. Traits, associated types, dispatch, coherence, closures, lending interfaces, errors, typestate, public compatibility, macros, and const evaluation are treated as design mechanisms. The emphasis is on choosing relationships that remain understandable as a library grows.
+
+Part 3 follows concurrent and asynchronous execution. It separates memory safety from progress and business correctness, then examines synchronization, message ownership, atomics, futures, pinning, wakeups, cancellation, async interfaces, and service shutdown. Read the ownership chapters first if suspended borrows or transferred capabilities feel unclear.
+
+Part 4 examines systems boundaries. Layout, raw pointers, unsafe abstractions, partial initialization, FFI, collections, performance, and testing require precise statements about representation and evidence. These chapters distinguish documented guarantees from implementation observations and unsettled language-model details.
+
+Part 5 combines the concepts in six design studies. A borrowing parser, versioned store, bounded worker pipeline, protocol state machine, coherent crate, and review method show how choices interact. They are deliberately small enough to inspect completely, while their limitations identify what a production implementation would need to add.
+
+## Reading Routes
+
+For ownership and lifetime design, read Chapters 1 through 8, then Chapters 13, 15, 37, and 40. This route connects access relationships to iterator interfaces, state transitions, and storage representation.
+
+For library and API work, read Chapters 4, 5, and 9 through 18, followed by Chapters 33 and 41. This route emphasizes obligations, erased types, public compatibility, code generation, and boundaries that downstream users compile against.
+
+For concurrent services, read Chapters 6, 7, and 19 through 28, followed by Chapters 38 through 40. This route concentrates on progress, cancellation, admission, state, and shutdown rather than on any one runtime.
+
+For unsafe or performance-sensitive systems work, read Chapters 2, 5 through 7, 22, 24, and 29 through 36. Return to the design studies when you want to see how safe representation changes can reduce the need for unsafe implementation.
+
+Reading in order remains useful because later chapters refer to earlier concepts. The routes simply let an experienced reader focus on an immediate problem without mistaking one isolated mechanism for the whole language.
+
+## Example Conventions
+
+Listings labeled Rust example are self-contained source units checked with Rust 2024 edition settings. Some contain a complete `main`; others define library items. The accompanying examples archive preserves their chapter and listing numbers. A source unit without a `main` is checked as a library rather than wrapped in an invented program.
+
+Listings labeled Rejected example intentionally fail type checking. Their surrounding discussion explains the relationship that the compiler rejects. Compiler wording can change between versions, so concentrate on the category of failure rather than on matching an exact diagnostic sentence.
+
+Listings labeled Sketch contain excerpts, manifests, commands, diagrams, or architectural pseudocode. They are not advertised as standalone executable programs. Examples involving a runtime, foreign library, operating-system resource, or larger project identify the surrounding context they require.
+
+The examples use Rust edition 2024. The original compiler pass used rustc 1.97.1. The November 2026 review targets stable Rust 1.99.1. The reader project's audit records the compiler and execution results. Unsafe and concurrent code also requires reasoning about behavior that a type check cannot establish.
+
+The book favors stable language features. Nightly tools or unstable experiments are identified where discussed and are not required to understand the main argument. Edition settings and compiler releases are different dimensions: an edition selects certain language compatibility rules, while a compiler release determines the available implementation and stabilized features.
+
+## Exercises and Solutions
+
+Every chapter includes exercises followed by reasoned solutions. Try to answer by naming the invariant, the owner, or the missing relationship before writing code. A solution that compiles can still fail the exercise if it changes the required failure or retention behavior.
+
+For implementation exercises, test the cases that challenge the representation. A generational handle needs stale-handle tests. A parser needs UTF-8 and incomplete-input tests. A queue needs shutdown and disconnection tests. A transaction needs conflicting histories. These cases reveal more than repeating the ordinary successful path with different small values.
+
+When a solution offers several designs, compare their obligations rather than searching for one universally idiomatic answer. Cloning, reference counting, dynamic borrowing, locking, and unsafe code all have legitimate uses. Their suitability depends on the access, retention, concurrency, and failure requirements of the application.
+
+## Sources and Guarantees
+
+Further reading at the end of each chapter points to primary Rust documentation and relevant project-maintained references. These links support precise language rules and API contracts. The explanations, examples, and design studies in this book are original teaching material, with their own stated assumptions and limits.
+
+For an exact standard-library operation, read its current documentation before relying on a detail in production. For unsafe code, distinguish the Rust Reference's stated requirements, library safety contracts, and experimental models used by tools. Rust does not yet have one complete formal specification covering every unsafe-code question. An implementation that passes one tool under one model still needs a soundness argument for its public contract.
+
+The intended outcome is practical: you should be able to explain why an API is shaped as it is, predict where ownership and trait obligations matter, identify what the compiler proves, and design the remaining runtime and protocol checks deliberately.

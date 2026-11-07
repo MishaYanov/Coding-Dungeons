@@ -1,0 +1,213 @@
+# Chapter 17 Macros as Controlled Code Generation
+
+## Generate Repetition Without Hiding the Contract
+
+A macro operates on Rust syntax and produces more Rust syntax. The generated program still has to satisfy name resolution, type checking, borrowing, and all ordinary validity requirements. Macros are useful when the repeated structure is syntactic: a family of implementations, a small domain notation, or a declaration that should generate several mutually consistent items. They are less useful when an ordinary function can express the same ownership and control-flow behavior clearly.
+
+The strongest reason to introduce a macro is often consistency. A command table can generate both an enum and its numeric decoder from one list. A test matrix can generate named cases with the same setup. A tracing macro can capture source locations and format arguments without evaluating disabled arguments. These operations need access to syntax or call-site context that a normal function does not receive.
+
+The cost is a second language at the API boundary. Users must understand the macro's grammar, expansion behavior, diagnostics, and dependencies. A macro that saves six lines but obscures a move or repeats a side effect may make code harder to review. Design the generated Rust first, then decide whether a macro makes that structure easier to maintain.
+
+Treat the expansion as the real implementation. Review which expressions run, how many times they run, which names are introduced, which paths are resolved, what gets moved, and where control flow goes. A clean invocation cannot compensate for an unclear expansion.
+
+## Declarative Matching Recognizes Structured Fragments
+
+macro_rules matches token patterns. Fragment specifiers such as expr, ty, ident, and tt determine what kind of syntax a metavariable accepts. Repetition describes a list of matched fragments and how that list is reproduced. The matcher does not perform arbitrary semantic analysis of the fragment's type.
+
+```rust
+macro_rules! pairs {
+    ($($key:expr => $value:expr),* $(,)?) => {{
+        let mut result = Vec::new();
+        $(result.push(($key, $value));)*
+        result
+    }};
+}
+
+fn main() {
+    let mut next = 0;
+    let values = pairs! {
+        "first" => { next += 1; next },
+        "second" => { next += 1; next },
+    };
+    assert_eq!(values, [("first", 1), ("second", 2)]);
+    assert_eq!(next, 2);
+}
+```
+
+The matcher accepts zero or more key-value pairs and an optional trailing comma. The expansion is a block expression whose last expression is the vector. Each key and value expression appears exactly once in the generated pushes. The execution order follows the generated statements, so the example makes the side effects visible.
+
+This macro deliberately uses Vec::new rather than precomputing capacity by evaluating arguments. Counting tokens is possible, but an optimization should not accidentally evaluate user expressions an extra time. A capacity hint is less important than preserving semantics. If a macro promises a particular evaluation order, keep tests with side-effecting inputs so later rewrites preserve that promise.
+
+Fragment choices affect grammar evolution. An expr fragment is parsed as an expression, not an arbitrary token sequence that another rule can inspect freely. A tt fragment is more flexible but transfers more parsing responsibility to the macro. Use a narrow fragment when the API expects ordinary Rust syntax; use token trees when the macro genuinely defines another notation.
+
+## Evaluation Count Is Part of the Public API
+
+A naive macro can substitute an expression twice and thereby duplicate I/O, mutation, allocation, or ownership transfer. The problem is not specific to side effects. Repeating a non-Copy expression can cause a move error, and borrowing it twice can extend lifetimes unexpectedly.
+
+```rust
+macro_rules! inspect_value {
+    ($expression:expr) => {{
+        let value = $expression;
+        eprintln!("{} = {:?}", stringify!($expression), &value);
+        value
+    }};
+}
+
+fn main() {
+    let mut calls = 0;
+    let result = inspect_value!({
+        calls += 1;
+        String::from("payload")
+    });
+    assert_eq!(calls, 1);
+    assert_eq!(result, "payload");
+}
+```
+
+The temporary binding captures the result once. Formatting borrows that result, and the final expression moves it back to the caller. This is useful behavior, but it also imposes a Debug requirement. An inspection macro changes the set of accepted expressions even when it appears observational. It may also perform blocking output or trigger a formatting panic. Document and name such behavior honestly.
+
+Temporary variables can influence drop timing. A macro that stores an intermediate in a local block may keep it alive until the block ends, whereas an inlined expression might drop temporaries at another boundary. This matters for lock guards, borrow guards, and resources whose destructors have observable effects. Review a macro invocation involving a guard by expanding its scope mentally or inspecting actual expansion output.
+
+Control-flow tokens also belong to the caller's program. A return inside a captured block can return from the enclosing function rather than from an imagined macro function. The question mark propagates according to the generated context. If a macro wraps user code in a closure, it changes these relationships. Such a wrapper is a semantic decision, not merely an implementation convenience.
+
+## Hygiene Prevents Some Collisions but Does Not Solve Every Name
+
+Declarative macros use mixed-site hygiene. Local bindings introduced by a macro do not simply capture arbitrary caller variables with the same spelling. Other names and paths still need careful treatment. Exported macros must work when invoked from another crate whose imports differ from the author's test module.
+
+Use $crate to refer to the defining crate, and use sufficiently explicit paths for standard items. The referred helper must still be visible to the downstream expansion; $crate does not bypass privacy. This creates an important public implementation surface for exported macros.
+
+```rust
+#[doc(hidden)]
+pub mod __macro_support {
+    pub fn checked_sum(values: &[u64]) -> Option<u64> {
+        values.iter().try_fold(0_u64, |sum, value| {
+            sum.checked_add(*value)
+        })
+    }
+}
+
+#[macro_export]
+macro_rules! checked_sum {
+    ($($value:expr),* $(,)?) => {{
+        $crate::__macro_support::checked_sum(&[$($value),*])
+    }};
+}
+
+fn main() {
+    assert_eq!(checked_sum!(2, 3, 5), Some(10));
+    assert_eq!(checked_sum!(u64::MAX, 1), None);
+}
+```
+
+The helper is public because external expansions need to call it. doc(hidden) keeps it out of ordinary generated documentation, but it does not make it private or remove compatibility considerations. A published macro and its helper paths must evolve together. Removing the helper can break users of an older expansion source even if the ordinary public API appears unchanged.
+
+The macro evaluates each argument once and borrows the array for the helper call. The helper's signature fixes the element type as `u64`. Rust 1.99.1 promotes both arrays in this example to static storage. Runtime arguments can need temporary storage. Measure large expansions to assess their stack cost.
+
+## Generate Correlated Declarations From One Table
+
+A macro can prevent two manually maintained declarations from drifting apart. A command enum and its decoder should agree on numeric codes. The following complete example generates both from one table of fieldless variants.
+
+```rust
+macro_rules! commands {
+    ($name:ident { $($variant:ident = $code:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[repr(u8)]
+        enum $name {
+            $($variant = {
+                let code: u128 = $code;
+                ::core::assert!(code <= u8::MAX as u128);
+                code as u8
+            }),+
+        }
+
+        impl TryFrom<u8> for $name {
+            type Error = u8;
+
+            fn try_from(value: u8) -> Result<Self, Self::Error> {
+                match value {
+                    $(v if v == Self::$variant as u8 => Ok(Self::$variant),)+
+                    unknown => Err(unknown),
+                }
+            }
+        }
+    };
+}
+
+commands! {
+    Command {
+        Ping = 1,
+        Fetch = 2,
+        Close = 9,
+    }
+}
+
+fn main() {
+    assert_eq!(Command::try_from(2), Ok(Command::Fetch));
+    assert_eq!(Command::try_from(7), Err(7));
+    assert_eq!(Command::Close as u8, 9);
+}
+```
+
+The generated enum's explicit representation makes the numeric cast meaningful for these fieldless variants. The decoder validates incoming bytes rather than transmuting them into an enum. Unknown discriminants remain ordinary errors. The macro does not turn an arbitrary byte into a valid enum value merely because the representation is u8.
+
+The compiler rejects duplicate discriminants. The enum reads each code as `u128` and checks the byte range before narrowing it. The const assertion rejects `256` even if `overflowing_literals` is allowed. The decoder compares incoming bytes with the checked enum values.
+
+Use fieldless variants with unsuffixed nonnegative integer codes from 0 to 255. The `u128` context also accepts an explicit `u128` suffix. Payload variants, expressions, attributes, visibility, and generics would complicate the contract. A small declaration language is easier to document, test, and maintain.
+
+## Procedural Macros Receive Tokens Rather Than Typed Programs
+
+A procedural macro runs during compilation and transforms token streams. Derive macros inspect the annotated item's syntax and emit additional items. Attribute macros can replace or extend an item. Function-like procedural macros accept tokens in a macro invocation. These mechanisms provide more flexible parsing than macro_rules, but they do not generally receive the compiler's fully resolved type information.
+
+A derive macro can see that a field is written as SomeType<T>. It cannot generally know that SomeType is an alias for a particular external type or prove which trait implementations T will have after name resolution. Generate appropriate bounds and let type checking establish them. Trying to infer semantic identity from token spelling is fragile under imports, aliases, and renamed dependencies.
+
+Procedural macros live in a proc-macro crate. That package arrangement is part of the build architecture. A library often reexports its derive macro from an ordinary runtime crate while sharing names and support paths. The generated code must account for crate renaming and optional integrations. Hard-coding a dependency's expected import name can fail when downstream users rename that dependency in Cargo.toml.
+
+Parsing token streams by converting them to strings and splitting on punctuation is rarely robust. Rust syntax includes nested groups, attributes, generics, lifetimes, raw identifiers, and tokens whose spacing is significant. A parser library can provide an appropriate syntax tree, but it adds compile-time dependencies and versioning work. Use the smallest parsing strategy that correctly handles the documented input grammar.
+
+## Diagnostics Are a Major Part of Macro Usability
+
+A compiler error inside generated code can be technically correct while leaving the user unable to identify the invalid input. Preserve useful spans when generating tokens and emit targeted errors for unsupported syntax. A derive macro that rejects unions should say that the derive supports structs and enums, rather than generating an invalid impl and letting a later type error obscure the reason.
+
+Do not panic for ordinary user mistakes in macro input. A procedural macro panic reports a tool failure rather than a well-formed validation error. Emit compile_error or a structured diagnostic strategy supported by the chosen stable tooling. Reserve internal panics for genuinely unreachable macro implementation defects, and still prefer an actionable message when possible.
+
+For declarative macros, a final catch-all arm can provide a concise grammar hint, but it should not accidentally swallow a more specific diagnostic. Match rule order matters. Broad token-tree rules placed before precise cases can accept input the author intended to reject. Test malformed invocations as carefully as successful ones.
+
+Editor support is another practical cost. Generated methods may be discoverable through expansion-aware tooling, but a custom notation can weaken ordinary completion and navigation. A macro API should earn that cost by eliminating meaningful duplication or enabling a capability normal Rust syntax cannot express conveniently.
+
+## Test Expansion Semantics Across Crate Boundaries
+
+Unit tests in the defining module do not adequately test an exported macro. They may accidentally provide imports, private visibility, or helper names that downstream crates lack. An integration test should invoke the macro from an external-style context with minimal imports and potentially conflicting local names.
+
+Test ownership behavior with non-Copy inputs. Test evaluation count with a counter. Test empty input and trailing separators if supported. Test generic types and lifetimes when the grammar claims to support them. Compile-fail cases should verify rejected syntax and missing bounds. For a derive, include renamed dependencies or reexports if those are supported workflows.
+
+Do not make every expansion detail part of the stable contract. A snapshot of generated tokens can help maintainers inspect changes, but callers usually care about generated items and behavior. Tests should distinguish internal formatting from public semantics. A harmless token formatting change should not distract from a changed ownership requirement.
+
+Macro dependencies execute during the build and can increase compilation time significantly. Share heavy parsing work within one macro crate, avoid generating unnecessarily large token streams, and measure build impact for common use cases. A macro that generates hundreds of nearly identical implementations may be appropriate, but the cost should correspond to real user value.
+
+## Editions Affect Macro Grammars
+
+Macro fragment behavior can evolve with editions. In edition 2024, expr matches additional expression forms, while expr_2021 preserves the older fragment behavior. The relevant edition is associated with the macro definition, not simply whichever edition the caller uses. A macro crate's edition migration can therefore change which rule matches a downstream invocation.
+
+When migrating a macro crate, review rule precedence and ambiguous patterns rather than assuming ordinary source compatibility is enough. A new expression form accepted by an earlier rule can prevent a later specialized rule from matching. Keep tests containing syntax near the grammar boundary, especially if the macro uses tokens such as const as part of its own notation.
+
+This is another reason to prefer simple, explicit grammars. A macro with familiar separators and narrow fragment expectations is easier to evolve than one whose meaning depends on subtle competition between several broad patterns. Language extension should reduce repetition while preserving the reader's ability to reason from the invocation to the generated program.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A macro expands check!(make_value()) into make_value().is_valid() followed by make_value().save(). What is wrong?
+
+Solution. The expression runs twice, potentially creating different values or duplicating side effects. Bind it once inside the expansion, then operate on the binding with appropriate ownership. Decide whether validation borrows or consumes it, and test with a counter and a non-Copy value.
+
+Exercise 2. An exported macro calls helper() successfully in unit tests but fails downstream. What should be checked?
+
+Solution. The expansion may rely on the defining module's imports or private helper visibility. Use $crate with the correct helper path, ensure external expansions can access it, and test from an integration crate with minimal imports. Hygiene does not automatically qualify every item reference or bypass privacy.
+
+Exercise 3. A procedural derive wants different output when a field's type is an alias for Vec<u8>. Can token spelling reliably establish that fact?
+
+Solution. No. The macro sees syntax before full type resolution. Aliases, imports, and reexports can hide the semantic identity. Require an explicit attribute, generate a trait-based obligation, or redesign the derive around syntax it can actually recognize. Do not pretend token inspection is type introspection.
+
+## Further Reading
+
+- [Rust Reference on macros by example](https://doc.rust-lang.org/reference/macros-by-example.html) specifies matching, repetition, hygiene, and $crate.
+- [Rust Reference on procedural macros](https://doc.rust-lang.org/reference/procedural-macros.html) describes token streams, macro crate forms, and hygiene limitations.
+- [Rust Edition Guide on fragment specifiers](https://doc.rust-lang.org/edition-guide/rust-2024/macro-fragment-specifiers.html) explains edition 2024 expression matching changes.

@@ -1,0 +1,213 @@
+# Chapter 38 Building a Versioned In Memory Store
+
+A versioned store connects ownership, shared data, errors, and concurrency in one small design. Readers want stable views. Writers want to make changes without exposing half a transaction. The program must decide when a snapshot becomes stale, what a conflict means, and whether retrying an operation is safe. Rust can help enforce exclusive access to a commit operation, but it cannot choose the consistency model for us.
+
+We will build a process-local key-value store with immutable snapshots and optimistic transactions. The implementation is intentionally conservative. Every committed write advances one global version. A transaction can commit only when that version still matches the version from which it began. This rejects some nonconflicting writes, but makes the validation rule easy to state and inspect. It is a useful first design because its correctness argument fits in a few explicit steps.
+
+The store is not durable. It has no write-ahead log, crash recovery, replication, or remote transaction protocol. A successful commit means that this in-memory object accepted a new state. Calling that operation durable would be an application bug even if every Rust reference were valid.
+
+## State the Consistency Contract First
+
+A snapshot contains an immutable map and the version associated with that map. The store owns one `Arc` to the current map. Readers clone that `Arc`, so an old map remains available while readers use it. Writers create a replacement map and publish it only after validation. Existing snapshots continue to observe the old map.
+
+The map stores owned keys and values. This avoids borrowing from request buffers or temporary transactions. Values could instead be `Arc<[u8]>` to make map copies cheaper for large payloads. That change would alter copying cost, but it would not alter the conflict rule. Separating these questions is valuable: consistency concerns which versions may commit; representation concerns how much work those versions require.
+
+A transaction owns its staged changes and a snapshot of its starting state. Reads first consult staged changes and then the snapshot. A staged deletion must be distinguishable from no staged change, so the staging map stores `Option<String>` values. `Some(value)` means replacement and `None` means deletion. The outer map lookup tells us whether the transaction has an entry at all.
+
+## A Complete Conservative Implementation
+
+The following program has no external dependencies. `commit` requires `&mut self`, so safe callers cannot publish two commits through the same store simultaneously. Wrapping the store in a mutex would extend that serialization to multiple threads. The global version check remains necessary because transactions can be created, held independently, and submitted later.
+
+```rust
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+type Map = BTreeMap<String, String>;
+
+#[derive(Clone)]
+struct Snapshot {
+    version: u64,
+    data: Arc<Map>,
+}
+
+struct Store {
+    version: u64,
+    data: Arc<Map>,
+}
+
+struct Transaction {
+    base: Snapshot,
+    changes: BTreeMap<String, Option<String>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CommitError {
+    Conflict,
+    VersionExhausted,
+}
+
+impl Store {
+    fn new() -> Self {
+        Self { version: 0, data: Arc::new(Map::new()) }
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            version: self.version,
+            data: Arc::clone(&self.data),
+        }
+    }
+
+    fn begin(&self) -> Transaction {
+        Transaction {
+            base: self.snapshot(),
+            changes: BTreeMap::new(),
+        }
+    }
+
+    fn commit(&mut self, tx: Transaction)
+        -> Result<u64, CommitError>
+    {
+        if tx.base.version != self.version
+            || !Arc::ptr_eq(&tx.base.data, &self.data)
+        {
+            return Err(CommitError::Conflict);
+        }
+        if tx.changes.is_empty() {
+            return Ok(self.version);
+        }
+        let next = self.version.checked_add(1)
+            .ok_or(CommitError::VersionExhausted)?;
+        let mut replacement = (*self.data).clone();
+        for (key, value) in tx.changes {
+            match value {
+                Some(value) => { replacement.insert(key, value); }
+                None => { replacement.remove(&key); }
+            }
+        }
+        self.data = Arc::new(replacement);
+        self.version = next;
+        Ok(next)
+    }
+}
+
+impl Transaction {
+    fn get(&self, key: &str) -> Option<&str> {
+        match self.changes.get(key) {
+            Some(value) => value.as_deref(),
+            None => self.base.data.get(key).map(String::as_str),
+        }
+    }
+
+    fn put(&mut self, key: String, value: String) {
+        self.changes.insert(key, Some(value));
+    }
+
+    fn delete(&mut self, key: String) {
+        self.changes.insert(key, None);
+    }
+}
+
+fn main() {
+    let mut store = Store::new();
+    let other_store = Store::new();
+    let foreign = other_store.begin();
+    assert_eq!(store.commit(foreign), Err(CommitError::Conflict));
+    let before = store.snapshot();
+    let mut first = store.begin();
+    let mut stale = store.begin();
+    first.put("mode".into(), "fast".into());
+    assert_eq!(first.get("mode"), Some("fast"));
+    assert_eq!(store.commit(first), Ok(1));
+    stale.delete("mode".into());
+    assert_eq!(store.commit(stale), Err(CommitError::Conflict));
+    assert!(before.data.is_empty());
+    assert_eq!(store.snapshot().data["mode"], "fast");
+}
+```
+
+Validation checks both the global version and the identity of the snapshot's map. The pointer-identity check matters because two different stores can have the same numeric version. Without it, a transaction could read one store and commit to another. A durable or distributed implementation would normally use an explicit store identity and a version protocol appropriate to its storage model.
+
+There are four important transitions. Before validation, the transaction is only a proposal. After validation, the new map is prepared privately. Publishing replaces the store's map pointer. Updating the version completes the new state before the mutable borrow is released. No user callback executes between pointer replacement and version update, and those assignments themselves do not allocate. A reader cannot interleave through a safe shared reference while this mutable borrow is active.
+
+Building a replacement first gives a strong structural benefit: ordinary panics during preparation do not partially update the currently published map. The example uses strings and their ordinary ordering. A more generic key type can execute user-defined comparison code; that is another reason to keep preparation separate from publication. Allocation failure may abort the process under the allocator's policy, so an argument about unwind safety does not establish recovery from every failure mode.
+
+## Understand What the Global Version Proves
+
+If a transaction commits, no earlier writer has changed the store since the transaction's snapshot was taken. Therefore all of its snapshot reads correspond to the state immediately preceding its commit. Its staged changes can be applied as one serialized operation in commit order. This is a conservative serializable execution model for these transactions, provided all relevant reads and writes occur through the store.
+
+The final condition is easy to overlook. Suppose the transaction reads a balance from this store but obtains an exchange rate from a mutable external cache. The store's version says nothing about the exchange rate. A proof is only as broad as the state it actually validates. Application invariants that depend on time, files, remote services, or another database require an additional protocol.
+
+The conservative model also rejects harmless overlaps. Two transactions that write different keys still conflict when the first commits. This can be acceptable for a small configuration service with infrequent writes. It can be expensive for a high-volume independent-counter workload. Correctness comes before granularity: establish a model whose invariants are clear, then measure whether its conflicts justify a more complicated validator.
+
+Read-only transactions currently validate their version too. A read-only transaction submitted after a writer receives a conflict even though it has no effects. One alternative is to return its snapshot version without validation. That is appropriate when a historical consistent read is sufficient. It is inappropriate if the caller interprets a successful validation as evidence that a decision still reflects the current state. Method names should make that distinction visible.
+
+## Finer Validation Introduces New State
+
+Per-key versions can reduce conflicts, but tracking only written keys is insufficient when decisions depend on reads. Imagine two operators who may be on call, with an invariant that at least one remains. Two transactions each observe both operators, then each removes a different operator. Their write sets are disjoint. Validating only write-write conflicts allows both to commit and breaks the invariant.
+
+A finer optimistic design records the versions of all keys read and validates them at commit. Missing keys need a representation too. If a transaction reads that a key is absent, another transaction inserts it, and the first relies on the absence, the validator must detect that change. Deletion and reinsertion can create another trap when a generation number is reused. Use monotonically advancing versions or another identity mechanism that does not silently equate different histories.
+
+Range queries are harder still. Recording the versions of returned keys does not detect a new matching key that was absent during the original query. That is a phantom. A range-level generation, predicate lock, index validation, or another explicitly designed mechanism is needed if range-dependent decisions require serializable behavior. A `BTreeMap` gives ordered traversal; it does not automatically give a database isolation level.
+
+These issues illustrate the boundary between Rust correctness and algorithm correctness. The compiler can establish that a map reference is not used after invalidation. It cannot infer that a transaction forgot to validate the absence of an operator. Tests should describe the application invariant directly and arrange schedules that attempt to violate it.
+
+## Shared Ownership Has Retention Costs
+
+An `Arc` snapshot is cheap to create but can be expensive to retain. The current map may be replaced many times while an old snapshot keeps one historical map alive. The example clones all key and value strings for every write transaction, so peak memory includes every still-retained version plus the replacement under construction. This is predictable but can be substantial.
+
+Structural sharing can reduce copying. A persistent tree copies only changed paths while sharing unchanged nodes. Its ownership graph is more complex, but `Arc` can represent shared immutable nodes. Another design stores large values behind `Arc` while cloning the top-level map. That preserves a simple validator and reduces payload copying without implementing an entirely new collection.
+
+Reference counting itself is not free. Cloning `Arc` updates a shared count, and dropping the final reference runs destruction. If the last reader releases a huge historical map on a latency-sensitive thread, that thread may pay the destruction cost. Some systems deliberately defer reclamation to another thread. Such a change needs a bounded retirement policy; otherwise delayed reclamation merely becomes another unbounded queue.
+
+The complete example below shows the essential snapshot behavior with copy-on-write. It is a separate experiment, not an optimization already present in the store implementation.
+
+```rust
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+fn main() {
+    let mut current = Arc::new(BTreeMap::from([
+        (String::from("limit"), 10_u32),
+    ]));
+    let old = Arc::clone(&current);
+    Arc::make_mut(&mut current).insert("limit".into(), 20);
+    assert_eq!(old["limit"], 10);
+    assert_eq!(current["limit"], 20);
+    assert!(!Arc::ptr_eq(&old, &current));
+}
+```
+
+When another strong owner exists, copy-on-write must preserve that owner's view. Do not assume `Arc::make_mut` avoids cloning under a snapshot-heavy workload. Measure the actual number of live readers at write time. A representation optimization can be ineffective precisely when the versioning feature is most heavily used.
+
+## Retry the Decision Carefully
+
+After a conflict, a caller may begin another transaction and repeat its computation. Repeating pure calculations is usually straightforward. Repeating external effects is not. If the transaction sent an email before commit, retrying can send it twice even though only one state change is accepted. If it charged a payment before commit, the consequences are larger.
+
+One useful pattern computes a proposal and an effect description without executing the effect. Commit both the state change and a durable or otherwise appropriate outbox record in the same consistency domain, then process the outbox with deduplication. Our in-memory store cannot make that outbox survive process failure, so it is only an illustration of where the protocol belongs. Another approach uses an external service's idempotency key and records its result under a carefully specified recovery protocol.
+
+A retry policy also needs a limit. Immediate retries under contention can create repeated work and poor tail latency. Backoff, admission control, or a serialized command processor may be more effective than increasingly fine validation. Optimistic concurrency is attractive when conflicts are rare and transactions are cheap. It becomes less attractive when every failed transaction performs expensive work that must be discarded.
+
+Returning the consumed transaction inside `CommitError` can help callers inspect or reuse a proposal. It should not imply that the old reads are still valid. A safer retry API accepts a closure that reruns the whole read-compute-write step against a fresh snapshot, while clearly restricting external side effects. Even that closure-based API cannot prove semantic idempotence through an ordinary trait bound.
+
+## Exercises
+
+1. Change the commit error to return the original transaction on conflict. Explain which parts can be reused without recomputation and which cannot safely be assumed current.
+
+2. Design per-key version validation for point reads, including absent keys and deletion. Give a history that breaks a validator that checks only the write set.
+
+3. Add a snapshot age metric. Specify whether age means elapsed time, number of commits behind, or both, and describe how you would detect retained historical memory without making every snapshot mutable.
+
+## Reasoned Solutions
+
+1. Use an error variant carrying the transaction. Owned input values or an expensive parsed request can be reused. A proposed numeric result derived from old reads cannot simply be applied to the new state. Recompute the decision or establish a domain-specific merge rule. The transaction's snapshot remains a valid historical view even after rejection.
+
+2. Associate each logical key with a generation that survives deletion, or validate against a separate key-version table. Record the observed generation for every point read, including absence. Validate read generations before applying writes. The two-operator example demonstrates why disjoint writes can still violate a shared predicate.
+
+3. A snapshot can carry its creation `Instant` and version as immutable metadata. The store can expose the current version so monitoring computes version lag. Retained-memory estimates require tracking live generations, weak references to historical maps, or explicit snapshot registration. Avoid inferring byte size directly from strong reference counts because one map may have many readers while another has few but much larger data.
+
+## Further Reading
+
+- [BTreeMap](https://doc.rust-lang.org/std/collections/struct.BTreeMap.html) documents ordered key operations; the transaction and validation rules in this chapter are separate design choices.
+- [Arc](https://doc.rust-lang.org/std/sync/struct.Arc.html) documents shared ownership, weak references, and copy-on-write operations.
+- [Mutex](https://doc.rust-lang.org/std/sync/struct.Mutex.html) describes one way to serialize access when adapting the store to multiple threads.

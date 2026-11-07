@@ -1,0 +1,224 @@
+# Chapter 9 Traits as Relationships and Obligations
+
+## A Trait Is a Promise the Compiler Can Use
+
+Developers often approach a trait as an interface with unfamiliar syntax. That analogy explains method lookup, but it misses the part that shapes advanced Rust: a trait establishes facts about types. A generic function can use those facts without knowing the concrete representation. An implementation supplies evidence that one particular type satisfies the relationship. Associated types, supertraits, and bounds describe the evidence the function may request.
+
+Consider a component that accepts jobs and returns receipts. The important question is not whether it has a method named submit. The important questions are whether each component chooses one receipt type, whether callers may choose the job representation, whether submission mutates internal state, and whether failure preserves the original job. A trait declaration fixes these relationships before there is an implementation.
+
+The distinction matters when a design starts to resist extension. Adding another type parameter may make an individual call compile while allowing combinations the domain cannot support. Adding an associated type may simplify callers while preventing a type from implementing several independent relationships. Trait design is therefore partly an exercise in deciding who chooses each type and when that choice becomes fixed.
+
+Do not begin with a list of methods copied from a struct. Begin with a sentence: for every implementation of this trait, these operations have these relationships. If that sentence cannot be stated clearly, the abstraction may be grouping convenient functions rather than expressing a stable capability.
+
+## Inputs Are Chosen by Callers and Outputs by Implementations
+
+A trait type parameter is an input to the implementation relationship. A type can implement the trait for several values of that parameter, provided the implementations do not overlap. An associated type is an output determined by a particular implementation. Once the implementing type and trait parameters are known, the associated type is fixed.
+
+The following complete example uses both choices deliberately:
+
+```rust
+trait Encode<Input> {
+    type Error;
+
+    fn encode(&self, value: Input) -> Result<Vec<u8>, Self::Error>;
+}
+
+struct Decimal;
+
+impl Encode<u32> for Decimal {
+    type Error = std::convert::Infallible;
+
+    fn encode(&self, value: u32) -> Result<Vec<u8>, Self::Error> {
+        Ok(value.to_string().into_bytes())
+    }
+}
+
+impl Encode<bool> for Decimal {
+    type Error = std::convert::Infallible;
+
+    fn encode(&self, value: bool) -> Result<Vec<u8>, Self::Error> {
+        Ok(if value { b"1" } else { b"0" }.to_vec())
+    }
+}
+
+fn main() {
+    assert_eq!(Decimal.encode(42_u32).unwrap(), b"42");
+    assert_eq!(Decimal.encode(true).unwrap(), b"1");
+}
+```
+
+The implementation relationship is Decimal encodes u32, or Decimal encodes bool. Each relationship chooses an error type. If Error were a second trait parameter, downstream code could in principle implement several error policies for the same encoder and input. That may be useful in a conversion framework. It would usually be confusing in a component whose error representation is a property of its implementation.
+
+An associated type can be owned or borrowed. For example, `Iterator::Item` can use a lifetime from its implementing type, as in Chapter 13's `EveryOther<'data, T>`. A lending interface can use a generic associated type to tie each item to the receiver borrow for that call.
+
+One useful test is to imagine writing two implementations for the same concrete type. If changing the candidate type means choosing a different operation, a trait parameter may fit. If changing it would contradict what the implementation fundamentally returns, an associated type usually communicates the stronger relationship.
+
+## Bounds Are Facts Available Inside a Function
+
+A generic function body is checked using its declared bounds. The compiler does not assume that all current callers happen to use types with extra methods. This prevents a distant implementation detail from quietly becoming a requirement of the function.
+
+```rust
+use std::fmt::Display;
+
+trait Source {
+    type Item;
+    type Error;
+
+    fn next_item(&mut self) -> Result<Option<Self::Item>, Self::Error>;
+}
+
+fn summarize<S>(source: &mut S) -> Result<String, S::Error>
+where
+    S: Source,
+    S::Item: Display,
+{
+    let mut result = String::new();
+    while let Some(item) = source.next_item()? {
+        if !result.is_empty() {
+            result.push_str(", ");
+        }
+        result.push_str(&item.to_string());
+    }
+    Ok(result)
+}
+```
+
+The bound on S permits next_item. The bound on S::Item permits formatting. These are different obligations. Source does not promise that every item is printable; summarize requests that additional capability because its own algorithm needs it. Keeping the requirement at the narrowest useful layer allows nonprintable items to participate elsewhere.
+
+This way of reading generic code scales well. Treat each where clause as a local fact table. When the compiler reports that a method is unavailable, ask which fact would justify that method call. The answer may be a missing bound, an unwanted requirement introduced by a derive, or an associated type that differs from the one the algorithm expects. Adding Clone reflexively often obscures the actual relationship.
+
+A function that requires Iterator<Item = Record> is stronger and often easier to use than one that requires Iterator plus several conversion traits on its item. Equality constraints express that the algorithm has already chosen the representation. Conversion bounds express that the algorithm accepts a family of representations. Neither is universally preferable; the signature should reflect where normalization belongs.
+
+## Following an Associated Type Through a Pipeline
+
+Here is a small pipeline with two distinct abstractions. A producer determines its item type. A consumer chooses an input through a trait parameter. The wiring function proves that the two sides agree.
+
+```rust
+trait Producer {
+    type Item;
+    fn produce(&mut self) -> Option<Self::Item>;
+}
+
+trait Consumer<T> {
+    fn consume(&mut self, item: T);
+}
+
+struct Countdown(u8);
+
+impl Producer for Countdown {
+    type Item = u8;
+
+    fn produce(&mut self) -> Option<u8> {
+        if self.0 == 0 {
+            None
+        } else {
+            self.0 -= 1;
+            Some(self.0)
+        }
+    }
+}
+
+#[derive(Default)]
+struct Sum(u64);
+
+impl Consumer<u8> for Sum {
+    fn consume(&mut self, item: u8) {
+        self.0 += u64::from(item);
+    }
+}
+
+fn drain<P, C>(producer: &mut P, consumer: &mut C)
+where
+    P: Producer,
+    C: Consumer<P::Item>,
+{
+    while let Some(item) = producer.produce() {
+        consumer.consume(item);
+    }
+}
+
+fn main() {
+    let mut producer = Countdown(4);
+    let mut sum = Sum::default();
+    drain(&mut producer, &mut sum);
+    assert_eq!(sum.0, 6);
+}
+```
+
+The generic function never names u8. It does not need to. Its proof obligation is relational: whatever P produces, C must consume. This is a stronger design tool than collecting capabilities independently. A bound such as C: Consumer<u8> would unnecessarily specialize the wiring. A conversion inside drain would add another policy: which conversion, whether it can fail, and who owns that failure.
+
+The receiver choices also carry meaning. produce takes an exclusive borrow because iteration advances state. consume takes ownership of the item, allowing a consumer to retain it without cloning. drain borrows both components so the caller can inspect them afterward. These ownership choices are part of the abstraction, not implementation noise.
+
+For a fallible pipeline, make the failure ownership policy explicit. If a consumer may reject a value that the caller should retry, returning only an error loses the item. A result shaped like Result<(), (Error, Item)> can preserve it. If the consumer has partially committed work, returning the item may falsely imply retry is safe. A type signature cannot replace a semantic contract, but it can prevent the contract from being accidentally impossible to honor.
+
+## Supertraits Add Obligations Without Adding Storage
+
+A declaration such as trait Reliable: Send does not insert a Send field. It requires every implementing type to satisfy Send, making that fact available wherever Reliable is assumed. The same applies to ordinary supertraits such as Display or another domain trait.
+
+Supertraits are appropriate when the extra fact is inseparable from the capability. They are expensive when added for the convenience of one consumer. Requiring Debug on a public trait excludes otherwise valid implementations and commits implementors to another public behavior. Requiring Send excludes thread-confined implementations even in single-threaded applications. Those restrictions may be justified, but they should follow from the abstraction rather than from the first application that uses it.
+
+An associated type bound similarly establishes a general promise. If every Source item must be Clone, declare that relationship on Source. If only one caching adapter clones items, place the bound on that adapter. This distinction keeps the core vocabulary useful while allowing algorithms to state stronger requirements locally.
+
+Trait methods with default implementations run under the same obligations as other generic code. A default method can use the trait's methods and declared bounds. It cannot assume that implementors store data in a particular form. A good default expresses a valid fallback algorithm; an unsuitable default can silently impose performance or consistency behavior that implementors did not expect.
+
+## Qualified Paths Resolve Relationships Explicitly
+
+Method syntax is concise until several traits provide the same name. Fully qualified syntax identifies the relationship directly. The same technique makes associated type projections unambiguous in complex signatures.
+
+```rust
+trait Text {
+    fn describe(&self) -> &'static str;
+}
+
+trait Wire {
+    fn describe(&self) -> &'static str;
+}
+
+struct Packet;
+
+impl Text for Packet {
+    fn describe(&self) -> &'static str { "human readable" }
+}
+
+impl Wire for Packet {
+    fn describe(&self) -> &'static str { "binary frame" }
+}
+
+fn main() {
+    let packet = Packet;
+    assert_eq!(<Packet as Wire>::describe(&packet), "binary frame");
+    assert_eq!(Text::describe(&packet), "human readable");
+}
+```
+
+The long form is not merely a workaround for ambiguous names. It documents which abstraction an algorithm relies on. In a signature, <T as Trait>::Item says that Item belongs to that implementation relationship. This becomes useful when a type implements several traits with identically named associated types.
+
+Do not mistake method lookup conveniences for proof that one trait implies another. Deref coercions, autoref, and traits in scope can make a call work on a concrete expression while a generic bound remains insufficient. Diagnose the bound from the trait relationship, then consider lookup rules separately.
+
+## Laws Live Beside Signatures
+
+A trait can require Eq and Hash, but the compiler does not prove that equal values produce equal hashes. It can require a method named next_item, but it does not prove that the method eventually terminates. Such behavioral laws belong in documentation and tests. Generic algorithms rely on them even though they are outside ordinary type checking.
+
+Separate safety requirements from ordinary semantic laws. Violating a safe trait's documented sorting convention must not, by itself, allow a sound unsafe implementation to cause undefined behavior. An unsafe trait is the mechanism for obligations whose violation can make safe consumers unsound, and implementing it requires an explicit unsafe act. Most application traits should remain safe and treat dishonest implementations as logic errors.
+
+An effective trait review asks what an adversarial but type-correct implementation could do. Could it return inconsistent lengths? Could it panic? Could it report success without changing state? Could it call a callback more often than expected? If an algorithm depends on stronger behavior, document it, validate it, or redesign the interface so the needed fact is carried by a value rather than assumed.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A repository trait has one entity type for each repository implementation, but several repositories store the same entity. Should Entity be a trait parameter or an associated type?
+
+Solution. An associated type communicates one entity choice per implementation. Multiple repository types can choose the same associated entity without conflict. Use a parameter only if one repository type should implement independent repository relationships for several entities. Consider whether such a repository needs distinct state or methods; separate wrapper types may make the design clearer.
+
+Exercise 2. A function consumes a Producer and writes each item using Display. Should Display become a supertrait of Producer?
+
+Solution. No. Display applies to the associated item, not necessarily to the producer, and only this algorithm needs it. Add P::Item: Display to the function. Moving that requirement into Producer would exclude useful producers of binary buffers, opaque handles, and other items that need no textual representation.
+
+Exercise 3. Extend drain so a consumer can fail while returning the rejected item. Explain the retry ambiguity.
+
+Solution. Define a fallible consumer with an associated Error and a return type Result<(), (Self::Error, T)>. The wiring function can stop and return the pair. The signature preserves ownership, but it does not prove that no external effect happened before failure. Document whether an error means no commit, partial commit, or unknown commit. Retry logic depends on that distinction more than on the existence of Result.
+
+## Further Reading
+
+- [Rust Reference on traits](https://doc.rust-lang.org/reference/items/traits.html) defines trait items, bounds, and supertraits.
+- [Rust Reference on associated items](https://doc.rust-lang.org/reference/items/associated-items.html) specifies associated type declarations and qualified paths.
+- [Standard library Iterator](https://doc.rust-lang.org/std/iter/trait.Iterator.html) is a substantial example of an associated output type combined with conditional adapter methods.

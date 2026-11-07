@@ -1,0 +1,244 @@
+# Chapter 8 Arenas Handles Graphs and Ownership Architecture
+
+## Object relationships need not be ownership relationships
+
+A graph can contain cycles, multiple incoming edges, and references that outlive the operation that created them. Representing every edge as a Rust borrow often creates an impossible lifetime puzzle because the graph's logical topology is being asked to determine allocation ownership. Those are separate structures.
+
+One owner can hold all nodes while edges store identifiers. Removing a node is then an operation on that owner, and following an edge requires a fresh checked lookup. Alternatively each node can be reference counted, and some edges can be weak so cycles do not retain the entire structure. Another design owns nodes in a region that is destroyed all at once. Each architecture selects a different deletion, sharing, and lifetime policy.
+
+The first step is to answer how nodes should disappear. If the whole graph dies together, a central arena is simple. If individual records are deleted and identifiers can survive, identifiers need stale reference detection. If independent components genuinely share ownership, reference counting may be appropriate. If ownership is hierarchical but navigation is cyclic, separate strong parent to child ownership from weak child to parent navigation.
+
+Borrowing then becomes a temporary operation on that architecture. A lookup lends a node for one use. A mutation lends it exclusively. The long lived graph relationships remain identifiers or owned handles rather than permanent language references into movable containers.
+
+## A central owner makes cycles ordinary data
+
+An index based graph can store arbitrary cyclic relationships without cyclic ownership. Its vector owns the nodes. Each edge is an integer interpreted by that graph. Moving the graph or reallocating its vector does not invalidate the integers, provided the graph's indexing policy preserves their meaning.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NodeId(usize);
+
+struct Node {
+    label: String,
+    edges: Vec<NodeId>,
+}
+
+#[derive(Default)]
+struct Graph {
+    nodes: Vec<Node>,
+}
+
+impl Graph {
+    fn add(&mut self, label: &str) -> NodeId {
+        let id = NodeId(self.nodes.len());
+        self.nodes.push(Node {
+            label: label.to_owned(),
+            edges: Vec::new(),
+        });
+        id
+    }
+
+    fn connect(&mut self, from: NodeId, to: NodeId) -> bool {
+        if to.0 >= self.nodes.len() {
+            return false;
+        }
+        match self.nodes.get_mut(from.0) {
+            Some(node) => {
+                node.edges.push(to);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn label(&self, id: NodeId) -> Option<&str> {
+        self.nodes.get(id.0).map(|node| node.label.as_str())
+    }
+}
+
+fn main() {
+    let mut graph = Graph::default();
+    let first = graph.add("first");
+    let second = graph.add("second");
+    assert!(graph.connect(first, second));
+    assert!(graph.connect(second, first));
+    assert_eq!(graph.label(first), Some("first"));
+}
+```
+
+This graph is append only. It deliberately offers no deletion or reordering operation, because either would require defining how old identifiers behave. An index newtype prevents accidental confusion with unrelated numeric quantities but does not prevent a `NodeId` from one graph being passed to another. The runtime bounds check prevents memory unsafety; it does not prevent a logically incorrect cross graph lookup that happens to be in bounds.
+
+There are several ways to strengthen identity. Include an owner identifier in the handle, use a lifetime brand supplied by a scoped API, or make graph handles private behind an operation that never mixes owners. Each adds constraints or bookkeeping. The important point is to name the desired guarantee precisely: in bounds, not deleted, same owner, and same logical record are distinct properties.
+
+## Deletion turns indices into a versioning problem
+
+Suppose slot 7 once contains a user, is removed, and later contains another user. A raw index 7 can no longer distinguish those records. This is the same shape as the ABA problem: the visible identifier returns to the same value while the underlying identity has changed.
+
+A generational handle stores both a slot and a generation. Removal advances the slot's generation. Lookup accepts a handle only when both match. A stale handle can remain in another node without becoming a reference to the replacement object.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Handle {
+    slot: usize,
+    generation: u64,
+}
+
+struct Slot<T> {
+    generation: u64,
+    value: Option<T>,
+}
+
+struct Arena<T> {
+    slots: Vec<Slot<T>>,
+    free: Vec<usize>,
+}
+
+impl<T> Arena<T> {
+    fn new() -> Self {
+        Self { slots: Vec::new(), free: Vec::new() }
+    }
+
+    fn insert(&mut self, value: T) -> Handle {
+        if let Some(index) = self.free.pop() {
+            let slot = &mut self.slots[index];
+            slot.value = Some(value);
+            Handle { slot: index, generation: slot.generation }
+        } else {
+            let index = self.slots.len();
+            self.slots.push(Slot { generation: 0, value: Some(value) });
+            Handle { slot: index, generation: 0 }
+        }
+    }
+
+    fn get(&self, handle: Handle) -> Option<&T> {
+        let slot = self.slots.get(handle.slot)?;
+        if slot.generation != handle.generation {
+            return None;
+        }
+        slot.value.as_ref()
+    }
+
+    fn remove(&mut self, handle: Handle) -> Option<T> {
+        let slot = self.slots.get_mut(handle.slot)?;
+        if slot.generation != handle.generation {
+            return None;
+        }
+        let value = slot.value.take()?;
+        if let Some(next) = slot.generation.checked_add(1) {
+            slot.generation = next;
+            self.free.push(handle.slot);
+        }
+        Some(value)
+    }
+}
+
+fn main() {
+    let mut arena = Arena::new();
+    let old = arena.insert(String::from("old"));
+    assert_eq!(arena.remove(old).as_deref(), Some("old"));
+    let new = arena.insert(String::from("new"));
+    assert_eq!(old.slot, new.slot);
+    assert_ne!(old.generation, new.generation);
+    assert!(arena.get(old).is_none());
+    assert_eq!(arena.get(new).map(String::as_str), Some("new"));
+}
+```
+
+The generation increment is checked. On exhaustion, the empty slot is retired instead of being reused with a wrapped generation. Wrapping would eventually permit an ancient handle to match a new object. A 64 bit counter makes exhaustion unlikely, but an invariant should not silently depend on unlikely being impossible.
+
+The arena still lacks owner identity. Two separate arenas can produce the same slot and generation pair. Applications needing cross arena safety must add that relationship. The code also does not reclaim its slot vector's peak allocation; deletion reuses slots but retains storage capacity. These are deliberate limits of this small design, not properties generations automatically solve.
+
+## Handles trade immediate guarantees for checked access
+
+A live Rust reference guarantees appropriate access to its referent for its usable region. A handle is inert data. It may be stale, refer to another owner, or fail lookup. This makes handles easy to store in cyclic structures, serialize, queue, and transfer, but every access must pass through a policy.
+
+That policy can be an `Option`, a structured error, a transaction, or a snapshot. A graph traversal should decide whether a dangling logical edge is expected after deletion, a signal to prune the edge, or a violation of a stronger graph invariant. Silently skipping missing nodes can be correct for best effort exploration and incorrect for accounting or dependency resolution.
+
+Once lookup returns a borrowed reference, ordinary borrowing resumes. A handle does not let the caller remove the node while a reference to it remains in use. The central owner still requires exclusive access for deletion. Thus handles separate long lived identity from short lived memory access rather than replacing the language's safety rules.
+
+For concurrent access, a handle also does not keep a node alive between two unsynchronized lookups. A successful validation followed by an unrelated later dereference can race with deletion unless the same lock, epoch, reference count, or snapshot protects the entire operation. This is a time of check versus time of use issue. Generations detect stale identities; they do not by themselves provide a borrowing or reclamation mechanism across threads.
+
+## Reference counting follows distributed ownership
+
+`Rc<T>` provides shared ownership within one thread. `Arc<T>` provides thread safe reference count management, subject to the inner type's access requirements. Cloning either handle keeps the same allocation alive. It does not clone the data or make mutable access automatically safe.
+
+Reference counting is a good fit when no central component naturally owns all users of an object. It can make a poor fit when it is introduced merely to avoid deciding ownership. Strong cycles retain allocations because every member continues to have an owner. Weak references allow navigation without contributing to the strong count.
+
+```rust
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
+struct Node {
+    name: String,
+    parent: RefCell<Weak<Node>>,
+    children: RefCell<Vec<Rc<Node>>>,
+}
+
+fn main() {
+    let root = Rc::new(Node {
+        name: String::from("root"),
+        parent: RefCell::new(Weak::new()),
+        children: RefCell::new(Vec::new()),
+    });
+    let child = Rc::new(Node {
+        name: String::from("child"),
+        parent: RefCell::new(Rc::downgrade(&root)),
+        children: RefCell::new(Vec::new()),
+    });
+    root.children.borrow_mut().push(Rc::clone(&child));
+    assert_eq!(child.name, "child");
+    assert_eq!(child.parent.borrow().upgrade().unwrap().name, "root");
+    drop(root);
+    assert!(child.parent.borrow().upgrade().is_none());
+}
+```
+
+The root owns the child, while the child only observes its parent. The external child handle keeps the child alive after root destruction. The weak parent link can then fail to upgrade, which is an explicit part of the navigation contract.
+
+A general attachment API would need more rules than this fixed construction. Allowing arbitrary strong child edges could create cycles. Reparenting requires updating both relationships consistently. Callbacks during reparenting could observe an intermediate state. The ownership building blocks prevent memory errors, but the tree invariant still belongs to the implementation.
+
+## Region ownership can simplify bulk lifetimes
+
+A region or arena allocator can allocate many objects that are released together. This can reduce individual allocation overhead and express the fact that a compiler syntax tree, request working set, or game level has one common lifetime. The relevant owner is the region; individual edges can be borrowed within its valid lifetime or represented as indices.
+
+Bulk memory release and object destruction are different promises. Some arena designs run element destructors; others are intended for data whose teardown is unnecessary or managed separately. If nodes own files, reference counted values, or other resources, skipping their destructors can retain resources even when the backing memory is reclaimed. Read an allocator's contract rather than assuming all arenas behave like a vector.
+
+Stable addresses can also matter. A vector of nodes can move its elements on reallocation. A vector of boxes moves handles while pointees remain allocated separately, but deletion and extraction still matter. An arena promising stable addresses must control every operation that could relocate or destroy an object while references remain valid. Stability of storage is one part of a borrowing contract, not a substitute for it.
+
+## Serialization reveals the value of explicit identity
+
+Raw addresses and ordinary references make poor persistent identities. They belong to one process execution and one allocation history. Handles with explicit keys can be serialized, validated on load, and remapped during compaction. This is useful even when borrowing would be possible inside the process.
+
+A persistent identifier should not reuse an in memory slot number without a policy. Slots can change after compaction, generations may restart after a process restart, and two databases can issue the same local identifier. A durable identity often needs a namespace or stable key separate from the efficient runtime handle. Keeping those layers separate permits a dense arena internally without coupling the file format to its representation.
+
+The same separation helps testing. A small model can represent a graph as maps from stable keys to records, while the implementation uses generational slots. Tests can compare observable operations without assuming identical storage layout. This makes it easier to detect stale handle, deletion, and compaction bugs.
+
+## Choose ownership before choosing pointers
+
+When a recursive data model causes lifetime difficulties, write down who deletes each object and what a surviving edge should do after deletion. If deletion is global, central ownership may be sufficient. If deletion is individual, use validated identity. If ownership is distributed, decide which edges are strong and which are observations. If access is concurrent, select a synchronization and reclamation strategy for the whole access interval.
+
+Only then choose `Box`, references, `Rc`, `Arc`, weak links, indices, or raw pointers. These types implement different answers to those questions. Starting with raw pointers because a graph has cycles discards useful checking before establishing a replacement policy.
+
+The goal is a small number of ownership rules that remain true through insertion, lookup, deletion, traversal, and failure. A good architecture makes each local borrow temporary and unsurprising because the long lived identity and reclamation decisions have already been settled.
+
+## Exercises
+
+1. Why does a generation counter solve stale slot reuse but fail to distinguish two independent arenas? Propose one additional identity mechanism and state its cost.
+
+2. A tree uses strong reference counted edges in both directions. What happens when all external handles disappear? Explain how weak parent links change ownership while preserving navigation.
+
+3. A concurrent lookup validates a handle, releases a lock, and later uses a raw pointer to the node. Why is the generation check insufficient? Name two mechanisms that could protect the complete use interval.
+
+## Reasoned Solutions
+
+1. Separate arenas can independently issue equal slot and generation pairs. Adding an owner identifier makes lookups verify the namespace too, at a cost in handle size and owner identifier management. A scoped type brand can provide a static relationship but constrains how handles escape or are serialized.
+
+2. The cycle maintains positive strong counts, so the nodes remain allocated. A weak parent link does not keep the parent alive; children can attempt to upgrade it when navigating and handle absence. Arbitrary child attachment must still preserve the intended acyclic strong ownership structure.
+
+3. Deletion can occur after validation and before use, leaving the pointer dangling. Keep an appropriate lock guard while borrowing the node, acquire independent shared ownership, or use a correctly implemented epoch or hazard based reclamation scheme. The mechanism must protect storage throughout the dereference, not merely certify an earlier identity match.
+
+## Further Reading
+
+- [The Rust standard library Rc documentation](https://doc.rust-lang.org/std/rc/index.html) explains shared ownership and weak links within one thread.
+- [The Rust standard library Arc documentation](https://doc.rust-lang.org/std/sync/struct.Arc.html) distinguishes thread safe ownership counting from inner access.
+- [The Rust standard library collections module](https://doc.rust-lang.org/std/collections/index.html) documents central ownership alternatives and their operation costs.

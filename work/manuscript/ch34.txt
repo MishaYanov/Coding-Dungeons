@@ -1,0 +1,209 @@
+# Chapter 34 Collections Allocation and Data Representation
+
+## Choose a Representation for the Whole Workload
+
+Collection choice is an ownership and access-pattern decision before it is a complexity-table decision. A Vec stores a contiguous sequence and moves elements when it reallocates. A HashMap organizes keyed lookup without promising iteration order. A BTreeMap maintains sorted keys and supports ordered ranges. A VecDeque represents efficient operations at both ends while its logical sequence may wrap across two contiguous regions.
+
+These structures differ in allocation behavior, locality, stable-address properties, destruction cost, and the kinds of borrowing their APIs permit. A linked structure with attractive insertion complexity may lose to a vector because traversal follows scattered allocations. A hash table with expected constant-time lookup may be inferior for a tiny fixed set where hashing costs more than a short scan. A sorted vector can provide compact lookup for data built once and read many times.
+
+Begin with the workload's phases. How is data constructed? How often does it change? Are reads sequential or random? Is ordering observable? How long are references retained? Is peak memory or tail latency more important than average throughput? A representation suitable for one phase may be worth converting before the next.
+
+Avoid optimizing a single method in isolation. Reducing lookup time by keeping a second index increases update work and creates a consistency invariant between structures. Sharing strings through Arc reduces repeated content allocation but adds reference counting and indirection. Every representation buys some operations by charging others.
+
+## Length Capacity and Ownership Are Different Facts
+
+A Vec owns initialized elements up to len and allocated storage up to capacity, subject to special handling for zero-sized types. Spare capacity is not a collection of initialized T values. Growing len requires establishing initialization; shrinking len without dropping removed elements can leak resources. Safe methods maintain these distinctions automatically.
+
+Reallocation can move the element buffer. A pointer or reference into that buffer cannot remain usable across an operation that may reallocate unless an abstraction provides the necessary guarantee. Rust's borrowing rules reject many such patterns with ordinary references. Raw pointers do not gain stability merely because the programmer bypasses those checks.
+
+```rust
+fn main() {
+    let mut values = Vec::with_capacity(8);
+    values.extend([10, 20, 30]);
+    let capacity = values.capacity();
+    values.clear();
+    assert!(values.is_empty());
+    assert_eq!(values.capacity(), capacity);
+
+    values.extend([7, 8]);
+    assert_eq!(values, [7, 8]);
+}
+```
+
+clear drops the elements while retaining the allocation for reuse. That is valuable in a repeated batch loop. It can be undesirable if one unusually large batch causes a long-lived worker to retain excessive memory. A deliberate retention policy might shrink after a large outlier or replace the buffer when idle. Shrinking on every batch can instead create allocation churn.
+
+with_capacity and reserve request enough storage for a lower bound; they do not promise an exact growth factor. reserve takes an additional element count relative to the current length, not a desired total capacity. reserve_exact avoids deliberate speculative over-allocation by the collection, but the allocator may still provide more space. Do not build correctness on exact capacity values unless a specific API guarantees them.
+
+Fallible reservation can report capacity overflow or allocation failure where supported, but it does not turn every later operation into a completely fallible allocation protocol. Formatting, cloning, and nested element allocations may still allocate independently. If an application needs a hard memory bound, model all owned allocations rather than only the outer vector.
+
+## Stable Handles Are Different From Stable Addresses
+
+A vector index remains a number when the vector reallocates, so an index-based handle can survive buffer movement. It does not automatically survive removal, reordering, or reuse. swap_remove changes which element occupies an index. A generational arena adds identity information so a reused slot does not silently validate an old handle.
+
+For nonzero-sized T, Box<T> inside a vector gives each T its own allocation. Moving the box handle leaves that allocation in place. This can justify the allocation and indirection when pointees need stable addresses. An index already survives growth without boxes.
+
+A Box alone permits moving its value out. Pin adds Chapter 24's movement and destruction obligations. Rust 1.99 provides `Box::into_non_null` and `Vec::into_parts` for ownership handoffs, with unsafe reconstruction APIs. Use them for allocations you plan to reclaim. Reserve `Box::leak` for leaking.
+
+If readers need snapshots while writers continue modifying data, a shared immutable allocation can simplify lifetime management. Copy-on-write, reference-counted snapshots, or versioned structures trade update cost for stable read views. A borrowed view into a mutating vector cannot provide the same independence without an ownership change.
+
+## Strings Are Byte Storage With a UTF Eight Invariant
+
+`String` owns UTF-8 bytes. Its length and capacity count bytes. `str` is the unsized UTF-8 string type, and `&str` is a borrowed view of it. A `char` is a Unicode scalar value. A grapheme cluster can contain several scalar values. Choose the level that matches the operation.
+
+```rust
+fn main() {
+    let text = String::from("aé");
+    assert_eq!(text.len(), 3);
+    assert_eq!(text.chars().count(), 2);
+    assert_eq!(text.get(0..1), Some("a"));
+    assert_eq!(text.get(1..3), Some("é"));
+    assert_eq!(text.get(0..2), None);
+}
+```
+
+The final range ends inside a multibyte encoding, so get rejects it. Direct indexing with that invalid range would panic. Byte offsets are useful in parsers and diagnostics, but slicing must respect UTF-8 boundaries. If the protocol is byte-oriented, parse &[u8] first and validate text where the protocol requires it.
+
+Repeatedly finding the nth char by scanning from the beginning can create quadratic work. A single chars traversal, stored byte offsets, or a domain-specific index may be more appropriate. For user-visible cursor movement and truncation, scalar-value boundaries may still split a grapheme cluster. The standard string types provide valid UTF-8, not a full text-layout model.
+
+String::from_utf8 can validate an owned byte vector without necessarily copying its contents. A lossy conversion changes invalid bytes into replacement text and may allocate depending on the input. That is a semantic choice, not just a convenient way to avoid an error. In identifiers, protocol signatures, or exact round trips, replacement can destroy information the application needs.
+
+## Borrowed Lookup Can Avoid Temporary Key Allocation
+
+HashMap<String, V> can look up an entry with &str because the borrowed key representation has compatible equality and hashing behavior. This lets an API accept a borrowed query without allocating a String solely for the lookup.
+
+```rust
+use std::collections::HashMap;
+
+fn add_count(counts: &mut HashMap<String, u64>, name: &str) {
+    if let Some(count) = counts.get_mut(name) {
+        *count += 1;
+    } else {
+        counts.insert(name.to_owned(), 1);
+    }
+}
+
+fn main() {
+    let mut counts = HashMap::new();
+    add_count(&mut counts, "compile");
+    add_count(&mut counts, "compile");
+    assert_eq!(counts.get("compile"), Some(&2));
+}
+```
+
+This implementation allocates a key only when inserting a new name. A straightforward entry(name.to_owned()) implementation is more concise and performs one entry search, but it constructs an owned key even when the entry already exists. The tradeoff depends on repetition rate, key length, hashing cost, and the map API available in the supported compiler range.
+
+The example's count addition can overflow in an extremely long-running process. A production counter should choose checked, saturating, wrapping, or wider arithmetic according to its semantics. Collection ergonomics do not remove numeric policy decisions. If overflow is a recoverable condition, report it before changing the count.
+
+Borrow-based lookup requires compatible Hash and Eq behavior between the stored key and query. A custom case-insensitive key wrapper cannot simply borrow an ordinary str if its equality and hashing semantics differ. The Borrow relationship has a semantic contract. Use an appropriate query representation or normalize keys consistently.
+
+## Hashing Is an Algorithm and a Trust Decision
+
+HashMap's expected lookup behavior depends on hashing and collision patterns. The standard default hasher is selected with resistance to collision attacks in mind, but its precise algorithm is not a stable contract. Replacing it with a faster deterministic hasher can be appropriate for trusted numeric keys and inappropriate for adversarial text input.
+
+Do not benchmark only randomly distributed integers and assume the result applies to user-controlled strings. Include realistic key lengths, repeated prefixes, misses, load factors, and insertion patterns. Hashing a long string is linear in its byte length even when table access is expected constant time with respect to entry count.
+
+HashMap iteration order is unspecified. If output order affects a file, signature, cache key, or test snapshot, sort explicitly or use an ordered representation. A deterministic custom hasher does not create a documented stable iteration order across implementation changes. Representation details can still change.
+
+Capacity also affects traversal in the current standard implementation: iteration visits table storage rather than only occupied entries, so a sparse map can cost more to scan than len suggests. Treat that as an implementation-sensitive performance fact and verify it against the supported standard library. The broader design lesson is stable: excess retained capacity can affect both memory use and access cost.
+
+## A Complete Interning Representation
+
+Interning replaces repeated string contents with compact symbols. It is useful when many records repeat a smaller vocabulary and equality or indexing is frequent. The interner must own the canonical strings and maintain a relationship between text lookup and symbol lookup.
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Symbol(usize);
+
+struct Interner {
+    by_text: HashMap<Arc<str>, Symbol>,
+    texts: Vec<Arc<str>>,
+}
+
+impl Interner {
+    fn new() -> Self {
+        Self { by_text: HashMap::new(), texts: Vec::new() }
+    }
+
+    fn intern(&mut self, text: &str) -> Symbol {
+        if let Some(&symbol) = self.by_text.get(text) {
+            return symbol;
+        }
+        let symbol = Symbol(self.texts.len());
+        let owned: Arc<str> = Arc::from(text);
+        self.texts.push(Arc::clone(&owned));
+        self.by_text.insert(owned, symbol);
+        symbol
+    }
+
+    fn resolve(&self, symbol: Symbol) -> Option<&str> {
+        self.texts.get(symbol.0).map(AsRef::as_ref)
+    }
+
+    fn shared_text(&self, symbol: Symbol) -> Option<Arc<str>> {
+        self.texts.get(symbol.0).cloned()
+    }
+}
+
+fn main() {
+    let mut interner = Interner::new();
+    let first = interner.intern("parser");
+    let second = interner.intern("parser");
+    let third = interner.intern("scheduler");
+    assert_eq!(first, second);
+    assert_ne!(first, third);
+    assert_eq!(interner.resolve(first), Some("parser"));
+    let retained = interner.shared_text(first).unwrap();
+    drop(interner);
+    assert_eq!(&*retained, "parser");
+}
+```
+
+Each distinct string has one shared content allocation referenced by both indices. Cloning Arc increments a reference count rather than copying the text. The vector maps a dense symbol to text. The hash map finds an existing symbol from a borrowed str. The strings remain immutable, preserving hash-key consistency.
+
+The design retains every interned string until the interner is dropped, apart from external Arc owners that can retain selected strings longer. That is appropriate for a bounded compiler vocabulary and potentially dangerous for an unbounded service receiving arbitrary new names. An interner is a retention policy. A cache with eviction needs a different identity and ownership model.
+
+Symbols are local to one interner, but the type does not encode which one. Passing a Symbol from another interner may resolve to unrelated text at the same index. Returning Option prevents out-of-bounds access but cannot detect that semantic mix-up. A production design can attach an owner identity, use branded lifetimes, or keep symbols within a component boundary that controls their origin.
+
+The two indices also create an update invariant. Every stored text should have a matching map entry and every map symbol should index the corresponding text. This example relies on ordinary allocation behavior and a fixed standard hasher; a more general fallible or user-hasher version should analyze failure between updates. A compact representation is useful only while its indices remain consistent.
+
+## Data Layout Can Matter More Than Container Choice
+
+An array of structs stores each record's fields together. A structure of arrays stores each field in a separate sequence. If an algorithm repeatedly reads only positions from a large record containing strings and metadata, separate position storage can reduce memory traffic. If it frequently processes complete records, an array of structs may offer better locality and simpler ownership.
+
+Neither layout is universally faster. A structure of arrays introduces a shared-length invariant and makes insertion or removal update several vectors. It can improve vectorization and cache use for numeric kernels while complicating general application code. Measure the actual access pattern and include update cost, not just one read loop.
+
+Large enum variants can similarly dominate memory footprint. Boxing a rare large variant makes common values smaller but adds an allocation for that variant. Small-string optimization and inline small-vector crates make related tradeoffs, but their exact layouts and thresholds are library-specific. Adopt them when measured allocation patterns justify the extra representation complexity.
+
+Reference counting is another layout choice. Arc<T> shares one allocation across owners and uses atomic reference counts. Rc<T> is thread-confined and avoids that atomic sharing protocol. Neither prevents mutation races by itself; mutation needs an appropriate access strategy. Replacing copies with shared ownership can reduce memory while increasing contention or extending retention.
+
+## Destruction Is Part of the Workload
+
+Dropping a collection drops its elements. For a large graph of owned values, shutdown or eviction can become a latency event. Recursive ownership can also produce deep destructor call chains. A throughput benchmark that excludes destruction may hide a significant production cost.
+
+Buffer reuse can defer allocation and destruction, but it can also retain memory and sensitive contents longer than expected. Clearing a vector changes logical length and drops elements; it does not promise to overwrite every byte of spare storage. If erasure is a requirement, use a mechanism designed to provide that guarantee rather than relying on ordinary clear or drop behavior.
+
+When a service periodically replaces a large snapshot, consider which thread performs the final drop. The last Arc owner determines where destruction happens. A seemingly cheap reference-count decrement can become expensive when it releases the entire object graph. Ownership placement therefore affects tail latency even when steady-state reads are efficient.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A Vec has enough capacity for one more element. Can a stored raw pointer into it be used after any arbitrary mutation?
+
+Solution. No. Avoiding reallocation addresses only one hazard. Removal, reordering, element replacement, aliasing, and destruction can invalidate the pointer's intended use. A raw pointer requires a complete validity and access argument, not just a capacity check. Prefer a handle abstraction when identity is the actual requirement.
+
+Exercise 2. Why might interning make an unbounded server use more memory over time even though repeated strings become cheaper?
+
+Solution. The interner retains every distinct string. Repetition savings do not bound the number of unique inputs. Add a bounded vocabulary, eviction-aware design, per-request lifetime, or another retention policy. Compact symbols are not a memory limit.
+
+Exercise 3. A benchmark replaces HashMap with BTreeMap and becomes slower for lookup but faster overall. Is that contradictory?
+
+Solution. No. The complete workload may need sorted output or range scans, avoiding a separate sorting pass and temporary storage. Cache behavior, key costs, and update patterns can also differ. Evaluate total work and required semantics rather than one operation's expected complexity.
+
+## Further Reading
+
+- [Standard library collections](https://doc.rust-lang.org/std/collections/index.html) compares collection capabilities and complexity.
+- [Standard library Vec](https://doc.rust-lang.org/std/vec/struct.Vec.html) documents ownership, capacity, allocation, and pointer guarantees.
+- [Standard library HashMap](https://doc.rust-lang.org/std/collections/struct.HashMap.html) documents lookup, ordering, hashing, and implementation-sensitive traversal costs.
+- [Standard library String](https://doc.rust-lang.org/std/string/struct.String.html) specifies UTF-8 storage and byte-based length and capacity.

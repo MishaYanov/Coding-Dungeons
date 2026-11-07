@@ -1,0 +1,244 @@
+# Chapter 15 Encoding State and Validity in Types
+
+## Move Validation to the Boundary Where Evidence Appears
+
+An application often carries facts in comments and conventions: this identifier has been validated, this request has been authenticated, this connection has completed its handshake. Rust types can carry some of those facts as values that are difficult to construct incorrectly. The goal is not to encode every business rule at compile time. The goal is to make important distinctions survive ordinary refactoring without repeated checks or undocumented assumptions.
+
+There are several useful tools. An enum represents a closed set of runtime alternatives. A newtype distinguishes values with the same representation but different meaning. A private constructor protects an invariant. Typestate changes the available operations by changing a type parameter or concrete wrapper after a transition. Each tool answers a different question about what information is known and when.
+
+Use a runtime enum when the program must store and inspect several states together. Use typestate when the control flow naturally establishes a state and then performs operations valid only there. Use a validated newtype when a property of one value should remain true across many operations. Combining them is often clearer than forcing all state into one generic machine.
+
+The central discipline is evidence preservation. Once a value has been checked, represent the successful check with a value that cannot be forged through the public safe API. Then make operations require that value. If mutable access can invalidate the evidence, restrict that access or return to an unchecked representation.
+
+## Newtypes Distinguish Meaning Without Repeating Validation
+
+Consider an account identifier that must be nonempty ASCII and contain only letters, digits, and underscores. A String alone does not express that condition. A private field and validating constructor can establish it once.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AccountId(String);
+
+#[derive(Debug, PartialEq, Eq)]
+enum AccountIdError {
+    Empty,
+    InvalidByte { index: usize },
+}
+
+impl AccountId {
+    fn parse(value: String) -> Result<Self, AccountIdError> {
+        if value.is_empty() {
+            return Err(AccountIdError::Empty);
+        }
+        if let Some(index) = value.bytes().position(|byte| {
+            !(byte.is_ascii_alphanumeric() || byte == b'_')
+        }) {
+            return Err(AccountIdError::InvalidByte { index });
+        }
+        Ok(Self(value))
+    }
+
+    fn as_str(&self) -> &str { &self.0 }
+
+    fn into_string(self) -> String { self.0 }
+}
+
+fn main() {
+    let id = AccountId::parse("build_42".into()).unwrap();
+    assert_eq!(id.as_str(), "build_42");
+    assert_eq!(AccountId::parse("".into()), Err(AccountIdError::Empty));
+}
+```
+
+Consumers of AccountId can rely on the validation rule if all constructors preserve it. Returning &str is safe because shared access cannot alter the bytes. Returning &mut String would let callers insert invalid characters and destroy the evidence. An unchecked constructor would need a carefully justified visibility or unsafe contract if memory safety depended on the property, though this application-level format rule ordinarily does not require unsafe.
+
+The example returns an error without returning the original String. That is acceptable for a simple parser, but a recovery-focused API could return the value alongside the error. The invariant design and ownership-on-failure design are independent. A sophisticated type does not excuse an inconvenient recovery contract.
+
+Do not confuse a type alias with a newtype. A type alias for String remains the same type and does not prevent passing a project name where an account identifier is expected. A wrapper creates a distinct type identity and a place to enforce construction rules.
+
+## Enums Preserve Correlations Between Fields
+
+A struct with several Options can represent combinations that the domain never permits. For example, a download may have a pending request, an active byte count, or a completed path. Independent optional fields allow completed-without-path and pending-with-byte-count states unless every method maintains a convention.
+
+```rust
+use std::path::PathBuf;
+
+enum Download {
+    Pending { url: String },
+    Active { url: String, received: u64 },
+    Complete { path: PathBuf, bytes: u64 },
+    Failed { url: String, message: String },
+}
+
+fn status(download: &Download) -> String {
+    match download {
+        Download::Pending { url } => format!("waiting for {url}"),
+        Download::Active { url, received } => {
+            format!("{url} received {received} bytes")
+        }
+        Download::Complete { path, bytes } => {
+            format!("{} contains {bytes} bytes", path.display())
+        }
+        Download::Failed { url, message } => {
+            format!("{url} failed: {message}")
+        }
+    }
+}
+```
+
+Each variant carries exactly the data needed for that state. Exhaustive matching makes state additions visible to code that handles every case. This is valuable inside an application where the set is centrally controlled. For public library enums intended to grow, non_exhaustive can reserve extension space, with the cost that downstream matches need a fallback.
+
+Enums do not automatically enforce transition legality. Code with access to the variants can construct Active directly. Encapsulation and methods determine which transitions are available. If only certain operations should create states, keep the internal enum private and expose a controlled wrapper.
+
+The representation can also affect storage. An enum must accommodate its variants according to Rust's layout rules, possibly with niche optimizations. Do not assume a particular size without a documented representation guarantee. If one variant owns a very large inline payload, boxing that payload may reduce the size of every enum value at the cost of an allocation and indirection.
+
+## Typestate Makes Operations Depend on a Proven Phase
+
+A request builder is a natural typestate example. A draft request can be edited, but only a validated request can be dispatched. Validation consumes the draft and returns a distinct type, preventing accidental reuse of the old phase.
+
+```rust
+struct Draft;
+struct Ready;
+
+struct Request<State> {
+    destination: String,
+    body: Vec<u8>,
+    state: std::marker::PhantomData<State>,
+}
+
+#[derive(Debug)]
+struct ValidationError;
+
+impl Request<Draft> {
+    fn new(destination: String) -> Self {
+        Self {
+            destination,
+            body: Vec::new(),
+            state: std::marker::PhantomData,
+        }
+    }
+
+    fn body(mut self, body: Vec<u8>) -> Self {
+        self.body = body;
+        self
+    }
+
+    fn validate(self) -> Result<Request<Ready>, ValidationError> {
+        if self.destination.is_empty() || self.body.len() > 1024 {
+            return Err(ValidationError);
+        }
+        Ok(Request {
+            destination: self.destination,
+            body: self.body,
+            state: std::marker::PhantomData,
+        })
+    }
+}
+
+impl Request<Ready> {
+    fn dispatch(self) -> (String, Vec<u8>) {
+        (self.destination, self.body)
+    }
+}
+
+fn main() {
+    let request = Request::new("worker-7".into())
+        .body(b"rebuild".to_vec())
+        .validate()
+        .unwrap();
+    let (destination, body) = request.dispatch();
+    assert_eq!(destination, "worker-7");
+    assert_eq!(body, b"rebuild");
+}
+```
+
+The PhantomData field records a type-level distinction without storing a runtime state value. The transition moves the existing String and Vec rather than cloning their contents. Only Request<Ready> has dispatch. The compiler therefore rejects dispatch on a draft before any runtime check could be forgotten.
+
+The ready state proves only the validation actually performed. It does not prove that the destination exists, that a network connection will succeed, or that the request remains authorized forever. Types carry bounded evidence. Naming a state Authorized does not make a revocable authorization permanently valid. Time-sensitive facts often need a runtime check at the moment of use.
+
+## Consumption Prevents Accidental Reuse but Not Every Duplicate
+
+A consuming transition prevents use of that particular owner afterward. If the state type or wrapper implements Clone, callers may still duplicate the capability before consuming it. If the resource is uniquely consumable, do not derive Clone casually. For a true external one-time action, the server or resource manager may also need to enforce uniqueness because process memory alone cannot prevent replay from another process.
+
+Similarly, a typestate token can prove that an initialization path ran, but it cannot make unsafe aliases elsewhere obey the token. Encapsulation must ensure that the token actually controls access to the protected resource. A public zero-sized Ready type paired with a public Request field would allow construction without validation. The proof depends on the whole public construction surface.
+
+Transitions that can fail should consider returning the original state. A handshake attempt that consumes a socket and returns only an error may make retry impossible. A result like Result<Connected, (HandshakeError, Unconnected)> preserves ownership when the failure postcondition permits another attempt. If failure has corrupted or closed the socket, returning an apparently usable Unconnected state would be misleading.
+
+## State Data Can Be More Useful Than Marker Types
+
+Not every state should be a zero-sized marker. A connected state may contain a negotiated protocol version, a verified peer identity, or a session key. Keeping that data in the state parameter can ensure that operations requiring it cannot exist without it.
+
+```rust
+struct Disconnected;
+
+struct Connected {
+    peer: String,
+    sequence: u64,
+}
+
+struct Channel<S> {
+    state: S,
+}
+
+impl Channel<Disconnected> {
+    fn new() -> Self { Self { state: Disconnected } }
+
+    fn connect(self, peer: String) -> Channel<Connected> {
+        Channel { state: Connected { peer, sequence: 0 } }
+    }
+}
+
+impl Channel<Connected> {
+    fn frame(&mut self, payload: &str) -> String {
+        let sequence = self.state.sequence;
+        self.state.sequence = sequence.checked_add(1)
+            .expect("sequence exhausted");
+        format!("{}:{sequence}:{payload}", self.state.peer)
+    }
+
+    fn disconnect(self) -> Channel<Disconnected> {
+        Channel { state: Disconnected }
+    }
+}
+```
+
+This is a local state machine model, not a complete network channel. Its value is structural: Connected owns the data that connected operations need. There is no separate Option<String> that must be unwrapped under a comment saying connected channels always have a peer.
+
+The pattern can become awkward when a collection must contain channels in different phases. Their concrete types differ. A runtime enum such as AnyChannel with Disconnected and Connected variants can erase the phase into a closed representation. Another approach is to keep phase-specific collections. The right choice follows the application's scheduling and storage requirements.
+
+## Avoid a Combinatorial Type Surface
+
+Typestate can overfit an API. If five independent booleans become five type parameters, users may face dozens of state combinations and difficult diagnostics. If every operation merely changes one marker and returns another deeply nested type, the public surface may become harder to understand than a small runtime validator.
+
+Encode distinctions that eliminate important misuse or simplify downstream code. Keep incidental configuration as values. A request's compression setting usually does not need a type parameter unless algorithms genuinely depend on compile-time specialization or compatibility. A borrowed buffer's access mode may justify a type distinction because it controls which operations are sound.
+
+Consider how users name intermediate values, store them in structs, return them from functions, and branch between states. A type-level design that makes a simple conditional impossible to express without boxing may be too rigid for the workflow. Enums and private runtime state machines remain powerful, explicit tools.
+
+Documentation should explain both the state graph and the operations available at each state. A diagram can help, but the type signatures should remain understandable without it. Name transitions after domain actions such as validate, connect, finish, and close. Names like into_state_b reveal implementation machinery without telling users what evidence has changed.
+
+## Validation Must Survive Every Escape Hatch
+
+Serialization, database loading, FFI, and test helpers can bypass a carefully designed constructor if implemented casually. A custom deserializer for AccountId must call the validating path or perform equivalent checks. A public From<String> implementation implies infallible construction and would contradict a fallible format invariant. TryFrom is a more appropriate integration when input may be invalid.
+
+Unsafe code should not assume an application invariant merely because a type name suggests it. If memory safety depends on the invariant, all safe constructors and mutators must enforce it, and any unchecked construction must have an explicit safety contract. If the invariant is only business correctness, keep the distinction clear so users do not confuse a logic error with undefined behavior.
+
+Tests should attempt invalid construction through every public conversion path. They should also verify that valid values remain valid after transformations. A lowercase normalization method, for example, may preserve an ASCII identifier invariant, while arbitrary replacement may not. The type's value comes from maintaining the evidence over time, not just checking it once in the most obvious constructor.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A validated EmailAddress exposes DerefMut<Target = String>. What is the problem?
+
+Solution. Callers can mutate the string into an invalid address without passing through validation. The wrapper no longer carries reliable evidence. Expose a shared view, consuming extraction, and specific validated transformations. If editing is needed, return an unchecked draft that must be revalidated.
+
+Exercise 2. A typestate authorization token is valid for ten minutes. Can its type alone prove a request is authorized when sent?
+
+Solution. No. The type can prove that an authorization check happened and can carry its expiry data, but time can pass and permissions can be revoked. The send boundary must validate the time-sensitive conditions or rely on a protocol that enforces them. Static evidence and dynamic validity must be distinguished.
+
+Exercise 3. An application stores thousands of connections in arbitrary phases and frequently branches on phase. Should every phase be a different collection element type?
+
+Solution. A runtime enum is often simpler. It preserves state-specific payloads while permitting homogeneous storage and exhaustive dispatch. Typestate can still be used inside operations that temporarily extract one variant and perform a controlled transition. The two approaches are complementary.
+
+## Further Reading
+
+- [Rust Reference on enumerations](https://doc.rust-lang.org/reference/items/enumerations.html) defines variant payloads and enum behavior.
+- [Standard library PhantomData](https://doc.rust-lang.org/std/marker/struct.PhantomData.html) describes marker relationships and their effects.
+- [Standard library TryFrom](https://doc.rust-lang.org/std/convert/trait.TryFrom.html) provides a conventional fallible construction interface.

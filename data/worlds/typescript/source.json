@@ -1,0 +1,316 @@
+{
+  "title": "TypeScript | Signal Harbor",
+  "subtitle": "Design reliable contracts for JavaScript programs",
+  "intro": [
+    "Signal Harbor routes cargo through a network of manifests, message queues, and partner docks. You are rebuilding the dispatch desk. Each level introduces one way to keep a program's promises visible as data moves between people, functions, and systems.",
+    "Begin with the Dockhand path if you are new to TypeScript. Work through the code in order. For each listing, predict a result, change one input, and check whether the compiler and the running program behave as you expected. The lessons use familiar JavaScript expressions and build up their type contracts gradually.",
+    "The Contract Engineer path develops APIs that express relationships between values. The Boundary Operator path emphasizes validation, failure, and integration. Check each standalone listing with tsc --strict --target ES2022 --noEmit. Node.js can run these listings by stripping the types, so run the compiler separately to check them. Validate external data at runtime."
+  ],
+  "zones": [
+    { "name": "The Arrival Docks", "skill": "Types and narrowing", "first": 1, "last": 4 },
+    { "name": "The Signal Office", "skill": "Validation and modules", "first": 5, "last": 7 },
+    { "name": "The Contract Foundry", "skill": "Generic API design", "first": 8, "last": 11 },
+    { "name": "The Outer Harbor", "skill": "Asynchronous boundaries", "first": 12, "last": 14 }
+  ],
+  "paths": [
+    { "id": "dockhand", "name": "Dockhand", "description": "Begin with everyday values, then build a small dispatch program you can understand from input to output.", "topics": "Inference, object shapes, narrowing, functions, validation, promises, and modules", "levels": [1, 2, 3, 4, 5, 6, 7] },
+    { "id": "contract-engineer", "name": "Contract Engineer", "description": "Make call sites carry the right data by designing types around the relationships between values.", "topics": "Generics, key relationships, derived shapes, exhaustive states, and typed event handlers", "levels": [2, 3, 8, 9, 10, 11, 14] },
+    { "id": "boundary-operator", "name": "Boundary Operator", "description": "Track the work that enters and leaves a system, including invalid input, asynchronous failure, and repeat delivery.", "topics": "Runtime validation, promise handling, error results, branded identifiers, and idempotency", "levels": [5, 6, 7, 12, 13, 14] }
+  ],
+  "lessons": [
+    {
+      "title": "The Cargo Counter",
+      "objective": "Use inference for local values and annotations for the inputs and outputs of a small function.",
+      "body": [
+        "TypeScript checks JavaScript programs before they run. Start with three common kinds of values: numbers for arithmetic, strings for text, and booleans for decisions. A declaration such as `let load = 3` lets the checker infer `number`, so later assigning a string to `load` produces an error. `const` prevents reassignment and can preserve the exact literal type for a primitive value.",
+        "A function annotation describes the contract callers should follow. `mass: number` gives the function a numeric input, and `: string` after the parameter list commits it to returning text. Try returning `mass` directly. The return annotation catches the mistake inside the function, where the change is easiest to understand.",
+        "JavaScript still allows a `number` to be `NaN`, infinite, or negative. A type can establish that arithmetic is available, while a runtime condition establishes a domain rule. The example checks both inputs before multiplying and rejects an infinite result, which can occur even when both inputs are finite."
+      ],
+      "code": "function cargoLabel(count: number, unitMass: number): string {\n  if (!Number.isSafeInteger(count) || count < 0) {\n    throw new RangeError('Invalid cargo count');\n  }\n  if (!Number.isFinite(unitMass) || unitMass < 0) {\n    throw new RangeError('Invalid unit mass');\n  }\n  const mass = count * unitMass;\n  if (!Number.isFinite(mass)) throw new RangeError('Mass overflow');\n  return `${count} units, ${mass} kg`;\n}\n\nconst label = cargoLabel(3, 2.5);\nif (label !== '3 units, 7.5 kg') throw new Error(label);",
+      "takeaway": "Type annotations describe permitted kinds of values. Runtime checks enforce business rules within those kinds.",
+      "question": "Which value is allowed by the annotation `count: number` but should fail this cargo rule?",
+      "options": ["The string 'three'", "The boolean true", "The number 2.5", "The value undefined"],
+      "correct": 2,
+      "feedback": "The value 2.5 has type number, but the count must be an integer. The function needs the integer check even in a type-checked program.",
+      "challenge": "Implement palletLabel. A pallet carries ten crates. Return the number of pallets needed for a nonnegative safe integer crate count. Use the exact format `Pallets: 2` for 11 crates and throw RangeError for an invalid count.",
+      "starter": "function palletLabel(crateCount: number): string {\n  // Check the count, then round the pallet requirement up.\n  throw new Error('Implement palletLabel');\n}",
+      "hint1": "Use `Number.isSafeInteger(crateCount)` before performing arithmetic.",
+      "hint2": "`Math.ceil(crateCount / 10)` gives the number of pallets. Check the empty case with zero crates.",
+      "debrief": "A guard rejects negative, fractional, and non-finite counts. Division followed by rounding up handles exact multiples and partial pallets with one expression. Check 0, 10, and 11 crates to catch boundary errors.",
+      "sideQuest": "Replace the fixed capacity with a parameter. Decide which capacities are valid and test an invalid capacity before checking the result."
+    },
+    {
+      "title": "The Manifest Shape",
+      "objective": "Describe a record and let a function read a collection without granting it permission to mutate the input.",
+      "body": [
+        "A cargo record has named fields. A type alias gives that shape a reusable name. Functions can state which fields they need, and TypeScript checks whether the supplied value has those fields with compatible types. An object held in a variable may carry extra fields and still be passed to a function expecting the smaller shape.",
+        "`readonly Cargo[]` makes the array read-only through that parameter. The function can iterate and inspect its entries. It cannot push, sort in place, or assign a replacement element through that reference. Put `readonly` on the record fields as well if the function should be prevented from assigning through them.",
+        "Read-only types apply to the reference the checker sees. JavaScript may still hold another alias with write access. If a report must remain stable after the caller edits its own objects, construct a snapshot of the required data and decide how deeply it must be copied."
+      ],
+      "code": "type Cargo = {\n  readonly id: string;\n  readonly weightKg: number;\n};\n\nfunction totalWeight(items: readonly Cargo[]): number {\n  let total = 0;\n  for (const item of items) total += item.weightKg;\n  return total;\n}\n\nconst manifest = [\n  { id: 'A-1', weightKg: 12, owner: 'Ferry Office' },\n  { id: 'A-2', weightKg: 8, owner: 'Warehouse' },\n];\nif (totalWeight(manifest) !== 20) throw new Error('Bad total');",
+      "takeaway": "Describe the fields a caller must supply and the write access a callee should receive.",
+      "question": "What does `readonly Cargo[]` prevent inside `totalWeight`?",
+      "options": ["Passing an array with extra fields on its records", "Changing the array through the parameter", "Another alias changing the original array", "A weight being negative at runtime"],
+      "correct": 1,
+      "feedback": "The read-only parameter restricts writes through that parameter. Record field mutability and other aliases have their own rules.",
+      "challenge": "Return the IDs of all cargo weighing at least 10 kg, in the same order as the input. Create a new array and leave the manifest alone.",
+      "starter": "type Cargo = { readonly id: string; readonly weightKg: number };\n\nfunction heavyIds(items: readonly Cargo[]): string[] {\n  throw new Error('Implement heavyIds');\n}",
+      "hint1": "Try a loop that creates a fresh `string[]` before inspecting the first record.",
+      "hint2": "Add the ID when `weightKg >= 10`. Test a record weighing exactly 10 kg.",
+      "debrief": "Each selected ID is copied into a new array. The caller can add IDs to that output without changing the input array, and filtering preserves relative order.",
+      "sideQuest": "Design a grouped report whose results can be read but cannot be edited through the type returned to a consumer."
+    },
+    {
+      "title": "The Two Signal Flags",
+      "objective": "Narrow a union by checking a literal tag before reading fields that belong to one case.",
+      "body": [
+        "An arrival either has a dock assignment or is waiting for a reason. Model both shapes with a union. Each shape carries a `kind` field with a different literal value. The compiler can follow a comparison with that field and make the corresponding shape available inside the branch.",
+        "A single object type with optional `dock` and `reason` fields would permit a waiting arrival with no reason. A tagged union makes the appropriate fields required for each case. A structurally compatible value can still carry extra properties. Check the tag before using the fields required for that branch.",
+        "When testing an optional primitive, check for the missing state you mean. `if (dock)` treats zero as false, even if dock zero is a valid location. `dock !== undefined` makes the distinction explicit. For a tagged union, checking `kind` avoids mixing a status decision with the truthiness of a field."
+      ],
+      "code": "type Arrival =\n  | { kind: 'assigned'; dock: number }\n  | { kind: 'waiting'; reason: string };\n\nfunction statusText(arrival: Arrival): string {\n  if (arrival.kind === 'assigned') {\n    return `Dock ${arrival.dock}`;\n  }\n  return `Waiting: ${arrival.reason}`;\n}\n\nconst status = statusText({ kind: 'assigned', dock: 0 });\nif (status !== 'Dock 0') throw new Error(status);",
+      "takeaway": "A discriminant lets the compiler track which fields exist after a runtime check.",
+      "question": "Which property can you access after `arrival.kind === 'waiting'` succeeds?",
+      "options": ["reason", "dock", "Both reason and dock", "Neither reason nor dock"],
+      "correct": 0,
+      "feedback": "The literal tag narrows the union to the waiting case, where `reason` is required.",
+      "challenge": "Implement canUnload. An assigned arrival can unload only if its dock is open. A waiting arrival cannot unload. Use the dock list as read-only input.",
+      "starter": "type Arrival =\n  | { kind: 'assigned'; dock: number }\n  | { kind: 'waiting'; reason: string };\n\nfunction canUnload(\n  arrival: Arrival, openDocks: readonly number[]\n): boolean {\n  throw new Error('Implement canUnload');\n}",
+      "hint1": "Narrow the union using `arrival.kind` before you access `arrival.dock`.",
+      "hint2": "Use `openDocks.includes(arrival.dock)` inside the assigned branch, or combine both conditions with `&&`.",
+      "debrief": "The status test establishes which shape is present. The membership test establishes whether that dock is open. Both decisions matter, including when the assignment is to dock zero.",
+      "sideQuest": "Add a diverted case carrying a destination harbor. Give it a distinct message in statusText."
+    },
+    {
+      "title": "Callbacks at the Sorting Belt",
+      "objective": "Pass a typed function as an argument and preserve meaningful falsy values when applying a default.",
+      "body": [
+        "Two dock reports can traverse the same manifest while counting different things. Pass a rule as a function. A parameter of type `(cargo: Cargo) => boolean` promises that the report supplies a cargo record and expects the rule to say whether it belongs in the count.",
+        "An arrow function written directly at the call site usually inherits its parameter type from the expected callback type. The checker can suggest valid fields even if the arrow parameter has no annotation. Read the parameter type and the return type together when deciding whether a callback is suitable.",
+        "`??` applies its right-hand value only when the left side is `null` or `undefined`. The example accepts an optional maximum, validates any supplied maximum as a nonnegative safe integer, and defaults to no limit. A maximum of zero means select nothing. `??` preserves that value."
+      ],
+      "code": "type Cargo = { weightKg: number };\n\nfunction countMatching(\n  items: readonly Cargo[],\n  matches: (cargo: Cargo) => boolean,\n  maximum?: number,\n): number {\n  if (maximum !== undefined &&\n      (!Number.isSafeInteger(maximum) || maximum < 0)) {\n    throw new RangeError('Invalid maximum');\n  }\n  const limit = maximum ?? Infinity;\n  let count = 0;\n  for (const item of items) {\n    if (count >= limit) break;\n    if (matches(item)) count++;\n  }\n  return count;\n}\n\nconst cargo = [{ weightKg: 12 }, { weightKg: 3 }];\nconst count = countMatching(cargo, item => item.weightKg > 10, 0);\nif (count !== 0) throw new Error('Limit of zero was lost');",
+      "takeaway": "Give reusable traversal a callback contract and make the default policy explicit.",
+      "question": "Why does the example use `maximum ?? Infinity`?",
+      "options": ["It rejects negative maxima", "It converts strings to numbers", "It throws when the argument is absent", "It preserves an explicit zero maximum"],
+      "correct": 3,
+      "feedback": "Zero is distinct from `undefined`, so `??` keeps the zero and `||` would replace it.",
+      "challenge": "Implement labelMatching. Call label once per weight that passes weight >= 0 and return the labels in input order. Negative weights and NaN fail this test.",
+      "starter": "function labelMatching(\n  weights: readonly number[],\n  label: (weight: number) => string,\n): string[] {\n  throw new Error('Implement labelMatching');\n}",
+      "hint1": "Build a fresh array. Use the positive test `weight >= 0` to decide whether to append a label.",
+      "hint2": "Call `label(weight)` once per retained item. Zero is nonnegative and should reach the callback.",
+      "debrief": "The traversal owns the decision to include an item. The callback owns the presentation. A callback that records its inputs can show whether the traversal invokes it for the correct items and in the right order.",
+      "sideQuest": "Add a test callback that throws on its second call. Explain what the caller observes and whether the partial result ever escapes."
+    },
+    {
+      "title": "The Untrusted Manifest",
+      "objective": "Turn untrusted JSON into a checked record by combining unknown with small runtime checks.",
+      "body": [
+        "A partner can send malformed JSON or valid JSON with the wrong shape. A TypeScript interface describes the shape your program expects. Annotating a value with that interface cannot verify bytes received from a file or the network. Give parsed input the type `unknown` so the checker requires evidence before you use its fields.",
+        "A JSON parse may throw before a value exists. After parsing, require a non-null, non-array object. The `in` checks let TypeScript read the named fields as unknown. `Object.hasOwn` requires the fields on the record itself. Then check value types and domain rules such as a nonempty trimmed ID or a finite, nonnegative weight.",
+        "Construct a new record from the fields you validated. That tells readers which values crossed the boundary, and gives your internal type a clean starting point. An `as Manifest` assertion would change what the checker believes while leaving a malformed value untouched."
+      ],
+      "code": "type Manifest = { id: string; weightKg: number };\n\nfunction readManifest(raw: string): Manifest | undefined {\n  let value: unknown;\n  try {\n    value = JSON.parse(raw);\n  } catch {\n    return undefined;\n  }\n  if (typeof value !== 'object' || value === null) return undefined;\n  if (Array.isArray(value)) return undefined;\n  if (!('id' in value) || !Object.hasOwn(value, 'id')) return undefined;\n  if (!('weightKg' in value) || !Object.hasOwn(value, 'weightKg')) {\n    return undefined;\n  }\n  const { id, weightKg } = value;\n  if (typeof id !== 'string' || id.trim() === '') return undefined;\n  if (typeof weightKg !== 'number') return undefined;\n  if (!Number.isFinite(weightKg) || weightKg < 0) return undefined;\n  return { id: id.trim(), weightKg };\n}\n\nif (!readManifest('{\"id\":\"C-4\",\"weightKg\":20}')) {\n  throw new Error('Valid manifest rejected');\n}",
+      "takeaway": "Let runtime evidence earn the internal type at every untrusted boundary.",
+      "question": "What does `JSON.parse(raw) as Manifest` verify at runtime?",
+      "options": ["That the parsed object has an id", "That each field has its declared type", "JSON syntax only", "That a weight is nonnegative"],
+      "correct": 2,
+      "feedback": "`JSON.parse` checks syntax and may throw. The assertion is erased during compilation, so it does not inspect the result's shape.",
+      "challenge": "Decode a dock status from raw JSON. Require a non-array record with its own nonnegative safe integer dock and boolean open. Return undefined for a syntax or shape error.",
+      "starter": "type DockStatus = { dock: number; open: boolean };\n\nfunction readDockStatus(raw: string): DockStatus | undefined {\n  throw new Error('Implement readDockStatus');\n}",
+      "hint1": "Assign `JSON.parse` to an `unknown` variable inside a try block. Handle null before checking properties.",
+      "hint2": "Narrow both fields with `in` and require own properties with `Object.hasOwn`. Check `open` with `typeof` so `false` is accepted.",
+      "debrief": "A valid object with `dock: 0` and `open: false` should pass. The strings `\"0\"` and `\"false\"` should fail. Testing those pairs proves the implementation checks types instead of relying on truthiness or coercion.",
+      "sideQuest": "Return an error code that distinguishes invalid JSON from a missing field and a field with the wrong type."
+    },
+    {
+      "title": "Waiting for the Tide Report",
+      "objective": "Await a promise, handle rejection, and keep a real value distinct from a failed request.",
+      "body": [
+        "An asynchronous operation can produce a value later. `Promise<number>` describes the value on fulfillment. Inside an async function, `await` obtains that value or throws when the promise rejects. The surrounding function still returns a promise, so its caller needs to await it or otherwise observe its outcome.",
+        "Place the await inside `try` when you want that function to translate a rejection. If the operation resolves to zero, zero is data. A separate error case lets the caller tell whether the harbor is quiet or the status report could not be fetched.",
+        "Rejected promises can carry arbitrary values. An error created with `new Error` has a message. A thrown string or plain object requires a separate policy. The example keeps its public failure message stable, while a real service might log a narrowed error privately for diagnosis."
+      ],
+      "code": "type TideReport =\n  | { ok: true; heightCm: number }\n  | { ok: false; message: string };\n\nasync function reportTide(\n  readHeight: () => Promise<number>,\n): Promise<TideReport> {\n  try {\n    const heightCm = await readHeight();\n    return { ok: true, heightCm };\n  } catch {\n    return { ok: false, message: 'Tide report unavailable' };\n  }\n}\n\nconst report = reportTide(async () => 0);\nreport.then(result => {\n  if (!result.ok || result.heightCm !== 0) throw new Error('Bad report');\n});",
+      "takeaway": "Await where you can act on rejection and use a distinct state for failure.",
+      "question": "If the loader resolves with 0, which result should reportTide fulfill with?",
+      "options": ["{ ok: false, message: 'Tide report unavailable' }", "{ ok: true, heightCm: 0 }", "undefined", "A rejected promise"],
+      "correct": 1,
+      "feedback": "A fulfilled promise can carry zero. The catch branch applies to a thrown error or rejected promise, regardless of the fulfillment values.",
+      "challenge": "Implement readGate. Await the injected status function, return open or closed on success, and return offline if the function throws or rejects.",
+      "starter": "type Gate = 'open' | 'closed' | 'offline';\n\nasync function readGate(readOpen: () => Promise<boolean>): Promise<Gate> {\n  throw new Error('Implement readGate');\n}",
+      "hint1": "Await the callback inside the try block so synchronous throws and rejections share the same failure branch.",
+      "hint2": "Map a resolved `false` to `closed`. Use `offline` only inside `catch`.",
+      "debrief": "A gate may be reachable and closed. Treating false as a request failure would conflate operational state with connectivity. Test resolved true, resolved false, and rejection.",
+      "sideQuest": "Preserve a safe diagnostic string on the offline result without assuming every rejected value is an Error."
+    },
+    {
+      "title": "The Dispatch Desk",
+      "objective": "Assemble validation and routing into a small public module with a clear interface.",
+      "body": [
+        "A module can keep local helpers private and export the pieces other code should use. In this dispatch module the caller sees the decision contract and one routing function. The normalization step stays private because the caller does not need to depend on the exact trimming and uppercasing procedure.",
+        "A regular import can name a value the JavaScript runtime needs, such as a function. `import type` names a TypeScript declaration used only during checking and disappears from the emitted JavaScript. When you split the example into files, use the module settings and file specifiers required by your runtime. In a Node ESM setup that runs emitted JavaScript, a relative import of the compiled module can use `./dispatch.js` in the TypeScript source.",
+        "Keep routing separate from input and output. A pure decision function lets tests pass it a destination without opening a terminal or contacting a dock. A separate adapter can read the input, invoke the function, and show the result. Keep the exported return type explicit so a refactor cannot quietly change the public outcomes."
+      ],
+      "code": "export type Decision =\n  | { kind: 'route'; dock: number }\n  | { kind: 'invalid'; reason: string };\n\nfunction normalizeDestination(value: string): string {\n  return value.trim().toUpperCase();\n}\n\nexport function decide(destination: string): Decision {\n  switch (normalizeDestination(destination)) {\n    case 'NORTH': return { kind: 'route', dock: 1 };\n    case 'SOUTH': return { kind: 'route', dock: 2 };\n    default: return { kind: 'invalid', reason: 'Unknown destination' };\n  }\n}\n\nconst decision = decide(' south ');\nif (decision.kind !== 'route' || decision.dock !== 2) {\n  throw new Error('Wrong dock');\n}",
+      "takeaway": "Export the contract a caller needs and test the decision logic independently of its input adapter.",
+      "question": "Which declaration should a caller use when it only needs the Decision type for checking?",
+      "options": ["import type { Decision } from './dispatch.js'", "const Decision = JSON.parse(...) ", "new Decision()", "await Decision"],
+      "correct": 0,
+      "feedback": "`import type` gives the checker access to the declaration and emits no runtime import for it.",
+      "challenge": "Implement a module function that routes north to dock 1 and south to dock 2 after normalizing case and whitespace. Report invalid for other values. Export the decision type and the function.",
+      "starter": "export type Decision =\n  | { kind: 'route'; dock: number }\n  | { kind: 'invalid'; reason: string };\n\nexport function decide(destination: string): Decision {\n  throw new Error('Implement decide');\n}",
+      "hint1": "Normalize once using `trim()` and `toUpperCase()`.",
+      "hint2": "Test `north`, ` SOUTH `, and a destination with no matching branch.",
+      "debrief": "A caller can switch on the tagged decision without parsing a message or catching an exception for an ordinary invalid destination. The standalone module can be tested with simple inputs and no infrastructure.",
+      "sideQuest": "Build a separate presentation module that imports the type and formats each decision. Keep text formatting out of the routing module."
+    },
+    {
+      "title": "Keys That Carry Their Values",
+      "objective": "Use a generic key constraint and indexed access to preserve the relationship between a property name and its value.",
+      "body": [
+        "A helper that reads one property should return the type of that specific property. `keyof T` names the keys of the object type, while `T[K]` is the type of a property at key `K`. A generic parameter `K extends keyof T` ties a caller's key to the object, so a typo fails checking and a precise key preserves a precise result.",
+        "Compare two different outputs when reading a `string` ID and a `number` capacity. A return type written as `T[keyof T]` would allow any property value type, so both calls would return a union. Capturing the selected key as its own parameter retains information already present at the call site.",
+        "An externally supplied string still needs a runtime decision about which fields are permitted. When the key is a union of known keys, its value type is a corresponding union. The generic relationship expresses exactly what was known at the call site and cannot make an unknown key safe by itself."
+      ],
+      "code": "function field<T, K extends keyof T>(record: T, key: K): T[K] {\n  return record[key];\n}\n\nconst dock = { id: 'N-1', capacity: 24 };\nconst id: string = field(dock, 'id');\nconst capacity: number = field(dock, 'capacity');\nif (id !== 'N-1' || capacity !== 24) throw new Error('Wrong value');",
+      "takeaway": "Capture the caller's selected key as a type parameter when the result depends on that key.",
+      "question": "What type should `field(dock, 'capacity')` infer for the shown dock object?",
+      "options": ["keyof typeof dock", "string | number", "unknown", "number"],
+      "correct": 3,
+      "feedback": "The literal key `capacity` determines `K`. Indexing the inferred dock type with that key gives `number`.",
+      "challenge": "Implement a helper that gets a property from each object in a read-only list. Keep the output type linked to the selected property, so choosing a numeric field gives number[].",
+      "starter": "function pluck<T, K extends keyof T>(\n  rows: readonly T[], key: K\n): T[K][] {\n  throw new Error('Implement pluck');\n}",
+      "hint1": "The key constraint establishes that `row[key]` can be read for every row of type T.",
+      "hint2": "Return `rows.map(row => row[key])` and assign the result to a variable typed as the expected property array.",
+      "debrief": "The same code can return string[] or number[] because the return type keeps the key relationship. Test an empty list and a list of several objects with both key kinds.",
+      "sideQuest": "Accept an allowlisted field name from a text input and explain where the runtime narrowing occurs before calling pluck."
+    },
+    {
+      "title": "The Registry Blueprint",
+      "objective": "Derive related record shapes and use satisfies to check configuration without assigning a wider type to it.",
+      "body": [
+        "An operations record and its editable patch often share fields. A mapped type can copy each allowed field while applying a modifier. The example excludes `id`, which remains stable, and makes every remaining field optional. A new field in the original record automatically becomes available to the patch according to this policy.",
+        "An absent patch property means leave the value alone. This example's runtime also preserves the previous value for explicit `undefined`. Enable `exactOptionalPropertyTypes` separately from `strict` if callers should be required to omit an optional property whose declared value type excludes `undefined`. Check untrusted patch values at the boundary.",
+        "Use `satisfies` when an expression needs to conform to a shape and you also want to work with the expression's own inferred type. The registry example checks that each required dock has a valid entry. `as const` preserves the literal capacity values and gives a read-only view in the type system. Neither construct freezes the runtime object."
+      ],
+      "code": "type Dock = { id: string; capacity: number; open: boolean };\ntype EditableKey = Exclude<keyof Dock, 'id'>;\ntype DockPatch = { [K in EditableKey]?: Dock[K] };\n\nconst defaultDocks = {\n  north: { capacity: 24 },\n  south: { capacity: 12 },\n} as const satisfies Record<'north' | 'south', { capacity: number }>;\n\nfunction applyPatch(dock: Dock, patch: DockPatch): Dock {\n  return {\n    id: dock.id,\n    capacity: patch.capacity ?? dock.capacity,\n    open: patch.open ?? dock.open,\n  };\n}\n\nconst cap: 24 = defaultDocks.north.capacity;\nconst next = applyPatch({ id: 'N', capacity: cap, open: true }, { open: false });\nif (next.open) throw new Error('Dock was not closed');",
+      "takeaway": "Derive shape changes from the source contract and spell out what omission means.",
+      "question": "What does the `satisfies Record<...>` check on defaultDocks?",
+      "options": ["The registry has the required keys and compatible capacity values", "The object is frozen when JavaScript runs", "Every capacity is a positive integer", "All later reads return the same capacity after mutation"],
+      "correct": 0,
+      "feedback": "The checker validates the expression against the required shape. The literal types come from `as const`, and runtime values still follow JavaScript rules.",
+      "challenge": "Define a patch type derived from Dock that allows changes to capacity and open only. Apply an omitted patch field by preserving the previous value. Preserve false and zero when explicitly provided.",
+      "starter": "type Dock = { id: string; capacity: number; open: boolean };\ntype DockPatch = never; // Replace with a type derived from Dock.\n\nfunction applyPatch(dock: Dock, patch: DockPatch): Dock {\n  throw new Error('Implement applyPatch');\n}",
+      "hint1": "`Partial<Omit<Dock, 'id'>>` expresses the same shape as the mapped type in the example.",
+      "hint2": "Read only the fields you intend to update. Use `??` so false and zero survive.",
+      "debrief": "A type-level patch narrows the API for typed callers. Reading the specific editable fields at runtime also protects the identifier if an object with extra properties reaches this function through structural compatibility.",
+      "sideQuest": "Add a removable note and decide how to represent preserve, replace, and clear as three different operations."
+    },
+    {
+      "title": "States That Refuse to Drift",
+      "objective": "Build a finite state transition and make a missing case fail TypeScript checking with never.",
+      "body": [
+        "Operations gain states as they move through the harbor. A queued job can start, a running job can complete, and a completed job stays completed. Store the tag and any state-specific fields together so a job can never be both completed and waiting in the typed state model.",
+        "A switch can narrow the state across every branch. At the end, a function accepting `never` makes the expectation of complete coverage visible to the checker. Add a fourth state and the old switch will produce a type error at the call to that function until the new case is handled.",
+        "Exhaustive handling checks the listed variants. Whether a transition is legal depends on the domain. Keep the transition pure while you are designing it, then let a caller decide when to persist the new state or perform an effect. Validate input at the boundary before the transition receives it."
+      ],
+      "code": "type Job =\n  | { state: 'queued'; id: string }\n  | { state: 'running'; id: string }\n  | { state: 'completed'; id: string };\n\nfunction unreachable(value: never): never {\n  throw new Error(`Unhandled state: ${String(value)}`);\n}\n\nfunction advance(job: Job): Job {\n  switch (job.state) {\n    case 'queued': return { state: 'running', id: job.id };\n    case 'running': return { state: 'completed', id: job.id };\n    case 'completed': return job;\n    default: return unreachable(job);\n  }\n}\n\nif (advance({ state: 'queued', id: 'J-2' }).state !== 'running') {\n  throw new Error('Wrong transition');\n}",
+      "takeaway": "Pair a tagged state model with an exhaustive switch and explicit transition rules.",
+      "question": "What happens if Job gains a cancelled variant and advance stays as written?",
+      "options": ["Cancelled automatically falls into completed", "The never check fails because cancelled remains unhandled", "The compiler silently adds a cancelled branch", "Queued jobs can no longer be constructed"],
+      "correct": 1,
+      "feedback": "A cancelled job would reach the default branch, so the argument could not be assigned to the parameter typed as never.",
+      "challenge": "Add a cancelled state with a reason. Update advance so cancelled and completed jobs are terminal, queued jobs become running, and running jobs complete. Keep the exhaustive check.",
+      "starter": "type Job =\n  | { state: 'queued'; id: string }\n  | { state: 'running'; id: string }\n  | { state: 'completed'; id: string };\n\nfunction unreachable(value: never): never {\n  throw new Error(`Unhandled state: ${String(value)}`);\n}\n\nfunction advance(job: Job): Job {\n  throw new Error('Implement advance');\n}",
+      "hint1": "Extend the union with `{ state: 'cancelled'; id: string; reason: string }`.",
+      "hint2": "Return the same job object in terminal branches so the cancellation reason is retained.",
+      "debrief": "Each state has a clear successor. The compiler checks that every declared variant is handled, while tests can assert that terminal states keep their original data.",
+      "sideQuest": "Represent a retry event and return a typed rejection if someone tries to retry a completed job."
+    },
+    {
+      "title": "The Typed Message Board",
+      "objective": "Keep a message's tag correlated with the payload expected by its handler.",
+      "body": [
+        "The message board carries different payloads for arrivals and departures. Keep the payload attached to its literal tag in one discriminated object. A handler switch then narrows the pair together. If you split the tag and payload into two independent union-typed variables, a caller could pair the wrong payload with a valid tag.",
+        "A payload map gives every event name a contract. A mapped type can derive one tagged object per key, and indexing the resulting object type with the whole key union produces a union of those cases. The example uses this to keep the event declaration in one place.",
+        "The dispatcher still needs a branch for each event it handles. A table of callbacks can also express event-specific parameter types, but calling a handler selected by a union key needs evidence that its argument corresponds to that key. Keep the association explicit at the call site and use an exhaustive switch when it is the clearest way to show the correlation."
+      ],
+      "code": "type Payloads = {\n  arrive: { dock: number };\n  depart: { vessel: string };\n};\ntype Notice = {\n  [K in keyof Payloads]: { kind: K; payload: Payloads[K] }\n}[keyof Payloads];\n\nfunction announce(notice: Notice): string {\n  switch (notice.kind) {\n    case 'arrive': return `Dock ${notice.payload.dock} occupied`;\n    case 'depart': return `${notice.payload.vessel} departed`;\n    default: {\n      const missed: never = notice;\n      throw new Error(`Unhandled notice: ${String(missed)}`);\n    }\n  }\n}\n\nconst text = announce({ kind: 'depart', payload: { vessel: 'Gull' } });\nif (text !== 'Gull departed') throw new Error(text);",
+      "takeaway": "Construct a union of valid tag and payload pairs and preserve the pair through dispatch.",
+      "question": "What is the benefit of deriving Notice as a union from Payloads?",
+      "options": ["It automatically validates external JSON messages", "It guarantees the runtime delivery order", "It ties each literal event tag to that event's own payload", "It makes every payload optional"],
+      "correct": 2,
+      "feedback": "The mapped type builds each allowed pairing separately. The union does not admit a depart tag with an arrive payload.",
+      "challenge": "Add a delay notice with a vessel and a number of minutes. Produce `Gull delayed 5 min` for that case and keep the switch exhaustive.",
+      "starter": "type Payloads = {\n  arrive: { dock: number };\n  depart: { vessel: string };\n};\ntype Notice = {\n  [K in keyof Payloads]: { kind: K; payload: Payloads[K] }\n}[keyof Payloads];\n\nfunction announce(notice: Notice): string {\n  throw new Error('Implement announce');\n}",
+      "hint1": "Add the event and payload in the map. The Notice union will pick up the new key automatically.",
+      "hint2": "Add a delay branch and read both fields from `notice.payload` after narrowing the tag.",
+      "debrief": "The type map is the source of the payload contract. The switch ties the runtime behavior to that contract, and its default never assignment detects a forgotten branch when a message type is added.",
+      "sideQuest": "Define a handler-table type from Payloads that requires one correctly typed callback for each event name."
+    },
+    {
+      "title": "Dispatching Several Calls",
+      "objective": "Represent the outcome of each asynchronous request while keeping the relationship to the original input order.",
+      "body": [
+        "The scheduler can ask several docks for a status independently. Starting each request before awaiting them allows overlap. A sequential loop with an await before launching the next request is appropriate when an operation depends on the previous result or when the service requires serial access.",
+        "`Promise.all` returns fulfillment values in input order if every input fulfills. It rejects if any input rejects, and the remaining work may still continue. `Promise.allSettled` lets you inspect every outcome. Another approach is to catch rejection inside each operation, convert it to an explicit failure result, and gather those fulfilled result objects with `Promise.all`.",
+        "The example preserves the dock identifier in each result. That makes a failure actionable after results are filtered or logged separately. This example starts one operation for every input. A production scheduler with an unbounded list should add an explicit limit on active requests and decide whether it supports cancellation."
+      ],
+      "code": "type Probe =\n  | { dock: string; ok: true; open: boolean }\n  | { dock: string; ok: false; reason: string };\n\nasync function probeOne(\n  dock: string, query: (dock: string) => Promise<boolean>,\n): Promise<Probe> {\n  try {\n    return { dock, ok: true, open: await query(dock) };\n  } catch {\n    return { dock, ok: false, reason: 'Unavailable' };\n  }\n}\n\nfunction probeAll(\n  docks: readonly string[], query: (dock: string) => Promise<boolean>,\n): Promise<Probe[]> {\n  return Promise.all(docks.map(dock => probeOne(dock, query)));\n}",
+      "takeaway": "Choose a collection operation whose error behavior matches what the caller needs to retain.",
+      "question": "If the second dock answers before the first and both finish, which order does probeAll return?",
+      "options": ["Whichever order TypeScript infers", "Completion order", "Sorted by dock name", "The same order as docks"],
+      "correct": 3,
+      "feedback": "`Promise.all` preserves input order in its output array, even when individual operations finish in a different order.",
+      "challenge": "Implement probeAll using an injected query. Preserve the order and name of every dock, returning a failure result for just the docks whose queries throw or reject.",
+      "starter": "type Probe =\n  | { dock: string; ok: true; open: boolean }\n  | { dock: string; ok: false; reason: string };\n\nasync function probeAll(\n  docks: readonly string[], query: (dock: string) => Promise<boolean>,\n): Promise<Probe[]> {\n  throw new Error('Implement probeAll');\n}",
+      "hint1": "Use an async helper or typed async map callback so each operation catches its own failure.",
+      "hint2": "Pass the resulting promises to `Promise.all`. Return a Probe in both branches of the per-dock operation.",
+      "debrief": "A failed request no longer discards successes from other docks. A result carries its identity, and the ordered array can still be paired with the caller's inputs. Verify a mix of true, false, and a rejection.",
+      "sideQuest": "Sketch how you would enforce at most four active queries. Identify where an active slot is released on failure."
+    },
+    {
+      "title": "Stamping an Identifier",
+      "objective": "Validate a string once at the boundary and give the checked identifier a distinct compile-time type.",
+      "body": [
+        "Dock IDs and shipment IDs may both be strings. A function accepting either as a plain string cannot catch callers that mix up the two. A brand creates a type-level distinction using an intersection with a unique marker. A checked constructor is then the normal route from an untrusted string to the stronger type.",
+        "The parser in this example checks the entire identifier before asserting the brand. The assertion is small and sits directly after the runtime evidence. At runtime the value remains a string. Serializing it sends the text, and a receiving service should validate that text against its own boundary contract.",
+        "A format check says that an ID looks valid. It cannot prove that a corresponding shipment exists, belongs to a caller, or can be modified. Perform those checks in the service that owns the records. A useful brand name reflects the specific guarantee the parser establishes."
+      ],
+      "code": "declare const shipmentMark: unique symbol;\ntype ShipmentId = string & { readonly [shipmentMark]: true };\n\nfunction parseShipmentId(value: unknown): ShipmentId | undefined {\n  if (typeof value !== 'string' || !/^S-[0-9]{4}$/.test(value)) {\n    return undefined;\n  }\n  return value as ShipmentId;\n}\n\nfunction labelFor(id: ShipmentId): string {\n  return `Shipment ${id}`;\n}\n\nconst id = parseShipmentId('S-0042');\nif (!id || labelFor(id) !== 'Shipment S-0042') {\n  throw new Error('Invalid identifier');\n}",
+      "takeaway": "Keep the brand assertion beside the runtime check that establishes its limited guarantee.",
+      "question": "What guarantee does a value from parseShipmentId carry?",
+      "options": ["Its format is S- followed by four ASCII digits", "The shipment exists", "The current caller owns the shipment", "The JavaScript value carries a runtime symbol property"],
+      "correct": 0,
+      "feedback": "The regular expression validates the format. The brand is compile-time information, and database existence and authorization require separate evidence.",
+      "challenge": "Make a distinct DockId brand and a parser that accepts `D-` followed by exactly two ASCII digits. The value should be usable as a string after checking.",
+      "starter": "declare const dockMark: unique symbol;\ntype DockId = string & { readonly [dockMark]: true };\n\nfunction parseDockId(value: unknown): DockId | undefined {\n  throw new Error('Implement parseDockId');\n}",
+      "hint1": "Start by checking `typeof value === 'string'` and then match `^D-[0-9]{2}$`.",
+      "hint2": "Return the branded assertion only after a successful match. Test `D-00`, `S-00`, `D-123`, and a number.",
+      "debrief": "The format check accepts zero digits inside an otherwise valid ID and rejects a shipment prefix. The separate marker lets functions enforce which category of checked ID they expect.",
+      "sideQuest": "Add a lookup that can return missing for a valid-looking dock ID. Explain why that check belongs after parsing."
+    },
+    {
+      "title": "Restore the Harbor Dispatch",
+      "objective": "Connect a runtime decoder to a typed decision and a small duplicate guard with an explicit boundary.",
+      "body": [
+        "A transport delivers the same dispatch instruction twice. A command ID gives the dispatch desk a way to recognize a repeat. Start by validating a parsed value before creating a command. Give the command a literal destination union so the rest of the application works with a short list of valid destinations.",
+        "A `Map` can remember which destination an ID was assigned to. A repeated command with the same destination gets a duplicate response, and reusing an ID for another destination gets a conflict. The policy matters because treating a different command as a harmless repeat could hide an upstream bug. Return tagged decisions so callers can report each case distinctly.",
+        "This example makes a decision and records it synchronously in a single in-memory map. Its duplicate guarantee ends when that map is discarded. A real service needs durable state, a defined retention period, and a plan to coordinate deduplication with the side effect. Do not infer exactly-once delivery from a type annotation or the presence of an ID."
+      ],
+      "code": "type Destination = 'north' | 'south';\ntype Command = { id: string; to: Destination };\ntype Decision =\n  | { kind: 'route'; dock: number }\n  | { kind: 'duplicate' }\n  | { kind: 'conflict' };\n\nfunction decode(value: unknown): Command | undefined {\n  if (typeof value !== 'object' || value === null) return undefined;\n  if (Array.isArray(value)) return undefined;\n  if (!Object.hasOwn(value, 'id') || !('id' in value)) return undefined;\n  if (!Object.hasOwn(value, 'to') || !('to' in value)) return undefined;\n  if (typeof value.id !== 'string' || value.id.trim() === '') {\n    return undefined;\n  }\n  if (value.to !== 'north' && value.to !== 'south') return undefined;\n  return { id: value.id.trim(), to: value.to };\n}\n\nfunction dispatch(command: Command, seen: Map<string, Destination>): Decision {\n  const previous = seen.get(command.id);\n  if (previous === command.to) return { kind: 'duplicate' };\n  if (previous !== undefined) return { kind: 'conflict' };\n  seen.set(command.id, command.to);\n  return { kind: 'route', dock: command.to === 'north' ? 1 : 2 };\n}",
+      "takeaway": "Validate at the boundary, keep decisions explicit, and state the lifetime of every operational guarantee.",
+      "question": "What should dispatch return if an ID used for north arrives again with destination south?",
+      "options": ["Route it to dock 2 as a new ID", "Return a conflict", "Erase the original entry", "Treat it as an identical duplicate"],
+      "correct": 1,
+      "feedback": "The same ID now refers to different work. Reporting a conflict preserves the first decision and makes the mismatched repeat visible.",
+      "challenge": "Implement handle with a supplied Map. A command is a non-array record with its own nonblank string id and to of 'north' or 'south'. Trim the id. Return invalid for malformed commands, route for a fresh ID, duplicate for a matching repeat, and conflict if a repeat changes the destination. Only a fresh route updates the map.",
+      "starter": "type Destination = 'north' | 'south';\ntype Decision =\n  | { kind: 'route'; dock: number }\n  | { kind: 'duplicate' }\n  | { kind: 'conflict' }\n  | { kind: 'invalid' };\n\nfunction handle(value: unknown, seen: Map<string, Destination>): Decision {\n  throw new Error('Implement handle');\n}",
+      "hint1": "Narrow the input before looking it up. Extract the trimmed ID and destination only after checking both.",
+      "hint2": "Compare a saved destination with the incoming destination. Add the ID only on the fresh route path.",
+      "debrief": "Test one valid route, an identical repeat, a repeat for another destination, and an invalid object. Check the map after each call. These cases distinguish validation, conflict detection, and the one path that changes state.",
+      "sideQuest": "Sketch a restart-safe version. Define what is persisted, how long command IDs are retained, and what outcome a caller should see if delivery fails after dispatch recorded the ID."
+    }
+  ]
+}

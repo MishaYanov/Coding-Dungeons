@@ -1,0 +1,188 @@
+# Chapter 39 A Bounded Worker Pipeline
+
+Concurrency becomes easier to understand when every queue and owner has a name. A worker pipeline is a useful case study because its apparent simplicity hides several independent contracts. Who owns work while it is queued? What happens when a worker fails? Which component drains results while the producer is blocked? Does shutdown discard work or finish it? Is the memory bound expressed in messages or in bytes?
+
+We will build a finite pipeline using standard-library scoped threads and bounded channels. A coordinator distributes numeric jobs among workers. Each worker computes one result and sends it to a collector. The collector reduces results into a summary instead of retaining every result. This makes the buffering behavior visible and avoids requiring a runtime or an external channel implementation.
+
+The pipeline's domain is intentionally pure arithmetic. That lets us reason about ownership transfer and lifecycle without confusing successful computation with durable side effects. Later sections explain what changes when a job sends a network request or modifies storage.
+
+## Draw the Wait Relationships
+
+The pipeline has one bounded input channel per worker and one shared bounded output channel. Each worker owns its receiver. The coordinator owns the input senders. The collector owns the output receiver. Workers own clones of the output sender. The coordinator drops the original output sender once worker creation is complete.
+
+The extra collector thread is essential. If the coordinator filled every input queue before starting to drain a bounded output queue, workers could block while sending results, stop receiving jobs, and leave the coordinator blocked while sending jobs. Every component would be waiting for another component to free capacity. Bounded queues expose this wait cycle; they do not solve it by themselves.
+
+```text
+coordinator -> worker input queues -> workers -> result queue -> collector
+      |                                                    |
+      +---------------- final joins -----------------------+
+```
+
+In this design the collector runs while dispatch is active, so output pressure can be relieved independently. Worker input queues eventually have space if each computation finishes and the collector continues consuming. That is a progress argument under stated assumptions. It is not a claim that the operating system guarantees fair scheduling or that an arbitrary user callback cannot block forever.
+
+## A Complete Pipeline
+
+This example returns a summary or an error for invalid worker counts, dispatch failure, or a joined thread panic. If the OS cannot create a thread, `Scope::spawn` panics. Use `Builder::spawn_scoped` for a returned startup error and close the channels for any workers already started. The summary counts failed squares separately from overflow in the aggregate sum.
+
+```rust
+use std::sync::mpsc::sync_channel;
+use std::thread;
+
+#[derive(Debug, Default)]
+struct Summary {
+    completed: usize,
+    job_failures: usize,
+    sum: u64,
+    sum_overflowed: bool,
+}
+
+fn run(jobs: u64, worker_count: usize)
+    -> Result<Summary, &'static str>
+{
+    if worker_count == 0 {
+        return Err("at least one worker is required");
+    }
+    thread::scope(|scope| {
+        let (result_tx, result_rx) = sync_channel::<Option<u64>>(8);
+        let collector = scope.spawn(move || {
+            let mut summary = Summary::default();
+            for result in result_rx {
+                match result {
+                    Some(value) => {
+                        summary.completed += 1;
+                        match summary.sum.checked_add(value) {
+                            Some(sum) => summary.sum = sum,
+                            None => summary.sum_overflowed = true,
+                        }
+                    }
+                    None => summary.job_failures += 1,
+                }
+            }
+            summary
+        });
+
+        let mut senders = Vec::new();
+        let mut workers = Vec::new();
+        for _ in 0..worker_count {
+            let (job_tx, job_rx) = sync_channel::<u64>(2);
+            senders.push(job_tx);
+            let output = result_tx.clone();
+            workers.push(scope.spawn(move || {
+                for value in job_rx {
+                    let result = value.checked_mul(value);
+                    if output.send(result).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        drop(result_tx);
+
+        let mut dispatch_failed = false;
+        let mut next = 0;
+        for value in 0..jobs {
+            if senders[next].send(value).is_err() {
+                dispatch_failed = true;
+                break;
+            }
+            next = (next + 1) % worker_count;
+        }
+        drop(senders);
+
+        let worker_panics: Vec<_> = workers.into_iter()
+            .filter_map(|worker| worker.join().err())
+            .collect();
+        let summary = collector.join()
+            .map_err(|_| "collector panicked")?;
+        if dispatch_failed || !worker_panics.is_empty() {
+            Err("worker failed before pipeline completion")
+        } else {
+            Ok(summary)
+        }
+    })
+}
+
+fn main() {
+    let summary = run(10, 3).unwrap();
+    assert_eq!(summary.completed, 10);
+    assert_eq!(summary.job_failures, 0);
+    assert_eq!(summary.sum, 285);
+    assert!(!summary.sum_overflowed);
+}
+```
+
+The example is finite and assumes the counts fit in `usize`, which is practical for the demonstration but still a representation assumption. A production long-running collector should use checked or saturating counters according to its metric policy. The numeric range of a job is independent of the numeric range of a metric counting jobs.
+
+Round-robin routing is simple and deterministic, but it can leave the coordinator waiting on a slow worker while another worker is idle. That is head-of-line blocking in the dispatcher. A shared work queue or work-stealing scheduler can improve utilization for uneven jobs. Changing the scheduling policy should preserve the ownership and shutdown contracts established here.
+
+## Follow Ownership Through Shutdown
+
+Normal shutdown begins when dispatch finishes and the coordinator drops all job senders. A worker continues receiving buffered jobs, then sees the channel disconnected once its queue is empty. It exits and drops its result sender. After every worker has exited, no result sender remains, so the collector drains the last buffered results and ends its loop. The coordinator joins workers and then the collector.
+
+The order in which values disappear is the shutdown protocol. There is no special stop message in this version. That is appropriate because the desired policy is to finish all work already accepted by the input channels. A stop message could accidentally sit behind ordinary work, and multiple worker queues would require separate stop messages. Channel closure already expresses that no additional work will arrive.
+
+Dropping the original result sender is easy to miss. If the coordinator retained that sender while joining the collector, the collector could wait forever for another result even after every worker finished. The channel remains connected because an unused sender is still an owner. This is a lifecycle bug that the type system permits: the ownership is valid, but the program's waiting policy is wrong.
+
+The join pass retains worker panic payloads until the collector has joined. This arithmetic example can then drop ordinary panic payloads. If you adapt the pipeline to run arbitrary callbacks, choose a disposal policy as in Level 28. Implicit scope joins enforce lifetimes and can panic when a child has failed.
+
+If a worker panics, its receiver is dropped. Sending to that worker then fails and returns ownership of the undelivered job inside the send error. This example discards that error payload and returns an infrastructure failure after cleanup. A more capable implementation could recover that specific job and route it elsewhere: the failed send did not deliver it to the worker. Previously accepted or active jobs are different. A worker may have performed an external effect for one of those before panicking, so recovering the undelivered message does not establish the retry status of earlier work.
+
+## State the Actual Memory Bound
+
+Each input channel stores at most two queued `u64` jobs. Each worker may hold one active job and one pending result. The result queue stores at most eight results. The coordinator may hold one job while waiting to send. The collector holds a small summary. Thread stacks and channel implementation overhead also consume memory, and creating an arbitrary number of workers would make that overhead unbounded with respect to the job count.
+
+This is a bound on live queue entries, not a universal bound on bytes for arbitrary message types. Replacing `u64` with `String` permits one message to own a large allocation. Replacing it with `Arc<Vec<u8>>` can keep a shared large allocation alive even when only one small handle is queued. A byte budget may need a semaphore or explicit accounting carried by each message.
+
+There is another subtle source of unboundedness: the producer. If the caller constructs a vector containing all jobs before calling the pipeline, bounded internal channels do not bound that vector. This implementation generates values incrementally from a range. Real systems should inspect the entire path from input acquisition through result retention, not only the most visible queue.
+
+The collector's reduction is also deliberate. If it instead stored every output in a vector, output memory would grow with the workload even though every channel stayed bounded. That can be correct for a finite batch with an explicit output budget. It should not be described as a constant-memory streaming pipeline.
+
+## Ordering and Throughput Pull in Different Directions
+
+Results arrive in channel delivery order. A worker can finish first and pause before sending. When `sum_overflowed` is set, the partial sum is incomplete, and skipping overflowing additions can make it depend on delivery order. To restore input order, give each job a sequence number and let the collector buffer out-of-order results. A slow early job can force the collector to retain many later results.
+
+Bounded reorder storage creates an additional progress question. If the collector stops draining the shared output queue because its reorder buffer is full, the slow job may eventually try to send into that same full queue. A naive policy can deadlock even though all computations finish. Possible repairs include a bounded window of dispatched sequence numbers, separate control paths, or a scheduling rule that ensures the missing earliest result can always be delivered.
+
+Do not add sequence numbers and assume ordering is solved. Decide the maximum distance between the oldest incomplete job and the newest admitted job. That distance controls both reorder memory and the amount of speculative work. Some applications can process results in delivery order and avoid reorder storage. When input order is part of the user-visible contract, give it an explicit budget.
+
+Throughput measurements should separate computation from coordination. Tiny jobs can spend most of their time transferring through channels. Batching several items per message may help, but increases the work retained by one blocked sender and the delay before a partially filled batch is processed. Batch size is another latency-memory-throughput tradeoff, not an unconditional optimization.
+
+## Cancellation Changes Acceptance Semantics
+
+A graceful drain means finish accepted work. Immediate cancellation means stop as soon as possible and account for abandoned work. These are different protocols. An atomic cancellation flag can tell a worker to stop before the next job, but it does not wake a worker blocked indefinitely in `recv`, and it does not interrupt arbitrary blocking I/O already in progress.
+
+Closing the input channels wakes receivers when their queues are drained or disconnected, but it does not necessarily discard queued jobs. A worker can check a cancellation flag after receiving and choose to abandon the job. The component holding that job must then record whether it was cancelled, retried, or intentionally lost. Merely returning from the thread hides that distinction.
+
+Timeouts create uncertainty around external effects. A worker may time out while a remote server continues processing a request. Retrying that job may duplicate the effect. Useful job envelopes often contain a stable operation identifier, an attempt number, and a domain-specific idempotency key. The pipeline can transport those values, but the remote protocol must actually honor them.
+
+For a service, acceptance should have a precise point. Is a job accepted when received from the socket, when inserted into an internal queue, or when durably recorded? A bounded channel can acknowledge only process-local transfer. If the process crashes afterward, the message may be lost. Rust's ownership transfer is exact about memory responsibility and silent about durable delivery unless the application adds that mechanism.
+
+## Test the Lifecycle Rather Than the Scheduler
+
+Tests should assert observable contracts under deliberately constrained conditions. Use one worker and capacity zero to expose rendezvous behavior. Pause one worker after computing to control delivery order. Inject a job error without panicking and verify later work completes. Inject a panic in a controlled test and verify the coordinator returns. Use test timeouts to catch lifecycle regressions that could otherwise wait indefinitely.
+
+Avoid tests that require a particular interleaving merely because it happened once. A sleep can encourage an interleaving but is a weak synchronization primitive. Barriers, additional test channels, or instrumented hooks can establish the exact state before triggering a failure. For example, wait until a worker has received a job, then close the result receiver and verify the worker handles a failed send.
+
+Track queued jobs, active jobs, completed jobs, job failures, abandoned jobs, and wait times. Count admission rejections separately. After shutdown, every accepted job needs one disposition. In this process-local model, accepted equals completed plus failed plus abandoned. If an external effect is possible, add an uncertain category until the outcome can be resolved.
+
+## Exercises
+
+1. Add a job identifier and preserve input order. Specify a bounded admission window and explain why the collector can always receive the earliest missing result.
+
+2. Change graceful shutdown into immediate cancellation. Describe what happens to queued, active, and completed-but-undelivered jobs. Identify a blocked operation that a flag alone cannot interrupt.
+
+3. Replace numeric jobs with buffers of variable size. Design a byte-budget token that travels with each job and returns capacity when the final responsible owner drops it.
+
+## Reasoned Solutions
+
+1. Admit at most `W` unretired sequence numbers and ensure the collector continues draining results for that window. Retain at most `W` results while waiting for the earliest. Advance the admission window only as ordered results retire. Sending new work must not prevent the coordinator or another component from draining the result channel.
+
+2. Stop admitting new jobs, signal cancellation, and close senders. Workers check cancellation before beginning received jobs and report abandoned identifiers where accounting requires it. Active blocking I/O needs its own cancellation or timeout mechanism. Completed results need an explicit delivery or discard policy, because cancellation of a consumer does not erase completed work.
+
+3. Acquire capacity before allocating or accepting a buffer whenever possible. Put the acquired budget in an owned guard inside the job envelope. Transfer the guard with the bytes and release it after processing or final discard. Shared payloads require accounting for the underlying allocation rather than charging or releasing the full size independently for every `Arc` clone.
+
+## Further Reading
+
+- [sync_channel](https://doc.rust-lang.org/std/sync/mpsc/fn.sync_channel.html) documents bounded buffering and rendezvous channels.
+- [Scope::spawn](https://doc.rust-lang.org/std/thread/struct.Scope.html#method.spawn) documents scoped spawning and OS startup failure.
+- [ScopedJoinHandle::join](https://doc.rust-lang.org/std/thread/struct.ScopedJoinHandle.html#method.join) documents scoped joins and panic reporting.

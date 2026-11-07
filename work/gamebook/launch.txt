@@ -1,0 +1,55 @@
+# Welcome to Ferrum
+
+Ferrum was built by people who trusted their systems a little too much. The archive kept references to records after their storage was recycled. The foundry let incompatible components claim the same interface. Dispatch towers accepted work faster than the city could finish it. Deep below them, a reclamation engine treated an address as proof that an object still existed.
+
+You arrive after the failures have stopped looking unrelated. Your contract is to restore the city's systems and leave behind an explanation another developer can defend. The compiler is a demanding instrument on your workbench. It can detect many invalid relationships. It cannot decide what a payment retry means or whether a shutdown protocol eventually finishes. Those are your encounters.
+
+This is an advanced Rust book with a campaign structure. The technical field manuals retain their full explanations, worked examples, exercises, and solutions. The campaign adds choices that matter: which systems you study first, which constraints you accept, when you ask for a hint, and what evidence you produce before marking a level complete.
+
+## Choose Your Expedition
+
+The Architect path explores trait relationships, type erasure, API evolution, and library boundaries. The Warden path explores ownership across threads, scheduling, cancellation, and service survival. The Delver path descends into layout, pointer validity, initialization, and unsafe abstractions. The Pathfinder path connects storage choices to complete parsers, stores, pipelines, and protocols.
+
+These are routes through one world, not exclusive classes. Follow a path, leave it for a side quest, and return when a later encounter exposes something you need. Every numbered level on the map is a link. The suggested loadout on a level identifies useful prior knowledge. It does not lock the door or pretend to know what you already understand.
+
+The complete campaign is Levels 1 through 42. If you already know a topic, take its boss encounter first. If you can produce the artifact, justify its invariants, and explain the failure cases, mark the level mastered. If you get stuck, enter the field manual at the exact level rather than rereading material at random.
+
+## The Three Marks of Mastery
+
+Scout earns 20 XP. Read the mission and inspect at least one worked example. Before compiling or reading its explanation, predict the important outcome: which value moves, which borrow remains active, which trait obligation applies, or which event makes progress possible. Write a prediction that could be wrong. Correct it after checking.
+
+Forge earns 40 XP. Complete the level's boss encounter and produce the requested artifact. This can be an implementation, a deliberately rejected program, a schedule, an API signature, a failure table, or an unsafe proof argument. Satisfy the listed win conditions. Code that compiles is evidence for some conditions; it does not automatically satisfy every condition.
+
+Explain earns 40 XP. Write a short debrief naming the owner or capability, the invariant, a failure path, and one tradeoff. Where relevant, distinguish memory safety from application correctness and local completion from a remote effect. Compare your reasoning with the vault debrief after making your own attempt.
+
+The first three marks complete a level for 100 XP. A side quest adds 25 XP after you produce its additional evidence. The full 42-level campaign has 4,200 core XP and up to 1,050 side-quest XP. XP is a self-assessment record, not a certificate or an automatic code judge. The useful reward is the capability you can now explain and use.
+
+## Use the Save Room
+
+The save room contains clickable checkboxes for Scout, Forge, Explain, and Side on every level, plus fields for your callsign, active route, and XP total. Mark the boxes and save a personal copy of the PDF in a reader that preserves form fields. If your viewer does not retain form edits, use the text quest journal in the field kit or print the ledger.
+
+Tally XP from the column weights. The PDF does not execute your Rust code or calculate completion for you. Keep implementation notes, rejected attempts, measurements, and debriefs in your own repository or the supplied journal. A checked box should point to evidence you can revisit.
+
+There is no penalty for revealing a hint. Hint one redirects attention. Hint two gives a more concrete reasoning step. The debrief describes a defensible solution and its limits. It is often worth returning after a few days and rebuilding the argument without the vault open.
+
+## Read the Level Interface
+
+An entry briefing gives the situation, objective, suggested loadout, and mastery targets. The field manual contains the complete technical material. Training encounters and their debriefs preserve the original exercises. The boss encounter is a new challenge that asks you to apply the idea under concrete constraints. The exit routes offer two meaningful branches into other systems.
+
+The Map, Save, and Vault links remain in the page footer throughout the expedition. The topic index links directly to technical field manuals. The campaign directory links to level entries. A field manual's number matches its level number, so a reference to Level 24 means the pinning material even when the mission has a different narrative name.
+
+The three branching rooms are optional diagnostic encounters. Choose an action before reading its consequence. Several actions can be defensible under different requirements. The interesting discovery is which assumption makes your choice valid. The world does not reward confidence without an ownership or protocol argument.
+
+## Carry the Right Tools
+
+Open the field kit ZIP from your PDF viewer's attachments panel or download it from the World Map in the interactive reader. It contains Rust listings, rejected examples, sketches, campaign routes, and an editable quest journal. Listing 24.3 belongs to Level 24 and retains its chapter number in the filename.
+
+The examples use Rust edition 2024. The first compiler pass used rustc 1.97.1, and the November 2026 review targets stable Rust 1.99.1. Some examples define main, and others define library items. Twelve listings are deliberately rejected. The reader project's Rust audit records the checks for the supplied examples.
+
+Work with stable Rust unless an encounter explicitly asks you to investigate a tool or an unstable experiment. Runtime-specific and foreign-library sketches identify the context they need. The campaign does not require a particular async runtime or an external service merely to follow its reasoning.
+
+The source notes link to primary Rust documentation. Use those contracts when a precise rule matters. Passing tests, a successful benchmark, or a clean Miri run contributes evidence within its scope; it does not replace the invariant argument for an unsafe abstraction. Ferrum's most expensive failures came from treating one kind of evidence as if it proved everything.
+
+## Start Before You Feel Finished
+
+Choose a path and enter its first unfamiliar level. Predict one example. Attempt one boss. Leave a record of what you believed and what changed. When another route looks interesting, take it. The map is built for revisiting ideas from a different direction.

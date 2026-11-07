@@ -1,0 +1,187 @@
+# Chapter 4 Lifetimes as Constraints Between Operations
+
+## Lifetimes relate uses rather than schedule destruction
+
+A lifetime annotation is a statement about relationships that must hold for references to be used safely. It does not extend an allocation, prevent a resource from being destroyed by magic, or tell the runtime when to free memory. The compiler uses the annotation while checking that the actual owners and uses satisfy the relationship.
+
+For a function returning a borrowed result, the central question is which input owner must remain available for that result. A signature such as `fn field<'a>(input: &'a str) -> &'a str` states that the result is usable within the region authorized by the input borrow. It does not promise that the result uses the complete input, nor that it must remain in use for that entire region. A caller can use it briefly and release the dependency.
+
+Lifetime parameters are generic parameters. They describe a family of valid calls rather than one global duration attached to a declaration. The caller supplies relationships consistent with its local owners; the callee must work for those relationships under its declared bounds. This is why adding the same lifetime name everywhere usually makes a signature less flexible instead of more correct.
+
+## Separate independent sources
+
+Consider a function that looks for a key in a text record. The returned value is a slice of the record. The key is needed only during the lookup. Tying the result to both borrows would impose a dependency the implementation does not need.
+
+```rust
+fn value_for<'record>(
+    record: &'record str,
+    wanted: &str,
+) -> Option<&'record str> {
+    for field in record.split(';') {
+        let (key, value) = field.split_once('=')?;
+        if key.trim() == wanted {
+            return Some(value.trim());
+        }
+    }
+    None
+}
+
+fn main() {
+    let record = String::from("mode=strict;limit=20");
+    let result;
+    {
+        let key = String::from("mode");
+        result = value_for(&record, &key).unwrap();
+    }
+    assert_eq!(result, "strict");
+}
+```
+
+The short lived key can disappear before the result is used because the output lifetime names only the record relationship. If the signature used one lifetime for both arguments and the result, a call would be checked under a common usable region constrained by both inputs. Even if the implementation always returned record data, the caller would not be allowed to rely on that hidden fact.
+
+This is a form of information design. A good signature exposes exactly the dependencies clients need to preserve. An overly broad dependency can force clients to retain unrelated data, avoid mutations, or clone unnecessarily. A missing dependency would permit dangling access and is rejected in safe code.
+
+The example's parsing policy is intentionally strict: a field without an equals sign ends the search with `None`. A different parser might skip malformed fields or return a structured error. Lifetime correctness does not select parsing semantics. Review both independently when adapting the code.
+
+## Receiver lifetimes and stored lifetimes differ
+
+A type containing a borrow usually has a lifetime parameter representing the owner it refers to. A method borrowing that type introduces another relationship: how long the caller borrows the wrapper itself. These lifetimes should not be tied together without a reason.
+
+```rust
+struct Cursor<'input> {
+    remaining: &'input str,
+}
+
+impl<'input> Cursor<'input> {
+    fn new(input: &'input str) -> Self {
+        Self { remaining: input }
+    }
+
+    fn next_word(&mut self) -> Option<&'input str> {
+        self.remaining = self.remaining.trim_start();
+        if self.remaining.is_empty() {
+            return None;
+        }
+        let end = self.remaining.find(char::is_whitespace)
+            .unwrap_or(self.remaining.len());
+        let word = &self.remaining[..end];
+        self.remaining = &self.remaining[end..];
+        Some(word)
+    }
+}
+
+fn main() {
+    let text = String::from("alpha beta");
+    let mut cursor = Cursor::new(&text);
+    let first = cursor.next_word().unwrap();
+    let second = cursor.next_word().unwrap();
+    assert_eq!((first, second), ("alpha", "beta"));
+}
+```
+
+The cursor mutates its own remaining slice, but each returned word borrows the immutable original input. It does not borrow mutable cursor storage. The temporary exclusive borrow of the cursor can end after each call while earlier words remain usable.
+
+Writing `fn next_word(&'input mut self)` would demand borrowing the cursor exclusively for the input's lifetime. That can make repeated calls impossible while previous results remain in use, and may prevent the cursor itself from satisfying the requested duration. The receiver needs a short access borrow; the result needs the stored input borrow. They happen to participate in the same operation, but they represent different owners.
+
+This pattern works because the cursor stores immutable slices into external data. A cursor that reuses an internal scratch buffer cannot generally return results with an unrelated external lifetime. Its output must be tied to the receiver borrow, or must own its bytes. The correct signature follows where the bytes actually live.
+
+## Elision is a deterministic shorthand
+
+Lifetime elision removes common annotations according to language rules. It is not an arbitrary whole program analysis that guesses what the function body intends. With one input lifetime, an elided output lifetime can normally refer to that input. In a method with a borrowed receiver, the receiver's lifetime guides elided borrowed outputs. Multiple independent borrowed inputs often require an explicit choice.
+
+A useful review exercise is to expand elision mentally. `fn get(&self) -> &str` returns a string tied to the receiver borrow. For a wrapper holding a longer lived external string, that may be more restrictive than `fn get(&self) -> &'input str`. The first contract reserves the wrapper relationship for use of the result; the second can allow the wrapper to be modified or destroyed while the external owner remains alive.
+
+```rust
+struct Label<'source> {
+    text: &'source str,
+}
+
+impl<'source> Label<'source> {
+    fn text(&self) -> &'source str {
+        self.text
+    }
+}
+
+fn main() {
+    let source = String::from("persistent source");
+    let text;
+    {
+        let label = Label { text: &source };
+        text = label.text();
+    }
+    assert_eq!(text, "persistent source");
+}
+```
+
+A shared reference can be copied out of the wrapper with its original lifetime relationship. An exclusive reference requires more care because it cannot simply be duplicated. Some methods must reborrow an exclusive referent for the receiver's shorter borrow; a consuming method can instead transfer the original exclusive reference. Treating these cases identically is a frequent source of lifetime confusion.
+
+## Higher ranked bounds put the choice inside the callee
+
+A generic lifetime parameter on a function is chosen in the context of a call. A higher ranked bound such as `for<'a> Fn(&'a Record)` requires a callback that works for any suitable lifetime the caller of that callback supplies. This distinction matters when a library creates a temporary value and wants to lend it to user code without allowing a borrow to escape.
+
+```rust
+struct Sample {
+    value: i64,
+}
+
+fn with_sample<F, R>(value: i64, inspect: F) -> R
+where
+    F: for<'a> FnOnce(&'a Sample) -> R,
+{
+    let sample = Sample { value };
+    inspect(&sample)
+}
+
+fn main() {
+    let doubled = with_sample(21, |sample| sample.value * 2);
+    assert_eq!(doubled, 42);
+}
+```
+
+The output `R` is outside the lifetime binder. It cannot be an arbitrary reference to the temporary sample whose lifetime is chosen inside the function. The callback can return an owned number, an owned string, or some value borrowing unrelated data it already owns permission to access. The bound confines this specific input borrow.
+
+This is useful for scoped transactions, temporary decoded views, and APIs that borrow internal state while running a user operation. It does not make callbacks harmless. They can panic, reenter other components, allocate, or change externally shared state. The bound controls one escape route; the API still needs a policy for all those behaviors.
+
+Higher ranked bounds also occur in function pointers and trait implementations. Read the position of the quantifier carefully. A callback accepting only `&'static Record` is not a callback accepting arbitrary short borrows. A callback able to accept any short borrow can also accept an appropriately usable static borrow. The more general input contract supports more callers.
+
+## Outlives bounds describe contained references
+
+The bound `T: 'a` means that references contained in `T` satisfy the required outlives relationship. It does not require a value of `T` to remain allocated until the end of `'a`. An owned `String` can satisfy `T: 'static` even when the particular string is dropped at the end of a short function. It contains no nonstatic borrowed references that would prevent moving it into a longer lived owner.
+
+Similarly, `'long: 'short` says that the longer relationship can support uses required by the shorter one. It is a constraint, not a command to lengthen either owner. If a local allocation disappears too early, naming a longer lifetime cannot rescue it.
+
+This distinction explains many task spawning errors. An API requiring an owned closure or future with a `'static` bound generally requires it not to contain unsupported short borrowed references. It does not mean the task must run forever. Moving owned data into the task often satisfies the bound because ownership travels with the task. Moving a reference only moves the reference value; it does not move the original owner.
+
+Be precise about trait objects as well. A bound on the erased object's contained borrows and the lifetime of a reference pointing to that object are separate layers. `&'short (dyn Trait + 'long)` can lend a long compatible object for a short operation. Object lifetime defaults use rules distinct from ordinary function elision, so explicit `+ '_` or a named bound can clarify an intended borrowed object API.
+
+## Solving lifetime errors as a graph problem
+
+Start with ownership nodes: where is each allocation or resource owned? Add edges for references stored in values and returned by functions. Then mark operations that need exclusive access or destroy an owner. A lifetime error usually says one edge would need to cross an incompatible mutation or destruction point.
+
+There are four common repairs. Shorten the use of a reference when it is no longer needed. Return owned data when the result must outlive the source. Move the source owner into a longer lived component. Or revise the signature to remove an accidental relationship, as with the lookup key and cursor receiver above. Adding annotations is appropriate only for the last category or for exposing a real relationship that elision cannot express.
+
+Avoid turning every error into a request for `'static`. Leaking an allocation can manufacture a static reference, but it changes resource behavior and usually conceals the missing ownership decision. Reference counting can be a legitimate owner transfer strategy, but it also changes retention, sharing, and synchronization choices. Pick those designs deliberately.
+
+The most effective advanced lifetime reasoning remains concrete: identify the bytes, identify their owner, identify which use requires them, and give each independent relationship its own parameter. The notation becomes manageable when every name has a specific job.
+
+## Exercises
+
+1. A lookup function takes a database slice and a temporary query string, and returns a reference into the database. Write its lifetime relationship in words and explain why the query should normally have an independent input lifetime.
+
+2. A lexer returns slices of its external immutable source while advancing an internal index. Why can several returned tokens coexist? How does the answer change if it returns slices of one reusable internal buffer?
+
+3. A task API requires `T: 'static`. Does passing an owned `String` require leaking it? Explain why moving a reference to a local string is a different operation.
+
+## Reasoned Solutions
+
+1. The result depends on the database owner for every use, while the query is needed only during comparison. A signature can name the database lifetime in the result and leave the query's input lifetime independent. Tying them unnecessarily would constrain the result to the common usable region and could reject a result used after the query disappears.
+
+2. Each token borrows unchanged source storage, so advancing an index does not invalidate earlier tokens. The lexer borrow can be short and separate from the source lifetime. A reusable buffer is owned and mutated by the lexer; returned slices must prevent conflicting reuse while they remain in use, or tokens must copy or own their bytes.
+
+3. No. `String` owns its allocation and contains no short lived borrow that prevents the type from satisfying the bound. The task can own it and destroy it normally. Moving `&String` transfers only a borrowed handle, whose referent is still owned by the local scope and may disappear before the task finishes.
+
+## Further Reading
+
+- [The Rust Reference on lifetime elision](https://doc.rust-lang.org/reference/lifetime-elision.html) specifies the shorthand rules and object lifetime defaults.
+- [The Rust Reference on trait and lifetime bounds](https://doc.rust-lang.org/reference/trait-bounds.html) specifies outlives and higher ranked relationships.
+- [The Rust standard library thread scope API](https://doc.rust-lang.org/std/thread/fn.scope.html) is a concrete example of bounded borrowed work.

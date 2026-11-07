@@ -1,0 +1,199 @@
+# Chapter 1 Ownership as Permissions and State Transitions
+
+## The question behind an ownership error
+
+An experienced developer usually meets Rust with an existing model of objects: an object has an identity, several parts of the program can refer to it, and the runtime or the programmer arranges its eventual cleanup. Rust asks for a more explicit account. Which operation currently has permission to destroy the value? Which operations may inspect its storage? Which operation may change that storage? What must remain true until those permissions expire? An ownership error is often the compiler reporting that two proposed answers cannot both be true.
+
+This perspective is more useful than memorizing a collection of prohibitions. A database transaction, a file descriptor, an allocated buffer, and a lock guard have different behavior, but all can be represented by a value whose owner controls a permission. Passing that value by value transfers the permission. Borrowing makes a temporary promise about how the owner will behave. Destruction releases whatever the permission represents.
+
+There are three distinct things to keep separate: the value, the storage that currently contains it, and the resource represented by it. A `Vec<u8>` value contains management information; its elements usually occupy another allocation. Moving the vector can change where the management information resides while preserving ownership of its allocation. A file value represents an operating system resource; moving the Rust value does not reopen the file. Ownership concerns the program's authority over these resources, rather than a requirement that every value occupy a permanent address.
+
+The useful invariant is that an owned resource has one active destruction responsibility at a time. There may be many readers, several weak identifiers, or reference counted ownership represented by multiple handles, but the resource's implementation must still establish when final cleanup is authorized. Rust makes many of those responsibilities visible in types and signatures.
+
+## Values make protocols explicit
+
+Consider a component that prepares bytes and hands them to another component for submission. A design in which every method takes a mutable reference can work, but the object remains available in states where its old operations no longer make sense. Consuming methods can express the state transition directly.
+
+```rust
+struct Draft {
+    bytes: Vec<u8>,
+}
+
+struct Ready {
+    bytes: Vec<u8>,
+    checksum: u64,
+}
+
+impl Draft {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn append(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    fn finish(self) -> Ready {
+        let checksum = self.bytes.iter()
+            .fold(0_u64, |sum, byte| sum + u64::from(*byte));
+        Ready { bytes: self.bytes, checksum }
+    }
+}
+
+impl Ready {
+    fn submit(self) -> (usize, u64) {
+        (self.bytes.len(), self.checksum)
+    }
+}
+
+fn main() {
+    let mut draft = Draft::new();
+    draft.append(b"request");
+    let ready = draft.finish();
+    assert_eq!(ready.submit(), (7, 777));
+}
+```
+
+The interesting detail is not the checksum algorithm. `finish` consumes the authority to modify a `Draft`, and produces authority to submit a `Ready`. There is no remaining draft handle through which the checksum could be invalidated. The compiler does not understand checksums; it understands that a consumed owner cannot be used again. We connect that general rule to the domain invariant through the API.
+
+This technique also changes the error path. If finishing can fail, a return type such as `Result<Ready, (Draft, Error)>` can return the permission to edit. Returning only `Error` deliberately destroys the draft on failure. Neither policy is universally correct. The signature should make the product decision visible: whether rejected work is recoverable, whether recovery is cheap, and which component owns it after rejection.
+
+Consumption does not imply successful completion. If `submit` panics before completion, its fields are still subject to ordinary unwinding behavior. Ownership proves availability and cleanup relationships; it does not prove that a remote operation occurred. Distributed side effects require a separate protocol, perhaps an idempotency key or a durable acknowledgment record.
+
+## Shared access and exclusive access are capabilities
+
+The familiar distinction between `&T` and `&mut T` is best understood through permitted operations. A shared reference permits operations that preserve the relevant shared access guarantees. An exclusive reference permits operations that require temporary exclusivity. The word mutable is useful, but it can obscure the stronger fact that an exclusive borrow can be needed even when a method performs no write.
+
+A method may require `&mut self` because its contract reserves the right to rearrange internal storage, lazily initialize an index, or make two operations atomic with respect to safe clients. Conversely, a method taking `&self` may update a `Cell`, `RefCell`, atomic, or mutex protected value. Interior mutability changes how certain writes are authorized; it does not abolish the need for authorization.
+
+```rust
+struct Catalog {
+    names: Vec<String>,
+}
+
+impl Catalog {
+    fn first(&self) -> Option<&str> {
+        self.names.first().map(String::as_str)
+    }
+
+    fn add(&mut self, name: String) {
+        self.names.push(name);
+    }
+}
+
+fn main() {
+    let mut catalog = Catalog {
+        names: vec![String::from("alpha")],
+    };
+    let name = catalog.first().unwrap();
+    println!("{name}");
+    catalog.add(String::from("beta"));
+}
+```
+
+The borrow used by `name` is no longer needed after its last use. The subsequent insertion can therefore obtain exclusive access. If the print moved after the insertion, the proposed accesses would conflict. A vector may reallocate when it grows, so preserving a reference into it while allowing growth would permit the reference to become invalid. Rust does not need to predict whether this particular push reallocates. The method's contract permits reallocation, so the checker reasons from that contract.
+
+This explains a common design surprise: reserving enough capacity does not generally make a conflicting safe borrow legal. Capacity is a runtime fact about the current vector. The type of `push` still requires exclusive access to the vector. To expose a narrower promise, an API needs a different representation or a specialized safe abstraction with a carefully stated invariant.
+
+## Ownership boundaries are architectural boundaries
+
+Suppose a request processor receives a byte buffer, parses it, and produces an answer. There are at least three useful designs. It can borrow the input and return data tied to that borrow. It can consume the input and produce an owned result. Or it can copy selected fields and release the large input promptly. The right choice depends on the lifetime and memory behavior of the entire pipeline.
+
+Borrowing minimizes copying when the consumer finishes before the input owner needs to mutate or release the storage. Consuming can simplify handoffs between independently scheduled operations. Selective copying can reduce retained memory: keeping a ten byte field borrowed from a ten megabyte message retains the entire message allocation. A zero copy interface can therefore increase peak memory despite reducing byte movement.
+
+```rust
+#[derive(Debug, PartialEq)]
+struct Header<'a> {
+    key: &'a str,
+    value: &'a str,
+}
+
+fn parse_header(input: &str) -> Option<Header<'_>> {
+    let (key, value) = input.split_once(':')?;
+    Some(Header { key: key.trim(), value: value.trim() })
+}
+
+fn owned_key(input: &str) -> Option<String> {
+    Some(parse_header(input)?.key.to_owned())
+}
+
+fn main() {
+    let message = String::from("mode: strict");
+    let header = parse_header(&message).unwrap();
+    assert_eq!(header.value, "strict");
+    let key = owned_key(&message).unwrap();
+    drop(message);
+    assert_eq!(key, "mode");
+}
+```
+
+The borrowed result carries a relationship with the input owner. The owned key has intentionally crossed that boundary. Both functions can be efficient for different workloads. Rather than asking whether cloning is idiomatic, ask which component should own the bytes at each stage and how long the largest allocation remains reachable.
+
+The same analysis applies to channels and tasks. Moving a message into a channel is a clear transfer. Sharing an `Arc<Message>` keeps independent operations coupled through the allocation's lifetime. Borrowing from a parent can be efficient when a scoped concurrency API guarantees all children finish before the parent releases its data. These are different lifetime architectures, not interchangeable spellings of the same design.
+
+## Copy is a semantic promise
+
+An ordinary move prevents further use of the old place until it is reinitialized. For a `Copy` type, an operation that would move instead copies the value and leaves the original usable. The promise is stronger than cheapness: implicit duplication must not require custom ownership bookkeeping. An integer is straightforward. A borrowed reference can be copied because it does not own the pointee. An exclusive reference is not `Copy`, because duplicating it would duplicate a capability that requires exclusivity.
+
+Smallness does not determine whether a type should implement `Copy`. A small handle might represent a unique right to close a resource, release a reservation, or consume a token. Automatically duplicating that handle would change the protocol. A much larger fixed array of copyable values can still be `Copy`, although copying it may be expensive. Performance and permission semantics are separate questions.
+
+```rust
+#[derive(Clone, Copy)]
+struct Position {
+    byte: usize,
+    line: usize,
+}
+
+struct Reservation {
+    id: u64,
+}
+
+fn commit(reservation: Reservation) -> u64 {
+    reservation.id
+}
+
+fn main() {
+    let start = Position { byte: 0, line: 1 };
+    let checkpoint = start;
+    assert_eq!(start.byte, checkpoint.byte);
+    assert_eq!(start.line, 1);
+    let ticket = Reservation { id: 42 };
+    assert_eq!(commit(ticket), 42);
+}
+```
+
+`Reservation` has no destructor in this small example, but withholding `Copy` still encodes a useful restriction. Unique logical rights do not need an operating system resource to justify ownership. When a public type implements `Copy`, clients may begin depending on implicit duplication. Removing that implementation later can break source compatibility. Treat it as an API commitment.
+
+`Clone` is an explicit operation and can perform arbitrary work. Cloning a `String` duplicates its bytes; cloning an `Arc` creates another handle to the same allocation. A method accepting `T: Clone` cannot assume independent deep state. It only knows that the type offers the documented duplication behavior. This matters when designing snapshots, isolation boundaries, and caches.
+
+## Read signatures as a permission ledger
+
+For each parameter and result, ask what the callee receives and what the caller gets back. `fn inspect(&Record)` temporarily permits inspection. `fn edit(&mut Record)` reserves exclusive access. `fn archive(Record)` transfers ownership. `fn detach(&mut Record) -> Payload` leaves the record usable but returns an independently owned payload; its implementation must replace whatever state it removes. `fn view(&Record) -> &Payload` creates a result whose usable lifetime is tied to the borrowed record.
+
+This ledger exposes design mistakes before implementation. If a function takes ownership but only reads a value, it may unnecessarily prevent reuse. If it borrows a value but stores a result beyond the borrow, it needs ownership, a longer lived owner, or an explicit copying step. If a method returns a mutable reference to internal state, the owner remains exclusively borrowed for the result's use, so subsequent operations on that owner may be unavailable.
+
+Do not mechanically choose the least permissive signature. A consuming method can express an important transition even if its current body only reads. A mutable receiver can reserve space for an invariant that future implementations must preserve. The choice should follow the domain contract rather than the smallest body that happens to compile today.
+
+Ownership becomes easier when every long lived value has a clear owner and every temporary access has a clear end. When neither is clear, the borrow checker may be exposing an architectural ambiguity. Fixing the shape of ownership often removes several local lifetime problems at once.
+
+## Exercises
+
+1. A message parser returns three borrowed strings. A queue must retain those strings after the original network buffer is reused. Describe two ownership designs and the memory cost each implies.
+
+2. An authorization token contains only a `u64`. Should it implement `Copy` if calling `redeem` must make a second redemption impossible through the same token value? Explain what the type system can and cannot guarantee.
+
+3. A method `fn current(&self) -> &Entry` is followed by a call to `fn refresh(&mut self)`. Explain why the second call can compile when the result of `current` is no longer used, and why preallocating storage does not generally change the answer when it is used afterward.
+
+## Reasoned Solutions
+
+1. Copy the selected strings into an owned queue message, allowing immediate buffer reuse at a cost proportional to retained fields. Alternatively, transfer ownership of the complete buffer into a queued message and store byte ranges rather than self references. That avoids field copies but retains the full buffer. An `Arc` owned buffer can support several consumers, with the same retention consideration and reference counting overhead.
+
+2. Withhold `Copy` and make `redeem` consume the token. This prevents reuse of that Rust value in safe code after transfer. It does not prevent a user from constructing another token with the same identifier if constructors allow it, replaying a serialized identifier, or racing separate copies created elsewhere. Private construction and external redemption state may be required for the complete protocol.
+
+3. The first result carries shared access to the entry through the owner. Once its last relevant use has passed, exclusive access can begin. If the result is used after refresh, the accesses overlap. Capacity is not the relevant contract: `refresh` requires exclusive access and may perform operations that invalidate or change the entry. A specialized API would need to express a narrower relationship.
+
+## Further Reading
+
+- [The Rust Reference on expressions](https://doc.rust-lang.org/reference/expressions.html) defines places and value expressions used throughout ownership reasoning.
+- [The Rust standard library Clone trait](https://doc.rust-lang.org/std/clone/trait.Clone.html) documents explicit duplication contracts.
+- [The Rust standard library Copy trait](https://doc.rust-lang.org/std/marker/trait.Copy.html) explains the language level duplication promise.

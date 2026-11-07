@@ -1,0 +1,229 @@
+# Chapter 25 Wakeups Connect Resources to Schedulers
+
+A pending future has two obligations that belong to different components. The resource side must arrange a notification when progress becomes possible. The executor side must turn that notification into another opportunity to poll the task. A `Waker` is the capability connecting those components. It identifies a task to the scheduling machinery without requiring the resource to know the task's concrete future type.
+
+This separation makes async composition efficient, but it also creates a protocol that can fail in subtle ways. A notification delivered just before a task goes to sleep must not be lost. Repeated notifications need not cause repeated simultaneous polls. A future moved between scheduling contexts must not retain only an obsolete waker. These are state transition problems, not merely questions of calling a method named `wake`.
+
+## Wake Means Poll Again
+
+A wakeup does not mean the requested operation is complete. A socket may become readable but still contain too few bytes for a frame. Another consumer may take the available item first. A timer notification may race with cancellation. The future must recheck its own readiness predicate whenever polled.
+
+Wakeups can also be coalesced. If a task is already queued, five more notifications may be represented by the same runnable state. The executor owes an opportunity to make progress, not necessarily one poll per notification. A resource that counts events only by counting wake calls is therefore using the wrong storage. Store events or readiness in resource state, and use the waker only to prompt observation.
+
+`Waker` is cloneable and usable across threads. A resource can retain a clone while the original `Context` exists only during one poll call. The resource should update its registration when the current task changes. The most recently supplied context is the relevant one for future wakeups, so blindly keeping the first waker is incorrect.
+
+The safe `Wake` trait lets a program construct a waker from an `Arc` backed type. It avoids the manual pointer and vtable invariants required by `RawWaker`. Use the safe route when its ownership model fits. A custom raw implementation is a low level optimization with obligations around cloning, consumption, thread safety, and destruction.
+
+## A Small Executor With a Predicate
+
+The following complete executor runs one future on the current thread. A mutex protected boolean records whether a notification has happened. The condition variable waits for that predicate rather than treating a notification as durable state.
+
+```rust
+use std::future::Future;
+use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
+
+struct Signal {
+    notified: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Signal {
+    fn notify(&self) {
+        *self.notified.lock().unwrap() = true;
+        self.changed.notify_one();
+    }
+
+    fn wait(&self) {
+        let mut notified = self.notified.lock().unwrap();
+        while !*notified {
+            notified = self.changed.wait(notified).unwrap();
+        }
+        *notified = false;
+    }
+}
+
+impl Wake for Signal {
+    fn wake(self: Arc<Self>) {
+        self.notify();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.notify();
+    }
+}
+
+fn run<F: Future>(future: F) -> F::Output {
+    let signal = Arc::new(Signal {
+        notified: Mutex::new(false),
+        changed: Condvar::new(),
+    });
+    let waker = Waker::from(Arc::clone(&signal));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => signal.wait(),
+        }
+    }
+}
+
+fn main() {
+    assert_eq!(run(async { 6 * 7 }), 42);
+}
+```
+
+Analyze the important race. A future can call `wake_by_ref` during its poll and then return pending. The boolean is already true when `wait` acquires the mutex, so the executor does not sleep. If the notification occurs while `wait` is about to block, the condition variable's release and wait operation coordinates with the same mutex protected predicate. Spurious wakeups are harmless because the predicate is checked in a loop.
+
+There is no queue of tasks here, no timer wheel, no I/O reactor, and no worker stealing. The implementation is intentionally narrow: one pinned future, one notification state, one waiting thread. It demonstrates why the readiness predicate must survive the timing of the notification. A production executor adds many responsibilities without changing that basic requirement.
+
+This executor must not be used to wait on an operation that assumes a different runtime is driving its reactor. A future's trait implementation does not imply independence from runtime services. A runtime specific timer may need registration with that runtime, and an I/O object may require its reactor. The generic polling interface is shared; the surrounding environment can still have requirements.
+
+## Registering a Waker Without Losing Readiness
+
+The resource side needs a complementary protocol. A naive implementation checks whether a result exists, then stores a waker, then returns pending. If another thread produces the result between the check and registration, it may find no waker to notify. The consumer then sleeps despite the result already being available.
+
+One straightforward solution protects readiness and registration with the same mutex. This library example defines a one shot completion pair. It focuses on successful completion; a production version would also define sender disappearance and receiver cancellation.
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
+
+struct Shared<T> {
+    value: Option<T>,
+    waiter: Option<Waker>,
+}
+
+struct Completion<T>(Arc<Mutex<Shared<T>>>);
+struct Promise<T>(Arc<Mutex<Shared<T>>>);
+
+fn completion_pair<T>() -> (Completion<T>, Promise<T>) {
+    let shared = Arc::new(Mutex::new(Shared {
+        value: None,
+        waiter: None,
+    }));
+    (Completion(Arc::clone(&shared)), Promise(shared))
+}
+
+impl<T> Completion<T> {
+    fn complete(self, value: T) {
+        let waiter = {
+            let mut shared = self.0.lock().unwrap();
+            shared.value = Some(value);
+            shared.waiter.take()
+        };
+        if let Some(waiter) = waiter {
+            waiter.wake();
+        }
+    }
+}
+
+impl<T> Future for Promise<T> {
+    type Output = T;
+
+    fn poll(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<T> {
+        let next = context.waker().clone();
+        let mut shared = self.0.lock().unwrap();
+        if let Some(value) = shared.value.take() {
+            return Poll::Ready(value);
+        }
+        let previous = shared.waiter.replace(next);
+        drop(shared);
+        drop(previous);
+        Poll::Pending
+    }
+}
+```
+
+If completion obtains the lock first, the next poll observes the value. If polling obtains the lock first, it registers the waker before completion can store the value and take that waker. There is no interval in which readiness can be published without either being observed or having a registered notification path.
+
+The producer wakes after unlocking. The consumer clones before locking and drops the displaced waker after unlocking. Clone and drop may run custom waker code as well. On the ready path, Rust drops the lock guard before the unused clone because the guard was declared later.
+
+This example intentionally leaves an important failure case visible: if `Completion` is dropped without completing, `Promise` can remain pending forever. Adding a `closed` flag and waking on sender drop would let the future return a result describing cancellation. The future's output type would then change to represent both completion and disconnection. Failure semantics belong in the state machine from the beginning.
+
+## Readiness Must Outlive Notifications
+
+A readiness flag is often level triggered: while the condition remains true, polling can observe it. A notification is a transient scheduling event. Combining a persistent predicate with notifications makes coalescing safe. If three items arrive while a task is already queued, a single later poll can inspect the queue and process some or all of them.
+
+Edge triggered systems require especially careful draining and rearming rules. If code consumes only part of the available work and then waits for a new edge that never occurs, it can stall with work still present. The abstraction must define when readiness is cleared and how another notification becomes guaranteed.
+
+Even a level triggered design can lose progress if it clears readiness after checking the resource in the wrong order. The exact order depends on the primitive. Mutex based code can combine state and registration directly. Lock free registration often uses a double check or a specialized atomic waker abstraction. Copying only one atomic operation from such an algorithm is unsafe reasoning because the protocol spans several transitions.
+
+The resource should also avoid retaining stale wakers indefinitely. A waker may own an executor task or scheduling object. If a cancelled future leaves its registration in a long lived resource, memory can remain retained after the application believes the task has ended. Registration cleanup and ownership cycles are resource management issues, even when no use after free is possible.
+
+## Fair Polling Requires Work Budgets
+
+A task can wake itself when it has more immediately available work than it should process in one poll. Returning pending after arranging another wake gives the executor a chance to schedule peers. This is a cooperative yield, not an operating system preemption guarantee.
+
+The following library future limits how many arithmetic steps it performs per poll. It demonstrates the scheduling pattern without depending on a runtime.
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+struct SumRange {
+    next: u64,
+    end: u64,
+    sum: u64,
+}
+
+impl Future for SumRange {
+    type Output = u64;
+
+    fn poll(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<u64> {
+        for _ in 0..128 {
+            if self.next >= self.end {
+                return Poll::Ready(self.sum);
+            }
+            self.sum = self.sum.wrapping_add(self.next);
+            self.next += 1;
+        }
+        context.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+```
+
+The wrapping addition makes overflow behavior explicit. The progress budget is arbitrary and would need measurement in a real workload. A budget measured in items is not a reliable time bound if item costs vary dramatically. The important property is that the future retains partial progress, arranges another poll, and returns control after bounded local work.
+
+An executor can still provide unfair scheduling despite a cooperative future. For example, repeatedly putting a self waking task at the front of a queue can starve peers. Fairness is a relationship between task behavior and scheduling policy. A library can avoid monopolizing a poll, while the executor remains responsible for how runnable tasks are selected.
+
+## Why Concurrent Polling Is Forbidden by Ownership
+
+`poll` takes `Pin<&mut Self>`, which represents exclusive access to the future for that invocation. An executor must not use unsafe machinery to poll the same future concurrently on two workers. A task can receive a wake while already running; that should update its scheduling state, not create a second simultaneous mutable access.
+
+A common task state machine distinguishes idle, queued, running, notified while running, and completed. The details vary, but the obligation is stable: preserve a pending notification without violating exclusive polling. Completing a task must also prevent stale wakeups from resurrecting a destroyed future. The waker may remain alive after completion, so its scheduling object needs a harmless terminal behavior.
+
+These executor internals are a strong reason to use established runtimes for applications. Understanding them is still valuable: it explains why a future can hang despite correct business logic, why a wake storm need not produce one poll per event, and why blocking in a poll affects unrelated work.
+
+## Exercises
+
+1. A future checks an empty queue, releases a lock, stores its waker, and returns pending. Construct an interleaving that strands it while the queue contains an item.
+
+2. A resource calls a waker ten times, but the executor polls once. Explain why this can be correct and what state must preserve the ten logical events.
+
+3. A task is woken while one worker is polling it. Explain why immediately polling it on another worker is invalid and describe the scheduling state needed instead.
+
+## Reasoned Solutions
+
+1. The producer inserts an item after the empty check but before registration. It sees no registered waker and sends no useful notification. The consumer then registers and sleeps without rechecking. Protect readiness and registration together, or use a proven registration protocol that rechecks after registration and handles the race.
+
+2. Wakeups are scheduling prompts and may coalesce. Store the events in a queue, counter, or other resource state that a poll can inspect. The executor need only ensure an opportunity to observe the ready state. Using wake calls as the sole event count confuses notification with data storage.
+
+3. Concurrent polling would require overlapping exclusive access to the same future. Record that another poll is needed, and enqueue or repoll only after the current invocation returns. A running plus notified state prevents the wake from being lost while preserving one poll at a time.
+
+## Further Reading
+
+- [Waker](https://doc.rust-lang.org/std/task/struct.Waker.html) defines notification and current registration behavior.
+- [Wake](https://doc.rust-lang.org/std/task/trait.Wake.html) provides safe construction of `Arc` backed wakers.
+- [Context](https://doc.rust-lang.org/std/task/struct.Context.html) supplies the current task's waker during polling.

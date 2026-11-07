@@ -1,0 +1,167 @@
+# Chapter 21 Channels Define Ownership Protocols
+
+A channel does more than transport values. It defines when a producer relinquishes ownership, how a consumer learns that work exists, and what happens when one side disappears. A message boundary can turn shared mutation into sequential ownership: one component owns state, and other components request operations by sending commands. This often makes invariants easier to inspect because there is one place where they change.
+
+The simplification has limits. A message can be accepted without being processed. A reply can be lost after an operation commits. A queue can retain more memory than the application can afford. Channels remove some forms of aliasing, but they introduce a temporal protocol. This chapter treats capacity, acknowledgement, disconnection, and cancellation as parts of that protocol rather than incidental API details.
+
+## Sending Transfers a Value
+
+Sending an owned message transfers the value. A buffered channel can queue it for later receipt, so the producer and consumer may progress independently. With `sync_channel(0)`, a successful `send` means a receiver has already taken the value. In either case, the receiver can process or drop the value without borrowing the sender.
+
+When sending fails because the receiver is disconnected, the standard channel returns the unsent message inside the error. That matters for recovery: the application can retry elsewhere, persist the message, or return it to a caller. Treating every send error as an opaque string throws away an ownership opportunity.
+
+```rust
+use std::sync::mpsc;
+
+fn main() {
+    let (sender, receiver) = mpsc::channel::<String>();
+    drop(receiver);
+    let message = String::from("retain on failure");
+    let recovered = sender.send(message).unwrap_err().0;
+    assert_eq!(recovered, "retain on failure");
+}
+```
+
+The recovered string is the original owned value. No compensating clone was required. This pattern generalizes to queues that reject submissions under overload: return the rejected job when the caller can usefully choose another policy. The error type should preserve the information needed for that decision.
+
+Cloning a sender creates another producer capability. It also affects termination. A receiver normally learns that a standard channel is disconnected only after all senders are dropped and queued messages have been drained. A forgotten sender in a supervisor or test fixture can therefore keep a consumer waiting forever. Ownership of channel endpoints is part of shutdown design.
+
+## Capacity Is a Resource Policy
+
+An unbounded channel decouples producer speed from consumer speed by storing the difference. If the long term arrival rate exceeds the service rate, retained work grows. Each message may own large buffers, file handles, or shared allocations, so queue length alone may understate resource use. A queue with ten messages is not small when each message retains a gigabyte.
+
+A bounded channel makes capacity visible. Blocking send applies backpressure to the producer; a nonblocking attempt lets the producer reject, drop, coalesce, or redirect work. Neither policy is inherently correct. A user facing service may reject quickly to preserve latency. A batch pipeline may intentionally block upstream stages. A telemetry stream may discard obsolete intermediate updates.
+
+The next complete example demonstrates explicit rejection while preserving the rejected job.
+
+```rust
+use std::sync::mpsc::{self, TrySendError};
+
+fn main() {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender.send(String::from("first")).unwrap();
+    let rejected = match sender.try_send(String::from("second")) {
+        Ok(()) => panic!("the queue should be full"),
+        Err(TrySendError::Full(job)) => job,
+        Err(TrySendError::Disconnected(_)) => panic!("no receiver"),
+    };
+    assert_eq!(rejected, "second");
+    assert_eq!(receiver.recv().unwrap(), "first");
+    sender.send(rejected).unwrap();
+    assert_eq!(receiver.recv().unwrap(), "second");
+}
+```
+
+Bounded item count is useful only when the message size distribution is understood. A byte budget can be enforced separately by transferring permits with jobs or by rejecting oversized messages before enqueueing. If a permit is returned when a job is dropped, the ownership system can help account for resources across success, rejection, and cancellation paths.
+
+A zero capacity synchronous channel is a rendezvous. A successful send establishes receipt, while processing needs its own acknowledgement. A producer holding a lock during the handoff can deadlock with a consumer that needs that lock before receiving. Include both channel operations and mutex acquisition in the wait dependency analysis.
+
+## An Actor With Explicit Replies
+
+An actor owns state and receives commands. The command type is the public protocol. Each variant should make the requested transition and the response path clear. This complete example implements a small counter owner with checked updates and a snapshot request.
+
+```rust
+use std::sync::mpsc::{self, Sender};
+use std::thread;
+
+enum Command {
+    Add {
+        amount: u64,
+        reply: Sender<Result<u64, &'static str>>,
+    },
+    Read(Sender<u64>),
+}
+
+fn run(receiver: mpsc::Receiver<Command>) -> u64 {
+    let mut value = 0_u64;
+    for command in receiver {
+        match command {
+            Command::Add { amount, reply } => {
+                let result = match value.checked_add(amount) {
+                    Some(next) => {
+                        value = next;
+                        Ok(next)
+                    }
+                    None => Err("counter overflow"),
+                };
+                let _ = reply.send(result);
+            }
+            Command::Read(reply) => {
+                let _ = reply.send(value);
+            }
+        }
+    }
+    value
+}
+
+fn main() {
+    let (sender, receiver) = mpsc::channel();
+    let owner = thread::spawn(move || run(receiver));
+
+    let (reply, response) = mpsc::channel();
+    sender.send(Command::Add { amount: 7, reply }).unwrap();
+    assert_eq!(response.recv().unwrap(), Ok(7));
+
+    let (reply, response) = mpsc::channel();
+    sender.send(Command::Read(reply)).unwrap();
+    assert_eq!(response.recv().unwrap(), 7);
+    drop(sender);
+    assert_eq!(owner.join().unwrap(), 7);
+}
+```
+
+The state is ordinary `u64`, with no mutex, because only the actor thread accesses it. The actor's serialization is the invariant boundary. Checked addition validates before commit, and the reply reports the resulting value. Ignoring a failed reply send is intentional: a caller that abandoned its receiver does not reverse the committed addition.
+
+That last point deserves attention. The request can succeed in the actor even when the caller never receives confirmation. If a client retries after losing the reply, the addition may happen twice. The channel alone cannot provide exactly once business semantics. A request identifier and deduplication state may be required, and the lifetime or persistence of that state must match the failure model.
+
+The actor also uses an unbounded request channel for brevity. A real service must choose its capacity policy. Making the request queue bounded does not bound reply queues if callers retain an arbitrary number of outstanding requests. Resource accounting follows the whole request path, including queued commands, active work, replies, and abandoned requests.
+
+## Acceptance Completion and Durability
+
+Name the point represented by an acknowledgement. Enqueued means the channel accepted a value. Started means an owner began work. Committed means the domain transition took effect. Durable means the effect survives a defined class of failures. These are different claims, and a single boolean named `success` obscures the difference.
+
+For an in memory actor, a successful send usually says nothing about process survival. If the actor panics after receiving a command but before replying, the caller may know only that the reply channel disconnected. It cannot infer whether the operation changed state. Returning a more descriptive error does not recover information that the protocol never recorded.
+
+One design makes requests idempotent by describing desired state rather than an increment. Another associates a unique operation identifier with each change and stores the result for repeated requests. A third accepts at least once delivery and makes duplicate effects harmless. The correct design follows the business operation, not a universal preference for one channel library.
+
+Within a process, command ordering also needs careful wording. A channel can define an order for messages it delivers, but independent producers may race to send. The application should not infer a wall clock ordering between unrelated threads merely from when their logs were printed. If commands from different producers need causal ordering, include a sequence, version precondition, or explicit dependency.
+
+## Closing Is a State Transition
+
+Dropping all senders is a useful shutdown signal when producers naturally own the right to keep a service alive. The actor drains queued messages and then exits. This is elegant for finite pipelines, but less explicit for services that retain sender clones in many places.
+
+A shutdown command provides a named transition, yet it introduces ordering questions. Does the actor stop immediately, drain earlier commands, or reject later commands? A message named `Stop` does not answer those questions by itself. If multiple producers remain active, commands can race with the shutdown request. An admission gate outside the queue or a state flag inside the owner may be needed to define which requests are accepted.
+
+There is also a distinction between closing admission and cancelling active work. A service can stop accepting new jobs while finishing existing ones. It can discard queued jobs while allowing the active one to finish. It can ask the active operation to stop at a cooperative boundary. Each policy has different guarantees for resource release and caller responses.
+
+The final owner of a reply capability determines when a caller can conclude that no response will arrive. Accidentally retaining a reply sender in a registry can keep a caller waiting after the actor has otherwise completed. This is the same endpoint ownership issue as retaining a request sender, now in the reverse direction.
+
+## Actor Boundaries and Long Running Work
+
+An actor that performs a slow operation inside its receive loop cannot process unrelated commands during that operation. This may be desirable serialization, or it may turn a small state owner into a latency bottleneck. Splitting work requires a new protocol: the actor reserves state, delegates owned work, and later receives a completion message.
+
+That protocol must handle stale completions. A request may have been cancelled or superseded while a worker ran. Include a generation or operation identifier so that the actor can decide whether the completion still applies. Do not let workers mutate actor owned state through a side channel, because that bypasses the serialization property that motivated the design.
+
+Likewise, a worker waiting for the actor while the actor waits for the worker creates a cycle even without shared memory. Draw a wait graph for synchronous request reply calls. Channel based code can deadlock just as lock based code can. Ownership clarifies who holds data; it does not automatically guarantee progress.
+
+## Exercises
+
+1. A receiver drains all visible messages and then waits forever despite every producer task having returned. Identify an ownership cause and a debugging technique.
+
+2. A bounded queue allows 100 jobs, but memory still grows without limit. Give two message or pipeline designs that explain the growth and propose corresponding bounds.
+
+3. A payment actor commits a charge, then fails to send its reply because the caller timed out. The caller retries. Explain why successful channel operations alone cannot prevent a duplicate charge.
+
+## Reasoned Solutions
+
+1. A sender clone remains alive outside the producer tasks, perhaps in the supervisor, a test variable, or a registry. The receiver has no evidence that future messages are impossible. Track endpoint ownership explicitly and drop the supervisor's original sender after spawning producers. A scoped owner or wrapper that records producer identities can make such leaks easier to find.
+
+2. Jobs may own arbitrarily large buffers, requiring a byte budget in addition to an item limit. Alternatively, consumers may dequeue rapidly and spawn unlimited active work, so the queue is bounded but in flight jobs are not. Bound active operations with permits retained until completion. Reply buffers, retained snapshots, and retries can require separate accounting as well.
+
+3. The commit and acknowledgement are separate events. Losing the acknowledgement leaves the caller uncertain about the effect. Give the operation a stable identifier and deduplicate at the authoritative owner, preferably with persistence appropriate to the failure model. An idempotent domain operation is another possibility. Retrying a raw increment or charge cannot be made safe by choosing a different queue capacity.
+
+## Further Reading
+
+- [Standard channels](https://doc.rust-lang.org/std/sync/mpsc/index.html) describes endpoint ownership and disconnection.
+- [Synchronous channels](https://doc.rust-lang.org/std/sync/mpsc/fn.sync_channel.html) documents bounded buffering and rendezvous behavior.
+- [TrySendError](https://doc.rust-lang.org/std/sync/mpsc/enum.TrySendError.html) preserves rejected messages and distinguishes full from disconnected channels.

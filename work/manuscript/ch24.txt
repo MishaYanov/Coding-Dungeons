@@ -1,0 +1,205 @@
+# Chapter 24 Pinning Is an Address Stability Contract
+
+Most Rust values can move whenever ownership moves. A compiler may implement a move by copying bytes, but the semantic point is that the old location no longer contains the owned value and the new location does. References usually prevent invalid moves because a borrowed owner cannot be freely moved while the borrow remains in use. Some abstractions need a stronger, longer lived promise: once a value enters an address sensitive state, it must remain at its location until its destruction protocol finishes.
+
+`Pin` represents that promise through a pointer like owner or reference. It does not make all memory immovable, and it does not change assignment throughout the language. Instead, it restricts safe access through the pinned handle so that code cannot obtain the unrestricted mutable access that would permit moving an address sensitive pointee out. Understanding what is pinned, and which fields inherit that promise, is the heart of using the abstraction correctly.
+
+## Pointer Movement and Pointee Movement
+
+Moving a `Box<T>` changes where the box handle is stored, but normally leaves its heap allocation at the same address. This physical fact is useful but insufficient as a complete contract: ordinary `Box<T>` still permits moving `T` out of the box. `Pin<Box<T>>` closes that safe escape route for a pointee that is not `Unpin`.
+
+This complete example records the observed address of a pinned value and then moves the owning handles through a vector.
+
+```rust
+use std::cell::Cell;
+use std::marker::PhantomPinned;
+use std::pin::Pin;
+
+struct Resident {
+    address: Cell<Option<usize>>,
+    _pinned: PhantomPinned,
+}
+
+impl Resident {
+    fn observe(self: Pin<&Self>) -> usize {
+        let current = self.get_ref() as *const Self as usize;
+        if let Some(previous) = self.address.get() {
+            assert_eq!(previous, current);
+        } else {
+            self.address.set(Some(current));
+        }
+        current
+    }
+}
+
+fn main() {
+    let resident = Box::pin(Resident {
+        address: Cell::new(None),
+        _pinned: PhantomPinned,
+    });
+    let before = resident.as_ref().observe();
+    let mut owners = Vec::new();
+    owners.push(resident);
+    for _ in 0..100 {
+        owners.reserve(1);
+    }
+    let resident = owners.pop().unwrap();
+    assert_eq!(resident.as_ref().observe(), before);
+}
+```
+
+The stored address is only diagnostic data; the example never reconstructs a pointer or dereferences it. The vector can move its handle values while the box allocation remains pinned. `PhantomPinned` prevents the automatic `Unpin` implementation, ensuring that safe APIs treat the pointee as potentially address sensitive.
+
+Adding `PhantomPinned` does not itself establish a self reference or initialize a pinning protocol. Before a value is actually pinned, it can still be moved normally. The marker changes which safe operations are available after pinning. A real address sensitive type must define when it establishes internal pointers and must maintain their validity through every later operation.
+
+## Unpin Opts Out of the Restriction
+
+`Unpin` says that a type does not need the pinning restriction for soundness. Most types are `Unpin`. For such a pointee, pinned access may safely become ordinary mutable access. This makes APIs such as `Future::poll` usable by both address sensitive futures and simple movable state machines.
+
+The distinction concerns the pointee type. A pointer wrapper can be movable even when its pointee must remain fixed. `Pin<Box<F>>` is itself an ordinary movable handle; moving it does not move `F` out of its allocation. This is why boxing is a convenient boundary for generic future combinators.
+
+```rust
+use std::pin::Pin;
+
+fn reset(mut value: Pin<&mut u32>) {
+    *value.as_mut().get_mut() = 0;
+}
+
+fn main() {
+    let mut value = 9_u32;
+    reset(Pin::new(&mut value));
+    assert_eq!(value, 0);
+}
+```
+
+The pinned reference here adds no meaningful restriction because `u32` is `Unpin`. The same `get_mut` operation is not generally available for a `PhantomPinned` containing type. Treating all pinned values as ordinary mutable references would erase the promise that address sensitive implementations rely on.
+
+The following deliberately rejected example demonstrates that restriction without unsafe code.
+
+```rust,compile_fail
+use std::marker::PhantomPinned;
+
+struct Fixed {
+    _pinned: PhantomPinned,
+}
+
+fn main() {
+    let mut value = Box::pin(Fixed { _pinned: PhantomPinned });
+    let ordinary: &mut Fixed = value.as_mut().get_mut();
+    let replacement = Fixed { _pinned: PhantomPinned };
+    let _old = std::mem::replace(ordinary, replacement);
+}
+```
+
+The problem is not that replacing a marker field would be physically difficult. The type opted into a contract under which generic code must preserve location. Safe access cannot assume that this particular representation happens to be harmless, because a later version may depend on the promise in an internal invariant.
+
+## Pinning a Borrow Is Also a Promise
+
+Heap allocation is not required for pinning. The `pin!` macro can pin a value in local storage, with the generated ownership structure ensuring that safe code cannot move it out afterward. This is useful when a future is awaited within a bounded scope and does not need a separately allocated owner.
+
+Pinning through a mutable reference is especially important to reason about over time. An unsafe constructor that creates `Pin<&mut T>` promises more than keeping the value still until that particular reference is dropped. The pointee must satisfy the pinning contract for the rest of its relevant lifetime, including after the temporary pinned reference goes away. Returning to an old ordinary mutable reference and moving the value later can break that promise.
+
+This is why casually wrapping an arbitrary local with an unchecked pin constructor is dangerous. A future might store an internal reference during its first poll, and subsequent movement would invalidate it even if the original `Pin<&mut F>` no longer exists. Safe constructors and macros arrange the ownership restrictions that make the long term promise credible.
+
+The promise also includes destruction. Address sensitive code may rely on the value remaining valid at its address until its destructor runs. Reusing storage or deallocating it without following the required destruction behavior can invalidate other components' cleanup assumptions. Pinning is therefore not merely a rule about calling `mem::swap`.
+
+## Structural Projection Is a Design Decision
+
+A pinned struct does not automatically imply that every field is structurally pinned. An implementation must decide which fields carry the address stability promise and expose projections consistent with that decision. A structurally pinned child future needs `Pin<&mut Child>` for polling. An ordinary bookkeeping counter might be exposed as `&mut usize` if moving that field cannot violate the enclosing invariant.
+
+The difficulty is that safe code cannot generally turn `Pin<&mut Parent>` into unrestricted `&mut Parent` when `Parent` is not `Unpin`. Doing so would allow moving all fields, including the ones promised stable. Projection libraries generate carefully audited code for common patterns. Hand written unsafe projection must account for field movement, `Drop`, manual `Unpin` implementations, and every method that can reach the fields.
+
+One simple alternative is to pin children in their own allocations. The parent then contains movable pinned handles, so ordinary mutable access to the parent can be safe when its other fields permit it. The following complete combinator uses that approach and requires its mapping closure to be `Unpin`.
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+struct Map<F, G> {
+    inner: Pin<Box<F>>,
+    map: Option<G>,
+}
+
+impl<F, G> Map<F, G> {
+    fn new(inner: F, map: G) -> Self {
+        Self {
+            inner: Box::pin(inner),
+            map: Some(map),
+        }
+    }
+}
+
+impl<F, G, U> Future for Map<F, G>
+where
+    F: Future,
+    G: FnOnce(F::Output) -> U + Unpin,
+{
+    type Output = U;
+
+    fn poll(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<U> {
+        let this = self.get_mut();
+        match this.inner.as_mut().poll(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(value) => {
+                let map = this.map.take().expect("polled after completion");
+                Poll::Ready(map(value))
+            }
+        }
+    }
+}
+
+fn main() {
+    let future = Map::new(async { 4_u32 }, |value| value * 3);
+    let mut future = Box::pin(future);
+    let mut context = Context::from_waker(std::task::Waker::noop());
+    assert_eq!(future.as_mut().poll(&mut context), Poll::Ready(12));
+}
+```
+
+The child `F` can be non `Unpin`; its `Pin<Box<F>>` handle remains movable while the allocation is stable. The closure is stored in an `Option` so it can be consumed exactly once after readiness. The `Unpin` bound on `G` lets the parent be safely accessed through `get_mut` without an unsafe projection. This trades one allocation for a simpler implementation and a visible bound.
+
+The combinator should not be polled after completion. Its `expect` makes one terminal misuse obvious, but it first polls the completed child, whose own contract may already reject that action. A reusable production adapter can track a terminal flag before touching the child if it promises a specific post completion behavior. The general future contract does not require that extra behavior.
+
+## Drop and Replacement Need Careful Distinctions
+
+Pinning does not forbid destroying the pointee. It requires the destruction protocol to respect the address sensitive state. A pinned value can be dropped in place, after which storage can be reused according to the relevant API. Operations such as replacing a pinned pointee are sound only when they perform the appropriate destruction first and uphold the contract of the pointer type and stored value.
+
+For an intrusive list node, destruction may unlink the node using its stable address. Moving the node before that unlinking would leave neighboring nodes pointing to the old location. A destructor therefore participates in the invariant, not just resource reclamation. Forgetting the node may leak it; freeing or reusing its storage while links remain is a different and potentially unsafe operation.
+
+An enclosing type's destructor must not move out structurally pinned fields. Likewise, a manual `Unpin` implementation must not claim movability when any projected field depends on the parent's pinning. These obligations connect seemingly separate implementation choices. A safe accessor added months later can invalidate an earlier unsafe projection if it exposes a way to replace the pinned field.
+
+This is a good reason to keep the pinning boundary small and document it near the type. List structurally pinned fields, describe the address sensitive state, and explain how destruction ends it. Review changes to field visibility and mutation methods against that list.
+
+## Choosing Where to Pay Complexity
+
+An allocation is sometimes cheaper than an unsafe proof. Boxing a child future can simplify storage, type erasure, and pin projection at once. Avoiding the allocation may matter in a hot path, but it should be justified by measurement and accompanied by a sound projection strategy.
+
+At the API level, accept `Pin<&mut F>` when the caller has already established pinning and the operation genuinely needs it. Accept an owned `F` when the implementation can establish its own storage. Requiring `F: Unpin` can simplify an adapter, but it excludes common compiler generated futures; document the reason instead of treating the bound as harmless decoration.
+
+The central question is always which value's location matters and who guarantees that location through destruction. Once those two facts are explicit, the variety of `Pin<Box<T>>`, `Pin<&mut T>`, `Unpin`, and projections becomes a set of ownership arrangements around one contract.
+
+## Exercises
+
+1. Explain why moving `Pin<Box<F>>` into a vector can be sound even when `F` is not `Unpin`. Identify the move that would be forbidden.
+
+2. A wrapper projects a pinned field as `Pin<&mut Child>`. A safe method uses `mem::replace` to return the old child by value. Why can this break pinning?
+
+3. An adapter can avoid unsafe projection by boxing its child future, but this adds an allocation. Describe the evidence needed before replacing the boxed implementation with a more complex inline one.
+
+## Reasoned Solutions
+
+1. The vector moves the owning pointer handle, while the heap allocation holding `F` remains at its address. Moving `F` out of that allocation before its pinning obligation ends would break the contract. The handle and pointee are different values with different movement consequences.
+
+2. The projection promises structural pinning. Returning the old child by value moves it before destruction. Require `Child: Unpin` to allow that move. To replace a child that needs pinning, use `Pin::set` on the valid projection. It runs the old child's destructor in place before overwriting the storage.
+
+3. Measure allocation frequency and end to end cost under a representative workload. Confirm that allocation is material rather than hidden by I/O or other work. Then audit projection, destruction, `Unpin`, and mutation methods together, and test the resulting abstraction with relevant dynamic tools. A benchmark improvement does not replace the soundness argument.
+
+## Further Reading
+
+- [Pin module](https://doc.rust-lang.org/std/pin/index.html) describes the address stability and destruction contracts.
+- [Pin](https://doc.rust-lang.org/std/pin/struct.Pin.html) documents safe and unsafe constructors and projections.
+- [Unpin](https://doc.rust-lang.org/std/marker/trait.Unpin.html) explains when pinning restrictions can be relaxed.

@@ -1,0 +1,201 @@
+# Chapter 27 Async Traits Publish Future Contracts
+
+A synchronous trait method publishes the types of its arguments and result. An async trait method additionally publishes a family of suspended computations. Those computations can borrow the receiver, retain arguments, depend on a runtime, and have auto traits that determine where they may be scheduled. Designing the trait therefore requires thinking about both the service object and the future returned by each call.
+
+The distinction is easy to miss. A service can be `Send + Sync` while a particular returned future is not `Send`. Conversely, a non shareable owner may produce an owned future that is safe to transfer. Bounds on the receiver and bounds on the operation answer different questions. This chapter makes those questions explicit and compares several stable ways to represent the resulting contracts.
+
+## Native Async Methods and Static Dispatch
+
+An async method in a trait describes an implementation supplied future type. Under static dispatch, the compiler can work with the concrete implementation and its generated future. Callers get ordinary await syntax without every implementation allocating a boxed future.
+
+```rust
+trait Lookup {
+    async fn find(&self, key: &str) -> Option<String>;
+}
+
+struct PrefixLookup {
+    prefix: String,
+}
+
+impl Lookup for PrefixLookup {
+    async fn find(&self, key: &str) -> Option<String> {
+        key.strip_prefix(&self.prefix).map(str::to_owned)
+    }
+}
+
+async fn query<L: Lookup>(lookup: &L) -> Option<String> {
+    lookup.find("item:42").await
+}
+```
+
+This is complete library code. It establishes no runtime dependency because the implementation is immediately ready, though real implementations could await I/O. The trait's async syntax alone does not guarantee that every returned future is sendable to a multithreaded scheduler.
+
+A public trait should decide whether that omission is intentional. Local applications can often let concrete types determine auto traits at call sites. A generic public abstraction may need to promise `Send` so that downstream generic callers can spawn the operation. Adding the promise later can exclude implementations, while omitting it can limit callers. This is an API compatibility decision.
+
+Native async trait methods are not generally callable through a trait object merely because the trait can be named. The vtable needs a uniform calling convention for the erased method, while each implementation's hidden future can have a different representation. An explicit erased return type supplies a common representation when dynamic dispatch is required.
+
+The following complete program is deliberately rejected at the attempt to form a trait object.
+
+```rust,compile_fail
+trait Lookup {
+    async fn find(&self, key: &str) -> Option<String>;
+}
+
+fn use_erased(_lookup: &dyn Lookup) {}
+
+fn main() {}
+```
+
+The limitation concerns dyn compatibility, not whether async methods are useful. Static generic code can still call them. If only a subset of methods needs erasure, splitting the trait can keep the static interface expressive and provide a separate object compatible boundary.
+
+## Promising Send on the Returned Future
+
+A method returning `impl Future + Send` exposes the operation's scheduling property explicitly. The implementation can still use an async block or async function style internally. The trait contract now requires every implementation to produce a sendable future for that method.
+
+```rust
+use std::future::Future;
+
+trait Fetch {
+    fn fetch(&self) -> impl Future<Output = Vec<u8>> + Send;
+}
+
+struct Memory {
+    bytes: Vec<u8>,
+}
+
+impl Fetch for Memory {
+    fn fetch(&self) -> impl Future<Output = Vec<u8>> + Send {
+        async move { self.bytes.clone() }
+    }
+}
+
+fn require_send<T: Send>(_: T) {}
+
+fn main() {
+    let source = Memory { bytes: vec![1, 2, 3] };
+    require_send(source.fetch());
+}
+```
+
+The future captures `&Memory`, so its sendability depends on `Memory` being shareable in the required way. If an implementation retained a shared reference to a `RefCell` across suspension, it would fail this contract. The error would correctly identify a conflict between implementation storage and the trait's promised scheduling model.
+
+`Send` is still not `'static`. The future above borrows `source`; a spawn API requiring an owned `'static` future cannot accept that borrow merely because the future is sendable. One solution moves an owned shared service handle into a task and calls the borrowing method inside the task. Another designs an operation that owns the required input and returns a future independent of a short lived borrow.
+
+Avoid adding `Sync` to every future by habit. Executors commonly need to move a future between worker threads while preserving exclusive polling, which calls for `Send`, not shared concurrent polling through `&Future`. Extra bounds restrict implementations and should correspond to an actual caller requirement.
+
+## Boxing at a Dynamic Boundary
+
+Dynamic dispatch needs a uniform returned type. A pinned boxed trait object is a common representation: the box owns storage of unknown concrete size, `dyn Future` erases the implementation type, and `Pin` supports polling address sensitive futures.
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+
+type Operation<'a, T> =
+    Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+trait Reader: Send + Sync {
+    fn length(&self) -> Operation<'_, usize>;
+}
+
+struct MemoryReader {
+    bytes: Vec<u8>,
+}
+
+impl Reader for MemoryReader {
+    fn length(&self) -> Operation<'_, usize> {
+        Box::pin(async move { self.bytes.len() })
+    }
+}
+
+fn main() {
+    let reader: Box<dyn Reader> = Box::new(MemoryReader {
+        bytes: vec![4, 5, 6],
+    });
+    let mut operation = reader.length();
+    let mut context = Context::from_waker(Waker::noop());
+    assert_eq!(operation.as_mut().poll(&mut context), Poll::Ready(3));
+}
+```
+
+The lifetime on `Operation` says that the erased future may borrow from the receiver. Omitting it and accidentally demanding `'static` would exclude this straightforward implementation. Erasure does not erase lifetime constraints; it packages a concrete value behind a uniform interface while retaining the required bounds.
+
+There can be two dynamic dispatch steps: one to choose the service implementation and another whenever polling the erased future. There is also a heap allocation for the boxed future in this design. These costs may be negligible for network operations and significant for tiny in memory calls. The benefit is a stable representation for heterogeneous implementations and a smaller amount of monomorphized caller code.
+
+Box only where dynamic behavior is needed. A generic internal pipeline can keep concrete future types and erase them at a plugin registry or configuration boundary. Conversely, a system with many implementation combinations may benefit from erasure earlier to control code size and build time. Measure the workload rather than treating static dispatch as a universal quality ranking.
+
+## Associated Future Families
+
+Generic associated types can name a family of future types indexed by the receiver borrow. This makes the relationship explicit and can allow callers to express bounds on the associated future family. Stable implementations must still provide a nameable concrete type; using an unnamed async block as an associated type is not generally solved by simply writing `impl Future` in the associated type definition.
+
+This complete library example uses `Ready`, whose type can be named directly.
+
+```rust
+use std::collections::HashMap;
+use std::future::{self, Future, Ready};
+
+trait Store {
+    type Read<'a>: Future<Output = Option<&'a str>> + 'a
+    where
+        Self: 'a;
+
+    fn read<'a>(&'a self, key: &'a str) -> Self::Read<'a>;
+}
+
+struct MemoryStore {
+    entries: HashMap<String, String>,
+}
+
+impl Store for MemoryStore {
+    type Read<'a> = Ready<Option<&'a str>>;
+
+    fn read<'a>(&'a self, key: &'a str) -> Self::Read<'a> {
+        future::ready(self.entries.get(key).map(String::as_str))
+    }
+}
+```
+
+The returned reference borrows the store, so the store cannot be destroyed while the output is used. The future itself also has a lifetime relationship to the call. This model resembles lending interfaces: each call creates an operation tied to a particular borrow rather than one universal operation type independent of all borrows.
+
+The associated type approach is verbose, but the verbosity can be useful when a library needs callers to reason about the exact future family. For simple application traits, native async methods may be clearer. For heterogeneous registries, boxed futures may be simpler. Choose the representation based on the boundaries that callers actually cross.
+
+## Mutable Receivers Serialize Borrowing
+
+An async method taking `&mut self` retains exclusive access for as long as the returned future requires it. Two concurrent calls on the same owner are therefore not automatically possible. This can be a feature: a protocol connection may permit only one in flight operation because its framing state is sequential.
+
+Changing the receiver to `&self` merely to allow concurrent calls requires an implementation strategy. A mutex can serialize access dynamically. Splitting the connection into independent read and write halves can express genuine independence. An actor can own the connection and schedule requests. A multiplexed protocol can assign stream identifiers and maintain separate operation state. The receiver type should reflect the protocol rather than serve as a workaround for a borrow error.
+
+Borrowed buffers introduce similar choices. Polling a read future to `Poll::Ready` leaves the future in place, where it can still hold its `&mut [u8]` borrow. Drop the underlying future or let it go out of scope to release a retained borrow. An owned buffer operation can return the allocation with the result, which may suit detached tasks or a buffer pool.
+
+A borrowed output can keep the buffer borrowed even after the future is gone. Check how long that result's borrow stays live before modifying the buffer. If callers need to keep several results while continuing reads, return owned records or shared immutable chunks. One mutable buffer cannot hold several versions of the same bytes at once.
+
+## Runtime and Cancellation Are Part of the Interface
+
+The `Future` bound alone does not state which runtime services an implementation requires. A trait intended to be runtime neutral should avoid constructing runtime specific timers or I/O objects behind an undocumented assumption. If a runtime is required, make the requirement clear in construction or documentation.
+
+Cancellation also belongs in the method contract. Does dropping the future leave the service reusable? Can partial bytes remain in an internal buffer? Is an accepted request still processed after the caller stops waiting? A trait that permits several implementations should require a common minimum behavior or expose differences explicitly. Otherwise generic code can accidentally rely on behavior provided only by the in memory test implementation.
+
+Error types should reflect the operation boundary. An error can distinguish rejection before submission from uncertainty after submission. Returning only a generic transport failure may prevent callers from choosing a safe retry policy. Associated error types can preserve implementation specificity, while an application level enum can provide a stable set of recovery categories.
+
+## Exercises
+
+1. A service type is `Send + Sync`, but a generic caller cannot prove that its async method's future is `Send`. Explain why the service bounds do not settle the future bound and propose an explicit trait signature.
+
+2. A boxed future alias omits a lifetime and defaults to a requirement that excludes borrowing the receiver. Explain the resulting design pressure and how to express a borrowing erased operation.
+
+3. A connection method takes `&mut self`, and callers want two simultaneous operations. Give three architectural alternatives and explain why simply changing the receiver to `&self` is incomplete.
+
+## Reasoned Solutions
+
+1. The method can create and retain non sendable locals across suspension even when the service itself is shareable. A signature returning `impl Future<Output = T> + Send` publishes the needed operation guarantee. A boxed `dyn Future + Send` boundary is another option when erasure is also needed. Receiver and operation bounds should be reviewed separately.
+
+2. An unnecessarily static erased future can force cloning or moving data that could safely be borrowed. Use a lifetime indexed alias such as `Pin<Box<dyn Future<Output = T> + Send + 'a>>` and tie `'a` to the receiver borrow. This preserves the lifetime contract while erasing the concrete future representation.
+
+3. Split truly independent resources, serialize commands through an owner, or implement protocol level multiplexing. A lock is another explicit serialization option. Changing the signature alone does not establish how simultaneous operations update framing state, allocate request identifiers, or handle cancellation. The implementation needs a concurrency protocol consistent with the new access surface.
+
+## Further Reading
+
+- [Trait dyn compatibility](https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility) describes which methods can participate in trait objects.
+- [Async functions in traits](https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits/) explains stable syntax and public `Send` design choices.
+- [Associated types](https://doc.rust-lang.org/reference/items/associated-items.html#associated-types) documents generic associated type families.

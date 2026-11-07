@@ -1,0 +1,224 @@
+# Chapter 31 Designing and Auditing Unsafe Abstractions
+
+## Soundness quantifies over safe clients
+
+An unsafe operation is justified by a set of preconditions. A safe abstraction is sound when every client using only its safe interface is prevented from violating those preconditions. This is stronger than saying the current application happens to call it correctly. A public safe method must remain memory safe under surprising inputs, unusual call orders, panics, forgotten values, and every legal implementation of generic parameters it accepts.
+
+The scope of the proof is therefore the whole safe interface. A constructor might establish an invariant that a later mutator accidentally breaks. A destructor might assume the invariant after another method has partially changed it. A derived implementation might expose copying or comparison behavior that does not fit the ownership model. Reviewing isolated unsafe blocks misses these interactions.
+
+Start by writing the representation invariant in ordinary language. State which allocation is owned, which elements are initialized, which pointer is authoritative, what counts as an active borrow, and when destruction is permitted. Then classify every method as establishing, preserving, temporarily changing, or consuming that invariant. A temporary change is acceptable only when no safe observation can exploit an invalid state and every failure path remains sound.
+
+Unsafe is not an effect that contaminates all callers. The purpose of the abstraction is precisely to contain the proof so callers can use a safe contract. An unsafe public method is appropriate when a precondition genuinely cannot be checked or represented internally and must remain the caller's responsibility.
+
+## Begin with the safe implementation
+
+Before introducing raw access, implement the desired behavior with existing safe operations if possible. This supplies a behavioral reference and may already produce optimal machine code. Unsafe code is easier to justify when it removes a concrete limitation rather than expressing a vague expectation that pointer arithmetic must be faster.
+
+For obtaining two distinct mutable elements, safe slice splitting is usually sufficient. An unsafe implementation can nevertheless illustrate the proof boundary clearly: bounds and distinctness checks occur in safe code, and the raw operation relies only on those facts and the input slice contract.
+
+```rust
+fn pair_mut<T>(
+    values: &mut [T],
+    left: usize,
+    right: usize,
+) -> Option<(&mut T, &mut T)> {
+    if left == right || left >= values.len() || right >= values.len() {
+        return None;
+    }
+    let pointer = values.as_mut_ptr();
+    // SAFETY: each index selects an initialized in bounds element.
+    // Distinct indices denote disjoint logical elements. Both borrows
+    // are tied to the exclusive input slice and no other access is used.
+    unsafe {
+        Some((&mut *pointer.add(left), &mut *pointer.add(right)))
+    }
+}
+
+fn main() {
+    let mut values = [10, 20, 30];
+    let (left, right) = pair_mut(&mut values, 2, 0).unwrap();
+    *left += 1;
+    *right += 2;
+    assert_eq!(values, [12, 20, 31]);
+    assert!(pair_mut(&mut values, 1, 1).is_none());
+    assert!(pair_mut(&mut values, 0, 3).is_none());
+}
+```
+
+The safe wrapper cannot rely on a `debug_assert` for either condition. Release builds must enforce every fact required for soundness. A method may use unchecked internals after an unconditional check, or expose an unsafe unchecked variant whose documented preconditions assign those checks to callers.
+
+Zero sized elements deserve explicit consideration. Their addresses may be equal even when their logical indices differ. The proof should be about disjoint elements under the slice model, not a simplistic pointer inequality test. This is one reason using a standard safe splitting operation can reduce proof complexity.
+
+## A concrete owner has a small proof surface
+
+Consider a minimal heap allocated `u64` owner. A production program should normally use `Box<u64>`. Reimplementing this tiny case is useful because it isolates allocation ownership without generic destructors, zero sized values, or unsized metadata.
+
+The invariant is that the stored pointer owns exactly one allocation created with the global allocator for `Layout::new::<u64>()`, the allocation contains one initialized `u64`, and the pointer is not duplicated into another owner. Borrowed access is mediated by the owner's shared or exclusive borrow. Destruction releases the allocation exactly once.
+
+```rust
+use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
+use std::mem::ManuallyDrop;
+use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
+
+struct OwnedWord {
+    pointer: NonNull<u64>,
+}
+
+impl OwnedWord {
+    fn new(value: u64) -> Self {
+        let layout = Layout::new::<u64>();
+        // SAFETY: u64 has a nonzero valid allocation layout.
+        let raw = unsafe { alloc(layout) };
+        let pointer = match NonNull::new(raw.cast::<u64>()) {
+            Some(pointer) => pointer,
+            None => handle_alloc_error(layout),
+        };
+        // SAFETY: allocation has sufficient size and alignment and
+        // is uniquely owned. write initializes its sole value.
+        unsafe { pointer.as_ptr().write(value) };
+        Self { pointer }
+    }
+
+    fn into_inner(self) -> u64 {
+        let owner = ManuallyDrop::new(self);
+        // SAFETY: the invariant supplies one initialized value.
+        let value = unsafe { owner.pointer.as_ptr().read() };
+        // SAFETY: this consumes the sole allocation ownership using
+        // the same allocator and layout that created the block.
+        unsafe {
+            dealloc(owner.pointer.as_ptr().cast(), Layout::new::<u64>());
+        }
+        value
+    }
+}
+
+impl Deref for OwnedWord {
+    type Target = u64;
+
+    fn deref(&self) -> &u64 {
+        // SAFETY: the invariant supplies an initialized live value,
+        // and shared owner access prevents conflicting mutation.
+        unsafe { self.pointer.as_ref() }
+    }
+}
+
+impl DerefMut for OwnedWord {
+    fn deref_mut(&mut self) -> &mut u64 {
+        // SAFETY: exclusive owner access supplies unique access to
+        // its sole initialized value for this borrow.
+        unsafe { self.pointer.as_mut() }
+    }
+}
+
+impl Drop for OwnedWord {
+    fn drop(&mut self) {
+        // SAFETY: this owner still owns the allocation. u64 needs
+        // no destructor, and deallocation uses the original layout.
+        unsafe {
+            dealloc(self.pointer.as_ptr().cast(), Layout::new::<u64>());
+        }
+    }
+}
+
+fn main() {
+    let mut value = OwnedWord::new(40);
+    *value += 2;
+    assert_eq!(*value, 42);
+    assert_eq!(value.into_inner(), 42);
+}
+```
+
+`ManuallyDrop` prevents ordinary owner destruction after `into_inner` manually deallocates the block. Suppression is established before that deallocation. If the owner were allowed to drop normally afterward, it would deallocate the same block twice. The pointer field is private, and the type does not implement `Clone` or `Copy`, preventing safe clients from creating another owning wrapper around it.
+
+This example intentionally omits raw pointer export and adoption. Each additional operation would need a precise ownership transfer contract. `into_raw` would surrender automatic cleanup; `from_raw` would normally be unsafe because the caller must prove unique ownership, allocator compatibility, layout, and initialization. Accepting a pointer from any allocator would not be justified merely because it points to a `u64`.
+
+## Genericizing multiplies obligations
+
+Replacing `u64` with `T` is not a mechanical edit. A generic type may be zero sized, require a destructor, carry borrowed references, have strict validity requirements, or be unavailable across threads. An owner must run the inner destructor before deallocation, including when that destructor panics. It must preserve variance and drop checking relationships even if the runtime representation contains only a raw pointer.
+
+A raw owning pointer type may need a `PhantomData<T>` relationship. That marker is only part of the proof; it does not allocate storage or run destruction. A generic owner also needs to handle allocation layout correctly and avoid issuing forbidden zero sized allocation requests to APIs that require a nonzero size.
+
+Specialization can therefore be a useful design decision. A component owning one fixed foreign resource can expose a small sound wrapper without becoming a universal container. Generality should be introduced when clients need it and when the expanded proof is understood. Reusing `Box`, `Vec`, or a mature arena can preserve broad correctness while leaving custom code focused on the domain protocol.
+
+The same caution applies to deriving traits. Deriving `Clone` on a raw owner would duplicate the pointer instead of duplicating the allocation. A manually written clone could allocate and copy appropriately, but its panic and failure behavior still needs analysis. A derived `Debug` that only prints a pointer may be harmless yet unhelpful; a custom implementation that dereferences storage depends on the representation invariant remaining established.
+
+## Thread safety is a separate proof
+
+Raw pointer fields can prevent automatic `Send` or `Sync` implementations. Adding an unsafe implementation asserts that the type's ownership or shared access contract is valid across threads. The proof must cover the inner value and every method, not merely the reference count or allocation mechanism.
+
+For the concrete `OwnedWord`, moving the sole owner between threads can be justified because no aliasing owner remains and `u64` is transferable. Shared references can support reads across threads because mutation requires an exclusive owner borrow and `u64` is safe for shared access. If such implementations are added, each deserves a documented argument. They should not be copied to a wrapper containing thread affine handles or unsynchronized interior mutable state.
+
+For a generic owner, bounds such as `T: Send` and `T: Sync` often participate in those arguments, but the wrapper's own behavior can impose additional requirements. A destructor may need to run on a specific thread. A foreign library may prohibit sharing handles even when the numeric representation looks harmless. Thread safety follows the resource contract, not the apparent simplicity of its fields.
+
+## Unsafe functions still need explicit operation boundaries
+
+An unsafe function assigns preconditions to its caller. Its body must still make local unsafe operations explicit under a disciplined Rust 2024 style. This separates the caller obligation from the implementation step relying on it and makes audits easier to follow.
+
+```rust
+#![deny(unsafe_op_in_unsafe_fn)]
+
+/// Reads one initialized u32 through a valid shared pointer.
+///
+/// # Safety
+/// pointer must be aligned, live, initialized, and readable for this
+/// operation without conflicting access or a data race.
+unsafe fn read_word(pointer: *const u32) -> u32 {
+    // SAFETY: supplied by this function's caller contract.
+    unsafe { pointer.read() }
+}
+
+fn main() {
+    let word = 123_u32;
+    // SAFETY: a live shared reference supplies all read requirements.
+    assert_eq!(unsafe { read_word(&word) }, 123);
+}
+```
+
+An unsafe block should be small enough that the safety argument identifies the actual operation. A comment attached to a hundred line block often fails to explain which facts hold before and after each pointer change. Conversely, mechanically repeating the word valid next to every operation adds little. State the particular allocation, bounds, initialization, and alias facts supplied at that point.
+
+Safety comments are also maintenance interfaces. If a future edit changes a length update or introduces a callback, the nearby argument should make the invalidated assumption visible. A proof that exists only in the original author's memory is difficult to preserve through routine refactoring.
+
+## Safe callers may violate every nonbinding expectation
+
+If a safe method requires an index to be in bounds for memory safety, it must check that condition or obtain it through a safe type whose invariant guarantees it. Documentation saying callers should provide a valid index does not make a safe unchecked dereference sound. Use an unsafe method when the caller genuinely bears that precondition, or return an error on invalid input.
+
+The same reasoning applies to order requirements. A safe caller can call `finish` twice if the type still makes the method available, drop an iterator early, forget a guard, supply a closure that panics, and implement a trait in any way permitted by its safe contract. If an unsafe implementation assumes more, the trait may need to be unsafe with explicit obligations, or the implementation needs runtime validation.
+
+An unsafe trait should be rare and purposeful. It expresses that implementing the trait incorrectly can let otherwise safe users trigger undefined behavior. It is not a marker for an implementation that happens to contain unsafe code. Many traits can remain safe if consumers validate the relevant properties rather than trusting implementors for memory safety.
+
+## Testing challenges the invariant
+
+Useful tests include empty inputs, maximum boundaries, equal indices, early drops, repeated consumption attempts expressed through compile failures, and element types whose destructors record behavior or panic. Generic structures should include zero sized types and types containing borrowed data. Property tests can compare safe observable behavior with a straightforward model.
+
+Miri can detect many invalid accesses, initialization errors, and aliasing violations along executed paths. Sanitizers can expose other failures in supported builds. Neither replaces the interface proof. A thousand passing inputs do not establish that no safe client can violate a hidden precondition.
+
+When a tool reports a failure, do not merely adjust the operation until the test stops failing. Identify which invariant was false and whether other methods rely on it. A correct repair often changes a constructor, state transition, or public contract rather than one pointer expression.
+
+## Audit the smallest complete boundary
+
+A practical review proceeds from safe entry points to unsafe operations. For each operation, find the facts it needs and trace them backward to checks or established invariants. Then follow state changes forward through success, error, panic, and destruction. Finally challenge the interface with a safe caller that ignores every advisory expectation.
+
+The result should be a concise explanation of why the abstraction is sound, not merely a list of unsafe lines. Keeping the boundary small makes that explanation shorter and more durable. The best unsafe abstraction lets the rest of the program forget raw pointers because all relevant obligations have been captured in one coherent ownership and access policy.
+
+## Exercises
+
+1. Why is a safe method containing an unchecked index access unsound if it only uses `debug_assert` to validate the index?
+
+2. List the new obligations introduced by changing `OwnedWord` into an owner of arbitrary `T`. Explain why adding a phantom field alone is insufficient.
+
+3. A container trusts a safe trait implementation to report the exact number of elements that an iterator will yield, and uses that count for unchecked writes. What must change if a lying implementation can overflow allocated storage?
+
+## Reasoned Solutions
+
+1. Debug assertions can disappear in release builds, while safe callers remain allowed to provide invalid indices. A memory safety precondition needs an unconditional check, a trusted safe type relationship, or an explicitly unsafe caller contract. Testing debug mode does not justify release behavior.
+
+2. Handle zero sized allocation policy, inner destruction and panic paths, borrowed lifetimes, variance, automatic thread safety, layout, and ownership markers. A phantom field records static relationships but does not perform cleanup, validate pointers, or enforce allocation behavior.
+
+3. Either validate or dynamically limit writes independently of the reported count, or use a genuinely unsafe trait with precise obligations and controlled implementations. A safe trait's advisory behavior cannot be trusted as a memory safety proof when arbitrary safe implementors can violate it.
+
+## Further Reading
+
+- [The Rust Reference on unsafety](https://doc.rust-lang.org/reference/unsafety.html) describes unsafe functions, blocks, and traits.
+- [The Rust standard library allocation module](https://doc.rust-lang.org/std/alloc/index.html) documents allocation contracts used by custom owners.
+- [The Rustonomicon](https://doc.rust-lang.org/nomicon/) develops the obligations of safe abstractions implemented with unsafe code.

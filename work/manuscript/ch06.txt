@@ -1,0 +1,239 @@
+# Chapter 6 Resource Acquisition Destruction and Panic Safety
+
+## Destruction is part of control flow
+
+Resource acquisition is initialization associates resource responsibility with a value. When that value is dropped, its implementation releases the resource. Files, heap allocations, lock guards, temporary directories, and subscription handles can all follow this pattern. The key advantage is compositional cleanup: every early return and ordinary unwind path need not repeat a hand written release sequence.
+
+Destruction does not mean garbage collection, nor does it guarantee that a business operation completed. A lock guard releasing a mutex makes the mutex available; it does not automatically repair partially updated application state. A file destructor closes a handle, but cannot return a writeback error to the already departing caller. Distinguish releasing resources from establishing the success of an external effect.
+
+For values implementing `Drop`, the custom destructor runs before the fields are recursively dropped. Struct fields are then dropped in declaration order. Local variables in a scope are normally dropped in reverse declaration order. These are different orderings, and relying on the wrong one can create surprising behavior when fields represent dependent resources.
+
+```rust
+struct Trace(&'static str);
+
+impl Drop for Trace {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+struct Pair {
+    first: Trace,
+    second: Trace,
+}
+
+impl Drop for Pair {
+    fn drop(&mut self) {
+        println!("drop pair");
+    }
+}
+
+fn main() {
+    let earlier = Trace("earlier local");
+    let pair = Pair {
+        first: Trace("first field"),
+        second: Trace("second field"),
+    };
+    let later = Trace("later local");
+    let _ = (&earlier, &pair.first, &pair.second, &later);
+}
+```
+
+The later local is dropped first, then the pair's custom destructor runs, then its first and second fields, and finally the earlier local. The custom destructor should not manually drop ordinary owned fields, because generated field cleanup still follows it. Most structs need no custom destructor at all; their fields already express the resource structure.
+
+## Explicit completion can report failure
+
+`Drop::drop` cannot return a `Result`. If completion can fail in a way the caller must handle, offer an explicit operation such as `finish`, `flush`, `commit`, or `close`. The destructor can provide best effort cleanup or abandonment behavior, while the explicit method represents the success protocol.
+
+```rust
+use std::io::{self, Write};
+
+struct RecordWriter<W: Write> {
+    output: W,
+    records: usize,
+}
+
+impl<W: Write> RecordWriter<W> {
+    fn new(output: W) -> Self {
+        Self { output, records: 0 }
+    }
+
+    fn write_record(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.output.write_all(bytes)?;
+        self.output.write_all(b"\n")?;
+        self.records += 1;
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<(W, usize)> {
+        self.output.flush()?;
+        Ok((self.output, self.records))
+    }
+}
+
+fn main() -> io::Result<()> {
+    let mut writer = RecordWriter::new(Vec::<u8>::new());
+    writer.write_record(b"alpha")?;
+    let (bytes, count) = writer.finish()?;
+    assert_eq!(count, 1);
+    assert_eq!(bytes, b"alpha\n");
+    Ok(())
+}
+```
+
+This type has no custom `Drop`, allowing `finish` to move the output field into its result. On a flush error, the writer is consumed and its output is dropped. If retrying or inspecting the output is a requirement, the error type can return the writer or underlying stream along with the error. Error ownership is a design choice rather than an incidental consequence of using `?`.
+
+Even a successful flush is not a universal durability guarantee. Different writers and operating systems attach different meanings to buffering and synchronization. A storage API should document the level of completion it promises rather than treating destructor execution as evidence of durable persistence.
+
+## Panic safety has multiple levels
+
+Memory safety requires that a panic cannot leave safe code able to cause undefined behavior through an abstraction. Logical validity requires the value to remain in a state its ordinary methods can handle. A stronger operation guarantee preserves the previous logical value when an operation fails or panics. These are distinct obligations.
+
+An operation can be memory safe while leaving a partially updated list. That may be an acceptable documented contract. A transaction editor may instead need all or nothing behavior. The implementation strategy follows the required guarantee, not the presence of a destructor alone.
+
+One effective strong guarantee is to build new state separately, invoking fallible or user supplied behavior before replacing the old state. The old representation remains established until commit.
+
+```rust
+fn rebuild<T, E, F>(values: &mut Vec<T>, mut make: F) -> Result<(), E>
+where
+    F: FnMut(&T) -> Result<T, E>,
+{
+    let mut next = Vec::with_capacity(values.len());
+    for value in values.iter() {
+        next.push(make(value)?);
+    }
+    *values = next;
+    Ok(())
+}
+
+fn main() {
+    let mut values = vec![2, 4, 6];
+    let result = rebuild(&mut values, |value| {
+        if *value == 4 { Err("rejected") } else { Ok(value * 10) }
+    });
+    assert_eq!(result, Err("rejected"));
+    assert_eq!(values, [2, 4, 6]);
+}
+```
+
+The original vector remains in place if `make` returns an error or unwinds before the final assignment. Newly created elements are cleaned up through their temporary vector. This guarantee concerns the vector's owned contents under the operation's ordinary assumptions. A callback can still change external state, mutate interior mutable fields through `&T`, or perform irreversible I/O. Staging a vector is not a transaction over every effect the callback may produce.
+
+The final assignment also drops the old vector's elements. If an element destructor panics, replacement and destruction have their own observable behavior. Strong guarantees must be worded carefully when arbitrary user destructors are involved. Many practical APIs promise preservation until commit, then treat destructor failure as outside ordinary recoverable operation semantics.
+
+## Guards make temporary obligations visible
+
+A guard can restore state if an operation exits before committing. The guard owns the right to perform cleanup and usually borrows the state it protects, preventing unrelated access while the obligation is active.
+
+```rust
+struct AppendTransaction<'a, T> {
+    values: &'a mut Vec<T>,
+    original_len: usize,
+    committed: bool,
+}
+
+impl<'a, T> AppendTransaction<'a, T> {
+    fn new(values: &'a mut Vec<T>) -> Self {
+        let original_len = values.len();
+        Self { values, original_len, committed: false }
+    }
+
+    fn push(&mut self, value: T) {
+        self.values.push(value);
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl<T> Drop for AppendTransaction<'_, T> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.values.truncate(self.original_len);
+        }
+    }
+}
+
+fn main() {
+    let mut values = vec![1, 2];
+    {
+        let mut transaction = AppendTransaction::new(&mut values);
+        transaction.push(3);
+    }
+    assert_eq!(values, [1, 2]);
+    {
+        let mut transaction = AppendTransaction::new(&mut values);
+        transaction.push(4);
+        transaction.commit();
+    }
+    assert_eq!(values, [1, 2, 4]);
+}
+```
+
+The guard can only append through its API, so truncation restores the original prefix. If it offered arbitrary element mutation, the same rollback would no longer restore the original values. The shape of the available operations is part of the proof. A guard is not automatically transactional merely because it has a destructor.
+
+The implementation is memory safe if the guard is forgotten: the vector may retain the appended values, but its representation stays valid. This is necessary because safe code can call `mem::forget`. The logical rollback guarantee applies when the guard is actually dropped; soundness cannot depend on a destructor inevitably running.
+
+Truncation drops appended values. If one of their destructors panics while another panic is already unwinding, the process normally aborts. Destructors used in recovery paths should therefore avoid panicking. A guard can simplify control flow, but it cannot turn arbitrary panic behavior into reliable recovery.
+
+## Destructors are not guaranteed on every exit
+
+Normal scope exit and unwinding run appropriate destructors. Process abort, certain explicit process termination paths, and a panic configured to abort do not provide the same cleanup behavior. Safe code can also deliberately leak a value with `mem::forget`, or create reference counted cycles that keep values alive indefinitely.
+
+Therefore a type must remain sound if its destructor never runs. A leaked allocation is usually a resource leak, not undefined behavior. An API that temporarily gives safe code access to invalid memory and relies on a future destructor to repair the situation is unsound. The caller might forget the repair guard or terminate before it runs.
+
+This principle is particularly important for scoped threads, iterators exposing temporary holes in collections, and synchronization guards implemented with unsafe internals. During every state observable by safe clients, the representation must satisfy the memory safety contract even if no future cleanup occurs. It can leak or become permanently unavailable; it cannot permit invalid access.
+
+Logical resources need a related operational design. If a lock file, remote lease, or database record must eventually be released despite process death, the external system needs timeout, recovery, or ownership transfer rules. Local destruction is a useful fast path, not a complete failure detector.
+
+## Catching a panic does not roll back state
+
+`catch_unwind` can catch unwinding panics within its supported boundary. It does not catch an aborting panic, make undefined behavior recoverable, or undo changes already performed. Its unwind safety bounds are a warning about potentially observable interrupted invariants, not a full transactional proof.
+
+```rust
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+fn main() {
+    let mut values = vec![1];
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        values.push(2);
+        panic!("interrupted after mutation");
+    }));
+    assert!(result.is_err());
+    assert_eq!(values, [1, 2]);
+}
+```
+
+The explicit assertion of unwind safety in this example is justified by the simple known vector operation and the decision to accept partial mutation. It would not be justified merely because the compiler requested it. Before using the wrapper around a complex operation, identify every invariant interrupted execution could expose and explain why later methods remain correct.
+
+Catch boundaries are useful around plugin execution, worker jobs, or test harnesses when the program has a defined policy for abandoning affected state. Often the right recovery is to discard an entire request or rebuild a component rather than continue using a half changed object. The safe language prevents many memory errors, but it does not decide which application state remains trustworthy.
+
+## Make dependency order structural
+
+If one field's destructor needs another resource to remain available, model that dependency directly where possible. A borrowed field naturally constrains the owner relationship, although self referencing structs introduce additional difficulties. Often the simpler design is a small inner owner whose destructor performs the required ordering explicitly, or an explicit `shutdown` method followed by ordinary field cleanup.
+
+Do not rely on the visual order in which local variables happen to be created across distant branches. A future refactor can alter that order without changing any method signatures. Keep interdependent resources together and document why their field order matters when declaration order is part of the contract.
+
+Panic safety becomes tractable when resource ownership, temporary representation states, and commit points are visible. At each user callback, allocation, fallible I/O operation, and destructor, ask what would remain if control never reached the next line. That question finds many bugs that happy path tests miss.
+
+## Exercises
+
+1. A writer destructor attempts to flush and ignores errors. Why might the API still need an explicit consuming `finish` method? What should happen to the writer on a finish error if retry is required?
+
+2. Extend the append guard concept to allow editing existing elements. Explain why remembering only the original length is no longer a sufficient rollback record.
+
+3. An unsafe collection temporarily marks initialized elements as absent and promises a guard destructor will restore them. What must remain true if the guard is deliberately forgotten?
+
+## Reasoned Solutions
+
+1. The caller needs an operation that reports completion failure before relinquishing control. If retry is required, the error should return the writer or preserve it behind a mutable receiver with a documented state. Consuming and dropping the stream on error discards that recovery opportunity.
+
+2. Truncation only removes the appended suffix. It cannot reconstruct overwritten prefix elements. A rollback capable editor must store old values, stage an entire replacement, or restrict edits to reversible operations with a complete log. External effects need their own compensation or transactional system.
+
+3. Safe clients must still be unable to read uninitialized values, drop the same value twice, or violate aliasing. Forgetting may leave a leak or permanently reduce the visible collection, but it cannot make later safe operations cause undefined behavior. Restoration cannot be a prerequisite for soundness.
+
+## Further Reading
+
+- [The Rust Reference on destructors](https://doc.rust-lang.org/reference/destructors.html) specifies drop order, scope behavior, and skipped destruction.
+- [The Rust standard library panic module](https://doc.rust-lang.org/std/panic/index.html) documents catch boundaries and unwind safety.
+- [The Rust standard library mem forget function](https://doc.rust-lang.org/std/mem/fn.forget.html) explains why unsafe code cannot assume destruction.

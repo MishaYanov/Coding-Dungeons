@@ -1,0 +1,192 @@
+# Chapter 29 Layout Alignment Representation and ABI
+
+## A type is more than its visible fields
+
+When Rust code remains within ordinary safe operations, a struct's layout can usually remain an implementation detail. The compiler locates its fields, constructs valid values, and applies the calling convention. Low level interfaces change the question. A foreign function, memory mapped record, device register, or custom allocator may require a precise account of size, alignment, field placement, and which bit patterns represent valid values.
+
+These properties must be considered separately. Two types can have equal size and different alignment. Two types can have equal size and alignment but different field order. Two equally laid out types can have different valid bit patterns or calling conventions. A successful `size_of` assertion proves only the property it actually checks.
+
+The default Rust representation deliberately leaves substantial freedom to the compiler. Field order in memory is not a portable serialization contract. A compiler can choose layouts that reduce padding or support enum optimizations. Observing one layout in a debugger does not convert it into a stable promise for another compiler, target, or instantiation.
+
+The advanced habit is to distinguish a guaranteed property from a measured property. A benchmark may legitimately report the size of a particular build. An unsafe implementation needs guarantees sufficient to justify every access it makes. A file format needs a specification independent of the process that writes it.
+
+## Size and alignment describe different obligations
+
+Size determines the storage occupied by a value, including padding needed for arrays. Alignment constrains the addresses at which values of that type can be accessed through ordinary typed operations. The size of a sized type is a multiple of its alignment, allowing consecutive array elements to remain aligned.
+
+```rust
+use std::mem::{align_of, offset_of, size_of};
+
+#[repr(C)]
+struct Header {
+    kind: u8,
+    length: u32,
+    flags: u16,
+}
+
+fn main() {
+    assert_eq!(offset_of!(Header, kind), 0);
+    assert_eq!(offset_of!(Header, length) % align_of::<u32>(), 0);
+    assert_eq!(offset_of!(Header, flags) % align_of::<u16>(), 0);
+    assert_eq!(size_of::<Header>() % align_of::<Header>(), 0);
+    println!("size {} alignment {}", size_of::<Header>(),
+        align_of::<Header>());
+}
+```
+
+The example checks relationships without pretending every target has the same numeric layout. `repr(C)` follows the target's C layout rules for the represented struct. It does not declare that `u32` has one universal alignment across all platforms or that a foreign compiler was invoked with compatible packing settings.
+
+Padding can occur between fields and at the end of a struct. It is not an extra logical field. Typed moves and assignments need not preserve initialized padding bytes. Reading an entire object representation as a byte slice can therefore encounter uninitialized padding even if every actual field is valid. This is one reason raw struct bytes are a poor general serialization format.
+
+Increasing alignment can improve a particular hardware or vectorization use case, but it can also increase object size and allocation cost. Cache line alignment used to reduce false sharing should be justified by measurements on the relevant architecture. A larger alignment is a representation choice with consequences for arrays and allocators, not a free optimization hint.
+
+## C representation is a boundary contract
+
+`repr(C)` is useful for structs and unions crossing a compatible C boundary, but it does not recursively replace the representation of every nested field. If a C represented struct contains a Rust represented inner struct, the inner layout remains governed by its own declaration. Every field participating in a foreign contract needs an appropriate representation and compatible meaning.
+
+Similarly, `repr(C)` does not turn `String`, `Vec<T>`, or an arbitrary Rust enum into a C language data structure that foreign code can safely manipulate. Their ownership and validity contracts remain Rust specific unless an interface explicitly defines how they are represented and used. Common foreign interfaces instead pass pointers, lengths, capacities when appropriate, and exported functions that preserve allocation ownership.
+
+Layout also does not settle the function calling convention. An `extern "C"` function uses a specified ABI, while an ordinary Rust function uses the Rust ABI. A structure's representation and a function's ABI must both agree with the other side. Transmuting function pointers between incompatible calling conventions is not justified by equal pointer sizes.
+
+Enums require particular care. A primitive representation can fix the representation of a fieldless enum's discriminant, but arbitrary integer values do not thereby become valid variants. A foreign library that may return unknown numeric tags should generally expose an integer at the boundary and validate it before constructing a Rust enum. For data carrying enums, tag and payload representation has additional rules; do not infer them from a small fieldless example.
+
+## Transparent wrappers preserve one representation
+
+A transparent wrapper is useful when a type should retain a field's representation and ABI while giving it a distinct Rust identity. The representation has precise field restrictions; it is not a general instruction to flatten an arbitrary struct.
+
+```rust
+use std::mem::{align_of, size_of};
+use std::num::NonZeroU32;
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct RequestId(NonZeroU32);
+
+impl RequestId {
+    fn new(raw: u32) -> Option<Self> {
+        NonZeroU32::new(raw).map(Self)
+    }
+
+    fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+fn main() {
+    assert_eq!(size_of::<RequestId>(), size_of::<NonZeroU32>());
+    assert_eq!(align_of::<RequestId>(), align_of::<NonZeroU32>());
+    assert_eq!(RequestId::new(9).unwrap().get(), 9);
+    assert!(RequestId::new(0).is_none());
+}
+```
+
+The wrapper's invariant remains that the value is nonzero. Transparent representation does not permit constructing it from zero or bypassing private constructors without proof. It preserves a representation relationship, while the type's semantic contract still restricts valid values.
+
+Niche optimizations use representations that a type cannot otherwise hold to encode another state, such as the absence of certain pointer or nonzero values. Some `Option<T>` layout relationships are explicitly guaranteed by the standard library. Other observed enum sizes are implementation details. Before relying on a niche in unsafe code or an ABI, identify the documented guarantee for that exact type rather than generalizing from `Option<&T>`.
+
+A wrapper intended for public foreign use should document which field determines its representation. Keeping that field private can preserve construction invariants, but clients still need a stable contract for legitimate boundary operations. Type identity and representation compatibility serve different purposes and can coexist.
+
+## Packed fields may not support references
+
+Packing can reduce or remove padding by lowering alignment requirements of a containing representation. The resulting fields may not be aligned for their own types. Ordinary references require suitable alignment, even if the hardware can perform an unaligned load. Creating an unaligned reference is not repaired by immediately converting it to a raw pointer.
+
+```rust
+#[repr(C, packed)]
+struct PackedHeader {
+    kind: u8,
+    length: u32,
+}
+
+fn main() {
+    let header = PackedHeader { kind: 1, length: 0x0102_0304 };
+    let pointer = &raw const header.length;
+    // SAFETY: the field is initialized and readable; alignment is
+    // handled by read_unaligned rather than by a reference.
+    let length = unsafe { pointer.read_unaligned() };
+    assert_eq!(length, 0x0102_0304);
+}
+```
+
+The raw address expression avoids creating a reference to the packed field. `read_unaligned` addresses the alignment issue for the read. It does not waive other obligations such as initialization, valid representation, sufficient live storage, or access compatibility. For a noncopyable type, reading a value out would also introduce ownership and destruction concerns. The example uses a copyable integer to keep those separate.
+
+Formatting a packed field can accidentally create a reference through macro expansion. Copying the field into an ordinary aligned local before formatting can be appropriate for copyable values. When building a reusable packed abstraction, expose methods that perform the correct access rather than asking every caller to remember these details.
+
+Packing is often unnecessary for protocol parsing. A parser can read individual byte ranges and construct ordinary aligned Rust values. That avoids coupling protocol layout to host alignment and permits validation before typed values are created.
+
+## External bytes should be decoded deliberately
+
+A wire record needs explicit endianness, field widths, bounds behavior, and versioning. These decisions exist independently of Rust's in memory representation. A small parser can make them visible without unsafe code.
+
+```rust
+#[derive(Debug, PartialEq)]
+struct WireHeader {
+    kind: u8,
+    length: u32,
+    flags: u16,
+}
+
+fn decode_header(bytes: &[u8]) -> Option<WireHeader> {
+    let bytes = bytes.get(..7)?;
+    let length = u32::from_le_bytes(bytes[1..5].try_into().ok()?);
+    let flags = u16::from_le_bytes(bytes[5..7].try_into().ok()?);
+    Some(WireHeader { kind: bytes[0], length, flags })
+}
+
+fn main() {
+    let header = decode_header(&[2, 4, 0, 0, 0, 1, 0]).unwrap();
+    assert_eq!(header, WireHeader { kind: 2, length: 4, flags: 1 });
+    assert!(decode_header(&[2, 4]).is_none());
+}
+```
+
+The parser does not depend on the size of `WireHeader`. It handles short input before indexing and states little endian interpretation directly. A production parser may also validate the tag, reject reserved flag bits, limit length, and distinguish malformed input from incomplete input. Those checks establish semantic invariants before later code relies on them.
+
+Zero copy parsing can still be worthwhile, but its proof is broader than alignment. The input bytes must form valid values of the target type, contain no unsupported padding assumptions, use the expected byte order, and remain alive without conflicting mutation. A byte order aware view type may be a better interface than pretending network bytes are an ordinary native integer struct.
+
+If the format evolves, explicit decoding provides a natural version boundary. Old fields can receive defaults, unknown tags can remain numeric, and length limits can be enforced before allocation. Direct memory reinterpreting often makes those policy decisions harder to see.
+
+## Dynamically sized values require metadata
+
+A slice has a runtime element count, and a trait object has runtime information needed for erased operations. Pointers to dynamically sized types therefore carry information beyond the data address under the language's model. The exact representation details should not be assumed beyond documented guarantees.
+
+For a slice, the length participates in the validity of access to the complete range. A valid first element pointer plus an arbitrary large length is not a valid slice. The total range must fit the allocation and the API's size restrictions, and an empty slice still has pointer requirements when created as a reference through raw slice constructors.
+
+A trait object's metadata is associated with its concrete erased type. Combining one object's data pointer with unrelated metadata can cause methods or destruction to interpret storage as the wrong type. A vtable is not a stable plugin ABI merely because a debugger displays one. Use a defined foreign interface when independently compiled components need a durable binary contract.
+
+This distinction affects size queries. `size_of::<&[u8]>()` measures the reference. `size_of_val(slice)` measures the elements. Rust 1.99 stabilized `Layout::for_value_raw` for layout queries without making a reference. For a dynamically sized pointee, follow the function's metadata and size safety requirements.
+
+## Zero sized types still have semantics
+
+A type can occupy zero bytes while having meaningful construction, destruction, trait, and ownership behavior. A zero sized token can represent a capability. An array of zero sized elements still has a logical length. Dropping its elements can still matter when the element type has a destructor.
+
+Addresses of zero sized values need not distinguish logical identity. Algorithms that infer uniqueness from pointer inequality can therefore fail for such types. Generic collections must handle element counts and destruction separately from byte counts. Allocator APIs may also impose nonzero size requirements even though a `Layout` for a zero sized type can exist.
+
+These cases explain why a hand written generic allocation wrapper is substantially harder than a wrapper specialized to one ordinary nonzero sized type. Correct generic code needs a coherent policy for zero size, alignment, panic paths, and element ownership. Tests using only `u64` do not exercise those obligations.
+
+## Layout knowledge should remain local
+
+The more code depends on a representation detail, the more difficult it becomes to evolve. Keep unsafe layout dependent operations in a small module, expose validated safe values, and document the specific guarantee each operation uses. A representation test is useful for detecting accidental changes to an intended contract, but cannot create a language guarantee where none exists.
+
+For public protocols, define the bytes. For foreign functions, define both layout and calling convention. For internal performance work, measure a concrete target and avoid turning a temporary optimization into an undocumented external format. These separate decisions let the compiler optimize ordinary Rust values while boundary code remains explicit and reviewable.
+
+## Exercises
+
+1. A team writes a Rust struct directly to disk because its size matches a C struct in one build. Identify four independent properties that still need a specification.
+
+2. Why does `repr(C)` on an outer struct fail to establish a C layout for an inner Rust represented struct? What should an FFI review inspect recursively?
+
+3. A packed record contains a `u32`. Explain why converting `&record.field` to a raw pointer is too late to solve alignment, and how a raw address expression plus an unaligned read differs.
+
+## Reasoned Solutions
+
+1. At least field offsets and padding, integer byte order, valid tags or bit patterns, and format versioning need definition. Target widths and alignment, padding initialization, ownership of embedded pointers, and compatibility across compilers are additional concerns. Equal total size addresses none of these by itself.
+
+2. Representation attributes belong to type declarations. The outer layout places an inner field according to that field's existing size and alignment; it does not redefine the inner field order. Inspect every boundary field's representation, validity, ownership meaning, and ABI suitability.
+
+3. Creating the reference already asserts suitable alignment. A later cast cannot undo that invalid creation. A raw address expression obtains the field pointer without that intermediate reference, and `read_unaligned` performs a read designed for insufficient alignment while retaining the remaining pointer safety requirements.
+
+## Further Reading
+
+- [The Rust Reference on type layout](https://doc.rust-lang.org/reference/type-layout.html) specifies representation guarantees and their scope.
+- [The Rust standard library pointer documentation](https://doc.rust-lang.org/std/ptr/index.html) documents alignment and raw access obligations.
+- [The Rust standard library Option representation section](https://doc.rust-lang.org/std/option/index.html#representation) lists guaranteed option layout relationships.

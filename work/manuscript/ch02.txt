@@ -1,0 +1,229 @@
+# Chapter 2 Moves Places Initialization and Drop Flags
+
+## A move changes what can be used
+
+A Rust move is a semantic event: a value is transferred out of a place, and that place is no longer available as an initialized value until an appropriate reinitialization occurs. Whether generated machine code copies bytes, reuses registers, or eliminates the operation is a separate question. Thinking of every move as a heap transfer or a mandatory memory copy makes both correctness and performance harder to understand.
+
+A place is an expression denoting a storage location, such as a local variable, a field, an indexed element, or a dereferenced pointer. The compiler tracks which places are initialized and which accesses are legal. This tracking can be more precise than treating a struct as one indivisible box. Moving one field may leave other fields available. Moving a complete value prevents access through all its fields until it is restored.
+
+```rust
+struct Job {
+    label: String,
+    data: Vec<u8>,
+}
+
+fn main() {
+    let job = Job {
+        label: String::from("export"),
+        data: vec![1, 2, 3],
+    };
+    let label = job.label;
+    assert_eq!(job.data.len(), 3);
+    assert_eq!(label, "export");
+}
+```
+
+The value of `job.label` moves into `label`. The vector remains initialized and can be inspected. The complete `job` is partially moved, so passing `job` by value would be invalid. At the end of the scope, Rust drops the vector in the original place and drops the string through its new owner. It does not attempt to destroy the same string twice.
+
+This distinction helps explain error messages containing phrases such as partially moved value or use of moved value. The question is which place lost initialization, not whether the source code still contains the variable's name. Names remain in scope even when the places they name cannot currently be used.
+
+## Initialization follows control flow
+
+Rust permits a local variable to be declared before it is initialized, provided every path to a read has established a value. This is a static control flow property. There is no default zero value silently inserted to make the variable exist.
+
+```rust
+fn choose_name(use_cache: bool) -> String {
+    let name;
+    if use_cache {
+        name = String::from("cached");
+    } else {
+        name = String::from("fresh");
+    }
+    name
+}
+
+fn main() {
+    assert_eq!(choose_name(true), "cached");
+    assert_eq!(choose_name(false), "fresh");
+}
+```
+
+The uninitialized period does not contain a valid but unspecified `String`. It contains no initialized `String` at all. Reading it would be rejected. The distinction becomes critical in unsafe code, where manufacturing an invalid `String` and intending to fill it later is already a violation. Safe delayed initialization does not require a value to exist before the assignment.
+
+After a move, reinitialization can make a place usable again. A mutable binding allows assignment; a binding without `mut` can still receive its first initialization, but cannot be assigned a second value after it has already been initialized under the usual assignment rules. Keep first initialization separate from mutation of an established value.
+
+The analysis is conservative at control flow joins. If one branch moves a value and another does not, a later unconditional use cannot assume the value remains initialized. You can often make the intended state explicit with an enum or `Option`, or restructure the branches so that ownership rejoins as a returned value.
+
+## Drop flags are an explanatory model
+
+When initialization depends on runtime control flow, generated cleanup must know which destructors are appropriate. A useful conceptual model associates a flag with a place: initialized values must be cleaned up, and moved out values must not be cleaned up through their old places. The compiler can often resolve this statically and omit any runtime flag. Do not infer a specific memory representation from this model.
+
+Imagine a function that creates two resources, transfers one conditionally, then returns early. Cleanup is determined by which resources still belong to the function on that path. The source need not contain explicit cleanup branches because the compiler elaborates destruction according to ownership and initialization.
+
+```rust
+struct Trace(&'static str);
+
+impl Drop for Trace {
+    fn drop(&mut self) {
+        println!("release {}", self.0);
+    }
+}
+
+fn consume(value: Trace) {
+    println!("consume {}", value.0);
+}
+
+fn run(send_first: bool) {
+    let first = Trace("first");
+    let second = Trace("second");
+    if send_first {
+        consume(first);
+    }
+    println!("still have {}", second.0);
+}
+
+fn main() {
+    run(true);
+    run(false);
+}
+```
+
+When `send_first` is true, `consume` owns and destroys `first`; the caller destroys only `second` at its end. When false, both remain in the caller, and local destruction occurs in reverse declaration order. A compiler implementation might use a flag, duplicate cleanup paths, or optimize the structure differently. The language level obligation is the same.
+
+This model is especially useful when reading generated intermediate representation or debugging panic paths. The fact that a destructor call appears in more than one control flow block does not imply double destruction. Each call may be guarded by different paths or initialization conditions.
+
+## Replacement preserves the destination invariant
+
+Moving a value out through `&mut T` would leave the referent uninitialized while the caller still expects a valid `T`. A plain field move is therefore restricted. `std::mem::replace` solves a different, well defined operation: put a new value in the place and return the old one. `std::mem::take` does the same using `Default`. `Option::take` replaces `Some` with `None`, making absence an explicit valid state.
+
+```rust
+struct Batch {
+    pending: Vec<String>,
+    retries: usize,
+}
+
+impl Batch {
+    fn drain_for_send(&mut self) -> Vec<String> {
+        self.retries += 1;
+        std::mem::take(&mut self.pending)
+    }
+
+    fn restore(&mut self, unsent: Vec<String>) {
+        assert!(self.pending.is_empty());
+        self.pending = unsent;
+    }
+}
+
+fn main() {
+    let mut batch = Batch {
+        pending: vec![String::from("record")],
+        retries: 0,
+    };
+    let outgoing = batch.drain_for_send();
+    assert!(batch.pending.is_empty());
+    batch.restore(outgoing);
+    assert_eq!(batch.pending.len(), 1);
+}
+```
+
+The batch remains structurally valid even if the caller never restores the outgoing vector. Whether an empty pending list is a valid domain state is a separate question. If the protocol requires eventual restoration, ordinary safe ownership does not prove that the caller will perform it. A guard can improve normal control flow behavior, but safe code can leak guards, and abrupt process termination can bypass destructors.
+
+Replacement can also influence failure semantics. Suppose you take a collection out of a field, then invoke user code that panics. The field remains empty during unwinding. If other fields or a custom destructor assume it always contains records, the representation may have become logically inconsistent. A sound safe design must remain memory safe in this state, and a robust domain design should document whether failed operations preserve or discard the original data.
+
+## Moving fields from a type with Drop
+
+A type implementing `Drop` receives a mutable reference to the complete value when its destructor runs. The destructor may inspect its fields. Allowing safe code to move out one field while retaining an obligation to run that destructor would make the destructor observe a partially invalid object. Rust therefore restricts moving fields out of a type that implements `Drop`.
+
+```rust,compile_fail
+struct Envelope {
+    payload: String,
+}
+
+impl Drop for Envelope {
+    fn drop(&mut self) {
+        println!("dropping {} bytes", self.payload.len());
+    }
+}
+
+fn main() {
+    let envelope = Envelope {
+        payload: String::from("data"),
+    };
+    let payload = envelope.payload;
+    println!("{payload}");
+}
+```
+
+The restriction is a design signal. If the type needs an operation that transfers its payload, use a representation where the destructor can tolerate an emptied field, such as `Option<String>`, and take that option. If custom destruction is unnecessary, remove the `Drop` implementation and let fields clean themselves up. Implementing `Drop` merely to drop owned fields is usually redundant and reduces flexibility.
+
+Specialized unsafe implementations sometimes use `ManuallyDrop` and pointer reads to control destruction. That is a different contract, with obligations about double drops, initialization, and panic behavior. It should not be the first response to a safe API design that can express its state with an enum.
+
+## Pattern matching is an ownership operation
+
+Patterns can move, copy, or borrow parts of their input. A pattern is therefore more than a test of shape. In code involving owned strings or collections, ask what each binding receives. Match ergonomics can insert borrowing behavior based on the scrutinee, but the resulting binding modes still determine permissions.
+
+```rust
+enum Event {
+    Data { topic: String, bytes: Vec<u8> },
+    Closed,
+}
+
+fn inspect(event: &Event) -> usize {
+    match event {
+        Event::Data { topic, bytes } => topic.len() + bytes.len(),
+        Event::Closed => 0,
+    }
+}
+
+fn extract(event: Event) -> Option<Vec<u8>> {
+    match event {
+        Event::Data { topic: _, bytes } => Some(bytes),
+        Event::Closed => None,
+    }
+}
+
+fn main() {
+    let event = Event::Data {
+        topic: String::from("updates"),
+        bytes: vec![1, 2],
+    };
+    assert_eq!(inspect(&event), 9);
+    assert_eq!(extract(event), Some(vec![1, 2]));
+}
+```
+
+`inspect` matches a shared reference and obtains borrowed access to its fields. `extract` matches an owned value and transfers the vector out. The ignored topic is destroyed as part of consuming the event. A wildcard does not create an owned local binding in the way a named binding does, so seemingly small pattern changes can affect move and drop behavior.
+
+When a pattern becomes difficult to reason about, write the ownership intention explicitly. Introduce a short borrow, use `as_ref` or `as_mut` on an `Option`, or destructure an owned value at the point where ownership should actually transfer. Clever pattern compactness is a poor trade when it hides a significant resource transition.
+
+## Moves do not promise address stability
+
+Code that stores a pointer to one of its own fields has a relationship with the containing value's address. An ordinary move does not preserve that relationship automatically. Rust's move semantics make no general promise that a value will stay at the same address after being returned from a function, inserted into a collection, swapped, or assigned.
+
+Heap allocation alone is not a complete explanation either. Moving a `Box<T>` moves the box handle while normally leaving its allocation in place, but safe operations may still move the `T` out when the API permits it. Address sensitive values need an API that restricts those operations, such as the pinning contracts discussed later. A raw pointer to an element of a growable vector similarly depends on allocation behavior that the owner must control.
+
+For most application code, avoiding stored self pointers is simpler. Store byte offsets into an owned buffer, indices into an arena, or separate owners and borrowed views. Those representations make moves harmless because their relationships are expressed relative to an owner rather than as assumptions about one temporary address.
+
+The central habit is to track initialization and permissions through each operation. Once you can explain which place is initialized, which owner will destroy it, and whether any pointer depends on its address, many confusing move errors become straightforward consequences of the proposed state transition.
+
+## Exercises
+
+1. A struct contains two `String` fields and has no custom destructor. One field moves into a function. Which remaining operations on the original variable are legal, and what will cleanup destroy?
+
+2. A method takes a vector out of `&mut self` using `mem::take`, then calls a fallible encoder. The encoder returns an error. Propose two distinct error contracts and explain where the old vector belongs in each.
+
+3. Why is a locally declared but not yet initialized `String` different from an unsafe zero initialized `String` that will supposedly be repaired before use?
+
+## Reasoned Solutions
+
+1. The unmoved field can still be accessed or moved independently. The entire struct cannot be passed by value while partially moved. Cleanup destroys initialized fields remaining in the original place; the moved field is destroyed by its new owner. Adding a `Drop` implementation changes the permitted field moves because the destructor expects a complete value.
+
+2. For a retry preserving contract, restore the old vector before returning the error or return it as part of the error result. For a consuming contract, allow the encoder or local owner to destroy it and document that failed encoding consumes the batch. In either case `self` must remain in a valid representation state while empty, including during a panic.
+
+3. Delayed initialization means no `String` value exists in that local place before assignment, and the compiler prevents reads or destruction as a string. Zero initialization attempts to create an actual value with an invalid representation. The later repair does not retroactively make that creation valid. Unsafe initialization must use storage types whose validity rules permit uninitialized bytes.
+
+## Further Reading
+
+- [The Rust Reference on destructors](https://doc.rust-lang.org/reference/destructors.html) specifies cleanup for initialized and partially initialized places.
+- [The Rust Reference on patterns](https://doc.rust-lang.org/reference/patterns.html) specifies binding modes and pattern behavior.
+- [The Rust standard library mem module](https://doc.rust-lang.org/std/mem/index.html) documents replacement and explicit ownership operations.

@@ -1,0 +1,235 @@
+# Chapter 28 Services Need Owners for Work and Failure
+
+A service is a collection of operations that remain meaningful while callers arrive, disappear, retry, and fail. Its hardest bugs often live between individually correct components: an accept loop can keep creating jobs after shutdown begins, a bounded queue can feed unlimited active tasks, or a supervisor can drop the only handles capable of reporting failures. Rust's ownership model helps when the service assigns explicit owners to admission, active work, results, and termination.
+
+Start with four questions. Who may accept new work? Who owns a request after acceptance? Who observes the operation's final outcome? Who waits for every owned activity to stop? The answers should survive cancellation of any one caller. A service with no answer to the last question tends to accumulate detached tasks and uncertain shutdown behavior. A service with several incompatible answers to the first question tends to admit work during transitions that were intended to close it.
+
+The goal is not a universal framework. A small batch program and a long lived network server need different machinery. The transferable idea is that lifecycle transitions must be represented somewhere authoritative, just as data invariants must be represented in an owning type. A boolean named `running` is rarely enough when the service distinguishes accepting, draining, cancelling, failed, and terminated states.
+
+## Admission Is a Linearization Boundary
+
+An admission decision has a moment at which the service accepts responsibility for a request. Before that moment, the caller owns the unaccepted request and may retry elsewhere. After that moment, the service owes a documented outcome for accepted work. Closing admission must coordinate with that same decision so that every concurrent request falls on one defined side of the boundary.
+
+Checking an atomic `closing` flag and then incrementing a separate active counter can leave a race: shutdown sees zero active work and finishes while a caller that already read the old flag proceeds to register. The fields may all be atomic, yet the combined protocol is incomplete. One simple solution protects admission state and active accounting with one mutex. More elaborate atomic designs need an equally explicit proof of the combined transition.
+
+This complete example models admission and draining. A lease accounts for one accepted operation until it is dropped.
+
+```rust
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Phase {
+    Accepting,
+    Draining,
+    Stopped,
+}
+
+struct State {
+    phase: Phase,
+    active: usize,
+    limit: usize,
+}
+
+#[derive(Clone)]
+struct Admission(Arc<Mutex<State>>);
+
+struct Lease(Arc<Mutex<State>>);
+
+impl Admission {
+    fn new(limit: usize) -> Self {
+        Self(Arc::new(Mutex::new(State {
+            phase: Phase::Accepting,
+            active: 0,
+            limit,
+        })))
+    }
+
+    fn try_enter(&self) -> Option<Lease> {
+        let mut state = self.0.lock().unwrap();
+        if state.phase != Phase::Accepting || state.active == state.limit {
+            return None;
+        }
+        state.active += 1;
+        Some(Lease(Arc::clone(&self.0)))
+    }
+
+    fn close(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.phase = if state.active == 0 {
+            Phase::Stopped
+        } else {
+            Phase::Draining
+        };
+    }
+
+    fn snapshot(&self) -> (Phase, usize) {
+        let state = self.0.lock().unwrap();
+        (state.phase, state.active)
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let mut state = self.0.lock().unwrap();
+        state.active -= 1;
+        if state.phase == Phase::Draining && state.active == 0 {
+            state.phase = Phase::Stopped;
+        }
+    }
+}
+
+fn main() {
+    let admission = Admission::new(2);
+    let first = admission.try_enter().unwrap();
+    let second = admission.try_enter().unwrap();
+    assert!(admission.try_enter().is_none());
+    admission.close();
+    assert_eq!(admission.snapshot(), (Phase::Draining, 2));
+    assert!(admission.try_enter().is_none());
+    drop(first);
+    drop(second);
+    assert_eq!(admission.snapshot(), (Phase::Stopped, 0));
+}
+```
+
+The lease is not cloneable. Acceptance increments the count, and dropping the lease decrements it. Forgetting a lease leaves its capacity charged and can prevent draining. A task should retain the lease with the work even if its caller drops the response receiver, so the count tracks work rather than waiting callers.
+
+This model deliberately does not include a wait notification. An asynchronous service would connect the transition to zero with a suitable notification primitive, using a protocol that cannot lose wakeups. It also chooses to propagate mutex poisoning through panic. A production owner needs a defined failure policy for its state. The important invariant is visible: admission phase and active count change under one guard, and stopping cannot race with an unregistered accepted operation.
+
+## Bound Every Stage That Can Retain Work
+
+A request can occupy several different stages: accepted but not queued, queued, active, waiting on a downstream service, waiting to return a result, or retained for retry. Bounding one queue does not bound all of those stages. If consumers dequeue and spawn immediately, the queue may remain nearly empty while active work grows without limit. If each request creates several downstream operations, fanout can multiply the resource demand again.
+
+An admission lease can represent the overall request budget, while narrower permits represent scarce subresources such as database connections or large buffers. Retain each permit for the interval in which the corresponding resource is actually committed. Releasing an admission permit immediately after dequeueing gives a misleading measure if processing continues elsewhere. Likewise, acquiring a scarce connection before waiting in a long queue can waste capacity that active requests need.
+
+Resource bounds can interact through wait cycles. Suppose every request holds one buffer while waiting for a connection, and a connection owner needs another buffer to produce its reply. If the buffer pool is exhausted, the system can deadlock despite every individual pool having a sensible limit. Order acquisitions consistently, avoid holding resources while waiting for unrelated scarce resources when possible, or reserve the complete resource bundle needed for a coherent operation.
+
+Overload policy should preserve useful work. Rejecting at admission is often cheaper than accepting a request that will time out deep in the pipeline. Coalescing updates may be correct for current state notifications but wrong for an audit log. Dropping the oldest job may improve freshness while violating ordering guarantees. State the policy in domain terms so that capacity choices do not silently alter business semantics.
+
+## A Supervisor Owns Observation
+
+Spawning a task transfers execution, but it should not discard accountability. A supervisor retains the capability to observe completion, classify failure, and decide what the rest of the service should do. A child can finish normally with a domain error, panic, or be cancelled by the supervisor. These outcomes deserve separate treatment because they imply different recovery possibilities.
+
+The following library code demonstrates classification for ordinary worker threads. Async task handles use runtime specific error types, but the ownership principle is the same.
+
+```rust
+use std::{any::Any, thread::JoinHandle};
+
+#[derive(Debug)]
+enum WorkerFailure {
+    InvalidInput,
+    DependencyUnavailable,
+}
+
+#[derive(Default, Debug, PartialEq)]
+struct Summary {
+    completed: usize,
+    domain_failures: usize,
+    panics: usize,
+}
+
+fn collect(
+    workers: Vec<JoinHandle<Result<(), WorkerFailure>>>,
+) -> (Summary, Vec<Box<dyn Any + Send>>) {
+    let mut summary = Summary::default();
+    let mut payloads = Vec::new();
+    for worker in workers {
+        match worker.join() {
+            Ok(Ok(())) => summary.completed += 1,
+            Ok(Err(_)) => summary.domain_failures += 1,
+            Err(payload) => payloads.push(payload),
+        }
+    }
+    summary.panics = payloads.len();
+    (summary, payloads)
+}
+```
+
+The caller receives panic payloads after every join. Dropping a payload can itself panic, so the caller chooses how to inspect, retain, or propagate it after collection. Joining in creation order can delay failure observation. A supervisor that needs to react sooner can listen for completion events.
+
+A panic is evidence that an assumed invariant may have failed. Automatically restarting a child can be appropriate for isolated, reconstructible state, but it can also repeat a deterministic bug or duplicate an externally committed operation. Restart policy needs a state recovery story and a retry budget. Backoff alone slows a failure loop; it does not make an operation safe to repeat.
+
+The supervisor also needs its own owner. If a request handler spawns a supervisor and immediately loses its handle, the accountability problem has merely moved one level up. Organize ownership so that a top level lifecycle object can eventually enumerate or await all activities it accepted responsibility for. Detached work should be a deliberate exception with an independent owner, not the default consequence of dropping a handle.
+
+## Shutdown Has Several Distinct Transitions
+
+Graceful shutdown usually begins by closing admission. It then decides what to do with queued work, lets selected active operations finish, and eventually escalates if the deadline expires. Only after observing termination should it release shared infrastructure needed by those operations. Closing a database pool before workers finish using it turns orderly draining into a cascade of avoidable failures.
+
+The word graceful needs a precise promise. It might mean every accepted operation is completed, every active operation reaches a safe checkpoint, or every client receives a final response. These promises can conflict with a finite deadline. A service should define which guarantee survives escalation and which work may remain uncertain. The caller of shutdown should receive enough information to distinguish a complete drain from a forced stop.
+
+Queued work needs an explicit disposition. Draining it preserves accepted work but can make shutdown slow under a large backlog. Cancelling it requires returning or recording a terminal outcome for each accepted request. Persisting it for another process requires a handoff protocol and durable ownership. Simply dropping the queue may release memory safely while violating the service's accepted work contract.
+
+Active work may be cooperative or effectively uninterruptible. A cancellation token can request that a task exit at a checkpoint, while a blocking foreign call may not offer one. A forced abort of the future may release local guards but cannot reverse external effects. The shutdown result should preserve uncertainty about those effects rather than reporting a fictional clean cancellation.
+
+## Deadlines Should Travel With Work
+
+A request that spends most of its budget waiting in a queue should not receive a fresh full timeout at every later layer. Carry one deadline through admission, queueing, dependency calls, and retries. Each stage can compute the remaining budget and refuse to start work that can no longer produce a useful result.
+
+This complete library helper uses a monotonic deadline and makes expiration explicit.
+
+```rust
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Copy)]
+struct Budget {
+    deadline: Instant,
+}
+
+impl Budget {
+    fn from_now(duration: Duration) -> Option<Self> {
+        Instant::now().checked_add(duration)
+            .map(|deadline| Self { deadline })
+    }
+
+    fn remaining(self) -> Option<Duration> {
+        self.deadline.checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+    }
+}
+```
+
+The helper does not stop anything; it supplies policy information. An async runtime's timer may use a related but distinct instant type, so integrate with the runtime's clock consistently, especially in tests that control time. An overflow in deadline construction is represented as failure rather than silently converting an unreasonable duration into a different policy.
+
+Deadline propagation also affects retries. A retry should consume the original budget and the original operation identity when it represents the same logical request. Creating a new deadline and a new identifier on every attempt can turn a bounded request into unbounded background load and defeat deduplication. A retry policy needs both temporal and semantic continuity.
+
+Some work remains valuable after a caller's deadline, such as finishing an already committed record or recording an authoritative outcome. Keep that work under the service's owner even when the response path is gone. Distinguish caller usefulness from consistency obligations. Otherwise a cancellation optimization can leave the system without the record needed to explain what actually happened.
+
+## Failure Domains Should Match State Authority
+
+An isolated worker that owns a temporary scratch buffer can often fail without stopping the service. A state owner that maintains the only in memory copy of an authoritative index may require broader shutdown or reconstruction. Draw failure boundaries around what can be restored independently, not merely around convenient task spawn points.
+
+Shared mutable state expands the failure domain. If several workers can modify one complex structure, a panic in any worker may leave everyone uncertain about that structure's invariant. Immutable snapshots, actor ownership, and transactional updates can narrow the scope of uncertainty. This is a reliability benefit of ownership architecture that does not appear in simple throughput benchmarks.
+
+Failure reporting should preserve the identity of the operation and the component that owned it. A message saying only that a task failed forces operators to reconstruct ownership from timestamps. Record the request identifier, phase, relevant version, and whether an external effect may have occurred. Avoid logging the same failure at every layer without adding information; duplicate records can obscure the authoritative outcome.
+
+Supervision policy should also consider dependencies. If a storage owner fails, continuing to accept dependent requests may only build a backlog of doomed work. Closing or degrading admission can be a better response than letting every request independently discover the same failure. Recovery can reopen admission after the dependency's state is known to be usable, with a new generation identifier if old completions might still arrive.
+
+## A Lifecycle Review Before Implementation
+
+Walk one request through the service and identify the owner at every step. Include rejection, queue cancellation, worker panic, reply receiver disappearance, dependency timeout, and shutdown escalation. At each handoff, ask whether ownership transfer is atomic with the corresponding accounting update. A request that exists in neither owner's accounting can disappear; one counted by both can be processed twice.
+
+Then walk shutdown through the same structure in reverse. Close capabilities that create new work before waiting for the work they created. Keep shared dependencies alive until their users finish. Retain observation handles until outcomes have been collected. If the process must terminate with outstanding uncertainty, report that state explicitly to the shutdown caller or durable log.
+
+This review often produces simpler code than starting with a large framework. A small admission owner, bounded queue, explicit worker set, and documented shutdown phases can cover a substantial service. Additional machinery should answer a concrete lifecycle problem: dynamic children, hierarchical cancellation, deadline scheduling, or restart isolation. Complexity is justified when it preserves an invariant that would otherwise be scattered across unrelated tasks.
+
+## Exercises
+
+1. A service checks `closing == false`, then increments a separate active counter. Shutdown sets `closing = true`, sees zero active work, and releases shared infrastructure. Construct the race and identify the combined transition that needs synchronization.
+
+2. A bounded request queue feeds a loop that spawns one task per dequeued item. Explain why memory and dependency concurrency can still grow, and state where a permit must remain owned.
+
+3. A supervisor requests cancellation of every child and immediately reports a clean shutdown. Identify two facts it has not established and propose a more informative result.
+
+## Reasoned Solutions
+
+1. A caller reads the old open state, pauses, and registers after shutdown's zero check. Admission and registration must form one authoritative transition coordinated with closure. A mutex around phase and count is a simple implementation. An atomic alternative needs a state representation and proof that no accepted operation can appear after stopping was established.
+
+2. Dequeueing removes the queue's bound while spawned tasks continue retaining messages, buffers, and dependency calls. Acquire an active work permit before admitting or starting the operation, according to the desired policy, and keep it with the operation until completion or defined cancellation cleanup. Bound fanout and large payload bytes separately when necessary.
+
+3. A cancellation request does not prove that children stopped, and stopping locally does not prove that external effects were absent. Await or join termination, collect failures, and distinguish a completed drain from deadline escalation. Report outstanding operations or uncertain outcomes when the service cannot establish a stronger conclusion.
+
+## Further Reading
+
+- [Tokio graceful shutdown](https://tokio.rs/tokio/topics/shutdown) discusses detecting shutdown, notifying tasks, and waiting for completion.
+- [Thread JoinHandle](https://doc.rust-lang.org/std/thread/struct.JoinHandle.html#method.join) documents joins. The [panic payload notes](https://doc.rust-lang.org/std/panic/fn.catch_unwind.html#notes) explain the risk when dropping payloads.
+- [Instant](https://doc.rust-lang.org/std/time/struct.Instant.html) documents monotonic time calculations used by deadline budgets.

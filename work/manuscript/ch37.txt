@@ -1,0 +1,223 @@
+# Chapter 37 Designing a Borrowing Parser
+
+A parser is an unusually good test of whether an ownership design matches the problem. The input already contains most of the information that the output needs. Copying every field into a new allocation may be unnecessary, but returning references introduces a relationship between the input buffer and the parsed result. Streaming introduces another relationship: the buffer may need to change while callers still want to retain records. Neither relationship is a syntax problem. Each is an architectural choice about which component controls the storage.
+
+This chapter starts with one configuration line at a time. Split a document into lines before calling the parser. Each line contains an ASCII identifier, an equals sign, and a UTF-8 value. Identifiers use letters, digits, and underscores and begin with a letter or underscore. Both fields must be nonempty after trimming Unicode whitespace.
+
+The objective is to preserve a clear chain of responsibility. The caller owns the input. A successful parse borrows slices from that input. An error owns its diagnostic position and classification, so reporting the error does not require retaining an invalid parse. A later conversion can deliberately allocate when the record must outlive the input.
+
+## Start With the Output Contract
+
+The lifetime on a parsed record describes where its text comes from. It does not make parsing faster by itself. It prevents the record from being used after the backing input becomes unavailable. If the caller passes a slice into a large file buffer, a tiny record can therefore keep that entire buffer logically borrowed. The allocation may be large even though the record has only two references.
+
+An owned diagnostic is useful because failure often crosses more boundaries than success. An application may collect errors from many files, close the files, and render a report later. Offsets and an enum can survive that process. A diagnostic containing a borrowed substring would force the reporting layer to retain the original text or convert the diagnostic first.
+
+The following complete program implements this contract. Offsets are byte positions. The trimming calculation works because the returned slices remain boundaries in the original UTF-8 string. Identifier validation uses bytes because the grammar defines identifiers in ASCII. Value text remains Unicode.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+struct Record<'a> {
+    name: &'a str,
+    value: &'a str,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Kind {
+    MissingEquals,
+    EmptyName,
+    InvalidName,
+    EmptyValue,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParseError {
+    offset: usize,
+    kind: Kind,
+}
+
+fn parse_line(input: &str) -> Result<Record<'_>, ParseError> {
+    let equals = input.find('=').ok_or(ParseError {
+        offset: input.len(),
+        kind: Kind::MissingEquals,
+    })?;
+    let left = &input[..equals];
+    let right = &input[equals + 1..];
+    let name = left.trim();
+    let name_start = left.len() - left.trim_start().len();
+    if name.is_empty() {
+        return Err(ParseError {
+            offset: name_start,
+            kind: Kind::EmptyName,
+        });
+    }
+    for (index, byte) in name.bytes().enumerate() {
+        let valid = byte == b'_'
+            || byte.is_ascii_alphabetic()
+            || (index > 0 && byte.is_ascii_digit());
+        if !valid {
+            return Err(ParseError {
+                offset: name_start + index,
+                kind: Kind::InvalidName,
+            });
+        }
+    }
+    let value = right.trim();
+    if value.is_empty() {
+        return Err(ParseError {
+            offset: equals + 1,
+            kind: Kind::EmptyValue,
+        });
+    }
+    Ok(Record { name, value })
+}
+
+fn main() {
+    let input = String::from("  retry_limit = 12  ");
+    let record = parse_line(&input).unwrap();
+    assert_eq!(record.name, "retry_limit");
+    assert_eq!(record.value, "12");
+    let bad = parse_line("9retries=12").unwrap_err();
+    assert_eq!(bad.offset, 0);
+    assert_eq!(bad.kind, Kind::InvalidName);
+}
+```
+
+There is no allocation on the success path. That statement is a property of this implementation, not a universal property of parsers returning references. A parser can return borrowed slices while allocating temporary stacks, error contexts, or indexes. When performance matters, count those allocations separately from the output representation.
+
+Notice the validation order. A missing equals sign is detected before identifier validation. The same malformed line could violate several rules, so the parser defines a precedence between errors. This precedence becomes observable behavior if callers test exact error kinds or highlight exact positions. Decide whether it is part of the public contract before downstream tools depend on it.
+
+## Explain the Borrow Rather Than Fighting It
+
+Suppose a caller wants to append more data to the input after parsing. If the record will be used afterward, the append conflicts with its borrow. The important fact is that the append may relocate the string allocation. Even an append that happens to fit the current capacity is not an appropriate public explanation for allowing the operation: the API grants mutation of the whole string, and the type system does not encode a capacity-dependent exception for these slices.
+
+The following complete example is intentionally rejected. Its failure is useful. The API has detected an incompatible storage policy before it becomes an intermittent invalid-reference bug.
+
+```rust,compile_fail
+fn main() {
+    let mut input = String::from("mode=fast");
+    let value = input.split_once('=').unwrap().1;
+    input.push_str("\nnext=slow");
+    println!("{value}");
+}
+```
+
+There are several legitimate repairs, and they express different requirements. Finish using the record before mutating the buffer when processing is strictly immediate. Copy selected fields when a small amount of text must survive. Transfer the whole buffer into an owner when many fields will survive together. Store byte ranges instead of references when one object must own the buffer and describe regions inside it. These choices should be made from retention and mutation requirements, not from a wish to silence one diagnostic.
+
+Borrowed output is especially effective in batch processing. Read an immutable document, parse many records, perform analysis, then release all of them together. Streaming processing is different. A decoder usually wants to reuse a mutable buffer indefinitely. Retaining borrowed records across the next read prevents that reuse. If a service needs arbitrary downstream retention, some component must own the retained bytes independently of the reusable input buffer.
+
+## Own the Buffer and Store Ranges
+
+A structure containing both a string and references into that string is difficult to construct and maintain safely. Moving the structure is only one concern. Mutating or replacing the string can invalidate the references even if the outer structure never moves. Pinning alone does not prohibit every operation on an inner string. An ordinary owned buffer with validated ranges avoids this entire family of internal reference relationships.
+
+The next example stores byte ranges. A record view is constructed only when the caller asks for one. Its lifetime is then a conventional borrow of the owning structure. The structure can be moved freely because the stored integers do not point into the old location of anything.
+
+```rust
+use std::ops::Range;
+
+struct StoredRecord {
+    source: String,
+    name: Range<usize>,
+    value: Range<usize>,
+}
+
+impl StoredRecord {
+    fn parse(source: String) -> Result<Self, String> {
+        let Some(eq) = source.find('=') else {
+            return Err(source);
+        };
+        let left = &source[..eq];
+        let right = &source[eq + 1..];
+        let name_start = left.len() - left.trim_start().len();
+        let name_end = left.trim_end().len();
+        let value_start = eq + 1
+            + right.len() - right.trim_start().len();
+        let value_end = eq + 1 + right.trim_end().len();
+        if name_start >= name_end || value_start >= value_end {
+            return Err(source);
+        }
+        Ok(Self {
+            source,
+            name: name_start..name_end,
+            value: value_start..value_end,
+        })
+    }
+
+    fn fields(&self) -> (&str, &str) {
+        (&self.source[self.name.clone()],
+         &self.source[self.value.clone()])
+    }
+}
+
+fn main() {
+    let record = StoredRecord::parse("  theme = dark ".into())
+        .ok().unwrap();
+    let moved = Box::new(record);
+    assert_eq!(moved.fields(), ("theme", "dark"));
+}
+```
+
+This example validates only the structural split and nonempty fields; it deliberately leaves identifier validation to an additional grammar step. That distinction matters when combining examples. A range representation does not automatically inherit every validation rule from an earlier parser. A production constructor should run all required checks before making the value available.
+
+The fields must remain private. A public method that mutates `source` without updating the ranges could make indexing panic or return the wrong region. Safe Rust would still prevent memory unsafety, but the abstraction would stop preserving its semantic promise. Encapsulation is therefore valuable even when no unsafe code exists.
+
+Returning the original `String` on failure is also a policy. It lets the caller recover ownership without a second allocation. A richer API could return a pair containing the original source and a structured error. If the source is large and error reporting is small, the application may instead want to discard the source immediately. Error representation is part of the ownership architecture.
+
+## Streaming Requires a Progress Protocol
+
+A streaming parser must distinguish malformed input from incomplete input. Receiving the bytes `name=` does not establish that the value is empty unless the enclosing protocol says the line has ended. Treating every temporary end of a network buffer as end of input produces errors that depend on packet boundaries.
+
+Model the outcome as complete, incomplete, or invalid. An incomplete result may carry the minimum additional information needed, but it should not promise an exact number of bytes unless the format makes that knowable. For a length-prefixed frame the next required length may be exact; for a delimited UTF-8 line it may not be.
+
+The interface below is an architectural sketch rather than an implementation. It returns a consumed count only on completion. That count gives the buffer owner a clear point at which it can remove or reuse bytes after the returned view is no longer needed.
+
+```text
+enum Decode<T> {
+    Complete { value: T, consumed: usize },
+    Incomplete,
+    Invalid { offset: usize, reason: ErrorKind },
+}
+
+fn decode(input: &[u8]) -> Decode<Frame<'_>>
+```
+
+Do not discard partial input merely because a future waiting for more bytes is cancelled. Buffer ownership and parse progress must live somewhere that survives the cancellation boundary. One approach places the buffer and cursor in the connection object while each read future borrows that object. Another transfers an owned incomplete frame through the state machine. The correct choice depends on whether cancellation means retry, connection closure, or abandoning the message.
+
+UTF-8 decoding adds another boundary. A network chunk may end in the middle of a multibyte code point. If the protocol is textual, validate complete regions and preserve any incomplete suffix. If framing is byte based, finding the complete frame before UTF-8 validation often produces a cleaner separation. Byte offsets remain useful internally; converting them into line and column positions can happen when displaying diagnostics.
+
+## Escapes Change the Allocation Story
+
+Consider extending values to support escape sequences. The input text `hello\nworld` does not contain the newline that the logical value should contain. A borrowed slice cannot represent the decoded result directly. You can always allocate, or use `Cow<'a, str>` so unescaped values borrow while escaped values own their decoded form.
+
+That optimization adds a second mode to the output. Callers should work through `&str` where possible and request ownership only at a real retention boundary. Calling `into_owned` immediately after every parse defeats the allocation saving while retaining the API complexity. Conversely, if almost every field needs decoding and long-term retention, an owned representation can be simpler and just as appropriate.
+
+Avoid pretending that `Cow` makes ownership disappear. It relocates the choice into a value. Its lifetime still matters when it contains the borrowed variant. Storing it in a long-lived application model may require conversion even if only one particular record borrowed. This is a useful application of the lifetime reasoning developed earlier in the book: the type describes all values permitted by the interface, not only the branch observed in one test.
+
+## Verification Follows the Representation
+
+For the borrowing parser, verify that accepted names satisfy the grammar and that the returned text equals the intended regions. For the range representation, verify that every range is ordered, inside the source, and on UTF-8 boundaries. Test whitespace-only sides, multiple equals signs, non-ASCII names, multibyte values, and no delimiter. Define whether the first or last equals sign separates the fields; this chapter uses the first.
+
+A useful property test compares two implementations with different representations: a simple allocating reference parser and the borrowing implementation. Agreement across generated inputs is evidence against a shared boundary mistake, although it does not prove the grammar is correct. A second property can reconstruct an accepted canonical line from the parsed fields and parse it again. That tests normalization behavior, not original-byte preservation, so name the property accordingly.
+
+Performance measurements should include retention. Parsing one million lines without allocation may look excellent until a single retained field forces a gigabyte input buffer to remain alive. Compare peak live memory under the real retention pattern. A selective copy can reduce total memory even though it increases allocation count. The ownership model determines which measurements matter.
+
+## Exercises
+
+1. Extend `parse_line` with a comment rule in which a line whose first nonspace character is `#` produces no record. Design the return type and explain why a valid comment should not be a parse error.
+
+2. Add quoted values with escapes. Identify exactly when the result must allocate and describe how an API using `Cow` changes the lifetime of a record retained beyond the input.
+
+3. Design a decoder that receives a four-byte big-endian length followed by UTF-8 payload bytes. Specify incomplete, invalid, and complete outcomes, including a maximum accepted length and checked arithmetic for total frame size.
+
+## Reasoned Solutions
+
+1. `Result<Option<Record<'a>>, ParseError>` distinguishes accepted absence from malformed input. Check the comment prefix before looking for an equals sign. Keep blank-line policy explicit as well. Callers can filter `None` without treating routine document structure as a failure.
+
+2. Borrow an unquoted or quoted region when its logical value is exactly an input slice. Allocate when decoding changes the bytes. A record containing `Cow<'a, str>` still cannot generally outlive `'a`; convert all retained fields to owned strings, or construct a separate owned record at the storage boundary. Escapes must be validated before accepting the record.
+
+3. Before four bytes arrive, return incomplete. Decode the length without assuming host endianness. Reject values above the protocol limit before reserving memory. Use checked addition for header plus payload and return incomplete until that many bytes exist. Validate only the complete payload as UTF-8. Return the total consumed length while leaving any following frame untouched.
+
+## Further Reading
+
+- [The str type](https://doc.rust-lang.org/std/primitive.str.html) documents UTF-8 boundaries and string slicing operations used by the examples.
+- [Range](https://doc.rust-lang.org/std/ops/struct.Range.html) describes the half-open range representation used for stored fields.
+- [Cow](https://doc.rust-lang.org/std/borrow/enum.Cow.html) documents the borrowed and owned representation used when decoding can change text.

@@ -1,0 +1,226 @@
+# Chapter 11 Generic Bounds Coherence and Implementation Space
+
+## Generic Code Is Checked for Every Permitted Type
+
+The hardest generic errors often arise because a programmer reasons from examples while the compiler reasons from a set. If a function accepts every T satisfying a bound, its body must work for every such T. If two implementations overlap for any permitted instantiation, the compiler cannot select a unique relationship merely because today's application never constructs that instantiation.
+
+This set-based view explains why a broad implementation can block a seemingly reasonable specialized one. It also explains why bounds belong in public API review. A bound narrows the set of accepted programs. An implementation occupies part of the set of trait relationships. Publishing either choice can constrain future extensions across several crates.
+
+Rust calls the requirement for a consistent implementation choice coherence. Coherence is supported by overlap checks and orphan rules. These rules make trait resolution usable in a dependency graph whose crates evolve independently. They are not a statement that one implementation would be impossible to execute; they are restrictions that keep separately compiled reasoning consistent.
+
+When a generic design becomes difficult, draw its sets. Which types may enter? Which implementations apply? Which combinations are intentionally unavailable? This often reveals that the abstraction needs another wrapper type or another trait, rather than another where clause.
+
+## Put Bounds Where Their Operations Are Needed
+
+A generic struct can often store a T without imposing any capability on T. Its methods then introduce bounds independently. This preserves the widest useful representation while making each operation state its own requirements.
+
+```rust
+use std::fmt::Display;
+
+struct Slot<T> {
+    value: Option<T>,
+}
+
+impl<T> Slot<T> {
+    fn empty() -> Self { Self { value: None } }
+
+    fn insert(&mut self, value: T) -> Option<T> {
+        self.value.replace(value)
+    }
+
+    fn take(&mut self) -> Option<T> {
+        self.value.take()
+    }
+}
+
+impl<T: Display> Slot<T> {
+    fn describe(&self) -> String {
+        match &self.value {
+            Some(value) => value.to_string(),
+            None => "empty".into(),
+        }
+    }
+}
+
+fn main() {
+    let mut slot = Slot::empty();
+    slot.insert(42);
+    assert_eq!(slot.describe(), "42");
+    assert_eq!(slot.take(), Some(42));
+}
+```
+
+Placing Display on Slot itself would make even empty storage require displayability. That is an unnecessary restriction. Some bounds do belong on a type declaration, especially when its well-formedness depends on an associated type or when the type's invariant fundamentally requires a capability. The aim is precision, not avoiding bounds mechanically.
+
+Derive macros can also introduce bounds broader than a hand-written implementation needs. A wrapper containing Arc<T> can clone the Arc without cloning T, yet a derived implementation on a generic shape may impose a T: Clone requirement depending on the derive and fields. Inspect the generated obligations when a bound seems surprising. A short manual implementation can be more accurate than adding an unrelated trait bound to callers.
+
+## Overlap Is About Possible Instantiations
+
+Consider a trait with a fallback for every displayable type. A separate implementation for String is redundant because String already satisfies Display. The compiler rejects the overlap even if the method bodies happen to agree.
+
+```rust,compile_fail
+use std::fmt::Display;
+
+trait Label {
+    fn label(&self) -> String;
+}
+
+impl<T: Display> Label for T {
+    fn label(&self) -> String { self.to_string() }
+}
+
+impl Label for String {
+    fn label(&self) -> String { self.clone() }
+}
+```
+
+Stable Rust does not offer a general-purpose mechanism for overriding this blanket implementation with a more specific one. Designing an API around an anticipated specialization feature makes the current public contract difficult to implement. Instead, make the policy a type parameter, provide an explicit wrapper, or separate the fallback into a method that callers choose.
+
+A common mistaken repair is to add another marker trait that String does not currently implement. The overlap question can still involve what upstream crates are allowed to implement later. The compiler must preserve consistency under legal evolution, not merely inspect a snapshot of today's impl blocks. Locality and trait ownership influence which future implementations are possible.
+
+This is why coherence errors sometimes mention upstream crates. The compiler is explaining that an apparent absence is not a stable negative fact. A trait bound says that an implementation exists. Ordinary stable bounds generally do not let a library claim that some arbitrary foreign type will never implement a foreign trait.
+
+## A Newtype Creates a New Implementation Identity
+
+A wrapper is more than syntactic ceremony. It creates a local type whose trait implementations can express a policy that should not apply globally to the underlying representation. It also gives documentation a place to explain the policy.
+
+```rust
+use std::fmt::{self, Display};
+
+struct Redacted<T>(T);
+
+impl<T> Display for Redacted<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
+struct CommaSeparated<'a>(&'a [u32]);
+
+impl Display for CommaSeparated<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, value) in self.0.iter().enumerate() {
+            if index != 0 {
+                f.write_str(",")?;
+            }
+            write!(f, "{value}")?;
+        }
+        Ok(())
+    }
+}
+
+fn main() {
+    let secret = Redacted("access token");
+    assert_eq!(secret.to_string(), "[redacted]");
+    assert_eq!(CommaSeparated(&[2, 3, 5]).to_string(), "2,3,5");
+}
+```
+
+The wrapper does not require allocating or copying the underlying data. CommaSeparated stores a borrow. Its formatting policy is explicit at the use site and cannot conflict with another library's preferred display of slices. Redacted similarly chooses one presentation policy without changing String or every value of T.
+
+Avoid implementing Deref automatically for every newtype. Deref makes the wrapper participate in method resolution and exposes much of the underlying API. That may be appropriate for a smart pointer, but it can undermine a policy wrapper whose purpose is to restrict operations. A validated identifier wrapper should not casually expose mutable string operations that can violate its invariant.
+
+## The Orphan Rules Establish Who Can Add Relationships
+
+At a high level, a crate can implement its own trait for types, or implement a foreign trait when a sufficiently local type appears in the implementation relationship. The detailed rule also tracks uncovered generic parameters before the first local type, with special treatment for fundamental types. The simple slogan about owning either the trait or type is useful, but it is not the complete rule for generic trait parameters.
+
+The practical consequence is that a crate cannot generally implement Display directly for Vec<u32>. Both the trait and the type constructor are foreign. A local element type inside a foreign container does not automatically make every such implementation local. A newtype around the container establishes a clear local identity.
+
+```rust,compile_fail
+use std::fmt::{self, Display};
+
+impl Display for Vec<u32> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} values", self.len())
+    }
+}
+```
+
+Imagine if two application dependencies could both add that implementation. The final program would receive incompatible global formatting definitions merely by depending on both crates. Orphan rules prevent that conflict at the implementation site rather than leaving it for arbitrary downstream consumers to resolve.
+
+Trait ownership is therefore an extension mechanism. If you own a trait, you can decide which foreign types implement your capability, subject to overlap rules. If you own a type, you can integrate it with many foreign traits. If you own neither, an adapter type is often the appropriate integration point.
+
+## Blanket Implementations Spend Future Design Space
+
+A blanket implementation such as impl<T: Display> Label for T is convenient because many types gain the capability automatically. It also occupies every matching relationship. Downstream crates cannot give their displayable local types a different Label implementation without overlap. A library should treat this as a substantial policy decision.
+
+Extension traits commonly use blanket implementations safely because the provided methods are derived conveniences with one obvious meaning. For example, a trait can add a helper to every iterator satisfying particular bounds. A domain trait whose behavior varies by application is more likely to suffer from a universal fallback.
+
+Before publishing a blanket implementation, ask whether a user could reasonably want a different implementation for a type covered by it. If the answer is yes, consider an explicit adapter. An adapter moves the policy choice into the type and leaves the original implementation space available. Another option is to split a broad trait into a minimal capability and a derived convenience trait.
+
+Negative reasoning is especially dangerous in public designs. The fact that a type lacks Display today does not necessarily create an isolated region for a special implementation tomorrow. Favor positive, locally controlled distinctions: a wrapper type, an enum, a policy parameter, or a private marker implemented only by the library.
+
+## A Policy Parameter Can Replace Specialization
+
+Here is a complete design where callers choose formatting policy explicitly. There is no overlap because the policy is part of the trait relationship.
+
+```rust
+struct Compact;
+struct Verbose;
+
+trait Render<Policy> {
+    fn render(&self) -> String;
+}
+
+struct Task {
+    id: u64,
+    title: String,
+}
+
+impl Render<Compact> for Task {
+    fn render(&self) -> String {
+        self.id.to_string()
+    }
+}
+
+impl Render<Verbose> for Task {
+    fn render(&self) -> String {
+        format!("task {} {}", self.id, self.title)
+    }
+}
+
+fn render<T, P>(value: &T) -> String
+where
+    T: Render<P>,
+{
+    <T as Render<P>>::render(value)
+}
+
+fn main() {
+    let task = Task { id: 7, title: "rebuild index".into() };
+    assert_eq!(render::<_, Compact>(&task), "7");
+    assert_eq!(render::<_, Verbose>(&task), "task 7 rebuild index");
+}
+```
+
+The policy types carry no runtime data here. They distinguish compile-time relationships. The verbose implementation is not more specific than the compact implementation; it is a different relationship. This clarity is often preferable to hidden specialization because callers can see which behavior they requested.
+
+There is a cost. Generic signatures acquire another parameter, type inference may need help, and too many policy axes can make an API cumbersome. If policies are selected at runtime, an enum or a policy object is more suitable. Type-level policy should correspond to a useful compile-time distinction, not merely relocate every configuration flag into angle brackets.
+
+## Generic Boundaries Affect Compilation Architecture
+
+Large generic functions expose their bodies to downstream instantiation and can increase compile work for every concrete combination. One useful pattern is a small generic entry point that normalizes input and delegates to a nongeneric core. For example, a function accepting AsRef<Path> can immediately obtain &Path and call a substantial internal implementation that accepts that one representation.
+
+This pattern is not a requirement to erase all types. It separates flexible input ergonomics from a large algorithm that gains no benefit from multiple instantiations. Measure before restructuring performance-sensitive code, but recognize that genericity has a maintenance and compilation dimension as well as a runtime dimension.
+
+Bounds also reveal accidental coupling. If a storage abstraction needs Serialize, Debug, Send, Sync, Clone, Default, and a database trait on every T, examine which operations require each fact. Several independent capabilities may have been fused into one component. Splitting those operations can reduce both conceptual and compiler complexity while making tests easier to construct.
+
+## Exercises and Reasoned Solutions
+
+Exercise 1. A crate publishes impl<T: Display> AuditName for T. A downstream crate wants a custom AuditName for its own displayable User type. Why is local ownership insufficient?
+
+Solution. The existing blanket implementation already applies to User. Local ownership allows an implementation under the orphan rules but does not exempt it from overlap checks. The upstream crate has occupied that relationship. A wrapper around User or a policy parameter can create a distinct relationship.
+
+Exercise 2. A struct stores a Vec<T>, and only one method sorts it. Where should T: Ord appear?
+
+Solution. Put Ord on the sorting method or its impl block unless the type's invariant requires permanent ordering and construction itself depends on Ord. Mere storage, removal, and iteration do not require ordering. A narrow bound allows the same representation to serve more types.
+
+Exercise 3. A library wants every displayable value to gain a convenience method to_string_with_prefix, but users may want domain-specific labels. Should one trait serve both purposes?
+
+Solution. Separate them. An extension trait with a blanket implementation can provide the mechanically derived formatting helper. A domain Label trait should leave room for meaningful implementations or use explicit wrappers. Keeping the capabilities distinct prevents a convenience implementation from consuming domain policy space.
+
+## Further Reading
+
+- [Rust Reference on implementations](https://doc.rust-lang.org/reference/items/implementations.html) defines overlap, orphan rules, and covered parameters.
+- [Rust Reference on trait bounds](https://doc.rust-lang.org/reference/trait-bounds.html) explains where generic obligations may be declared.
+- [Cargo SemVer compatibility](https://doc.rust-lang.org/cargo/reference/semver.html) discusses compatibility consequences of public bounds and implementations.

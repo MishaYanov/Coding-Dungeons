@@ -1,0 +1,259 @@
+# Chapter 35 Performance Is a Measured Property of a Design
+
+Rust gives a programmer unusually direct control over ownership, allocation, representation, and dispatch. That control can remove unnecessary work, but it does not make every Rust program fast or every low level implementation better. Performance belongs to a workload running in an environment. A claim such as faster needs an operation, an input distribution, a build configuration, and a measurement boundary before it becomes useful engineering information.
+
+The strongest optimizations often change a design constraint. Borrowing a view can remove a copy when the consumer does not need ownership. Batching can reduce synchronization when immediate delivery is unnecessary. Immutable snapshots can shorten read lock duration when readers accept versioned state. These improvements arise from understanding what the application requires. Rewriting an iterator as a loop is much less likely to matter if both compile to similar machine code and allocation dominates the request.
+
+This chapter develops a measurement process that connects observed cost to ownership decisions. It treats benchmarks as experiments with failure modes, examines allocation and layout through concrete examples, and explains when compiler configuration or dispatch choices deserve attention. No timing result is asserted for the examples: their purpose is to make hypotheses testable on the reader's actual target.
+
+## Define the Question Before the Timer
+
+A throughput benchmark asks how much work completes per unit time under a specified load. A latency benchmark asks how long individual operations take, often with attention to the tail of the distribution. A memory benchmark may care about peak retained bytes rather than total allocations. An optimization can improve one metric while worsening another. Batching often raises throughput and increases waiting time; caching can reduce CPU work while retaining more memory.
+
+Choose a boundary that matches the decision. If considering a parser implementation, isolate parsing enough to understand its cost, then validate the effect in an end to end path. If considering a service admission policy, a tiny parser microbenchmark cannot reveal queueing or overload behavior. Measure both the component and the product behavior when the connection between them is uncertain.
+
+Input distribution matters as much as size. A branch predictor can perform well on uniform data and poorly on a mixed production distribution. A hash table with short repeated keys behaves differently from one with long unique keys. A parser receiving mostly valid records may take a different path from one defending against malformed input. Use representative distributions and include adversarial boundaries that the service must handle acceptably.
+
+State what remains outside the experiment. A warm in memory benchmark excludes cold filesystem behavior. A single threaded loop excludes contention. A steady state run excludes startup and code loading. These limitations are not flaws if they match the question, but they must not disappear when reporting the result. A narrow experiment supports a narrow conclusion.
+
+## Build Configuration Changes the Program
+
+Debug builds prioritize a different development experience from optimized builds. Bounds check elimination, inlining, constant propagation, and other transformations can change the relative costs of two implementations. Benchmark the configuration that will actually ship, including relevant target settings and feature flags. Running an unoptimized binary and extrapolating its ratios to a release build is unreliable.
+
+Cargo profiles expose settings such as optimization level, link time optimization, code generation units, debug information, and panic behavior. Changing several at once makes it difficult to explain an observed difference. Keep a baseline, change one hypothesis at a time, and record the toolchain and target. A configuration that improves one binary can worsen build time, code size, or another workload.
+
+Useful inspection commands include the following shell commands, shown as a workflow rather than an executable Rust listing.
+
+```text
+cargo build --release
+cargo test --release
+cargo rustc --release -- --emit=asm
+```
+
+Select the intended package and target explicitly in a workspace. Emitted assembly can explain whether a proposed abstraction difference survives optimization, but reading assembly is not a substitute for workload measurement. A shorter instruction sequence can still be slower because of dependencies, cache behavior, or branch prediction. Inspection is evidence for a causal explanation, not a standalone score.
+
+Target specific CPU features can improve one deployment and reduce portability. Do not benchmark with a local machine specific target setting and silently ship the same binary to machines that lack the required features. Performance configuration belongs in the deployment contract just as ABI and feature requirements do.
+
+## A Small Comparative Harness
+
+Timing one invocation is usually too noisy for a tiny operation. Repeating a workload amortizes timer overhead, but repetition can also create unrealistically warm caches or allow the compiler to simplify known input. `black_box` is a best effort tool for discouraging certain optimizations; it is not a semantic barrier on which correctness or security may rely.
+
+The following complete harness compares equivalent iterator and loop implementations. It checks semantic agreement before timing, alternates measurement order, and reports medians across several samples.
+
+```rust
+use std::hint::black_box;
+use std::time::{Duration, Instant};
+
+fn iterator_sum(values: &[u64]) -> u64 {
+    values.iter().copied()
+        .filter(|value| value & 1 == 0)
+        .fold(0, u64::wrapping_add)
+}
+
+fn loop_sum(values: &[u64]) -> u64 {
+    let mut sum = 0_u64;
+    for &value in values {
+        if value & 1 == 0 {
+            sum = sum.wrapping_add(value);
+        }
+    }
+    sum
+}
+
+fn measure(operation: fn(&[u64]) -> u64, input: &[u64]) -> Duration {
+    let start = Instant::now();
+    let mut result = 0_u64;
+    for _ in 0..64 {
+        result ^= operation(black_box(input));
+        black_box(result);
+    }
+    start.elapsed()
+}
+
+fn median(mut samples: Vec<Duration>) -> Duration {
+    samples.sort();
+    samples[samples.len() / 2]
+}
+
+fn main() {
+    let input: Vec<u64> = (0..2_000).collect();
+    assert_eq!(iterator_sum(&input), loop_sum(&input));
+    for _ in 0..4 {
+        black_box(iterator_sum(black_box(&input)));
+        black_box(loop_sum(black_box(&input)));
+    }
+    let mut iterator = Vec::new();
+    let mut explicit = Vec::new();
+    for round in 0..11 {
+        if round & 1 == 0 {
+            iterator.push(measure(iterator_sum, &input));
+            explicit.push(measure(loop_sum, &input));
+        } else {
+            explicit.push(measure(loop_sum, &input));
+            iterator.push(measure(iterator_sum, &input));
+        }
+    }
+    println!("iterator median {:?}", median(iterator));
+    println!("loop median {:?}", median(explicit));
+}
+```
+
+This harness is intentionally modest. It does not calculate confidence intervals, control CPU frequency, isolate competing processes, or model multiple input distributions. Repeating it can still reveal whether a claimed large difference exists at all. For close results, use a more rigorous benchmarking setup and inspect variation rather than treating the smaller printed number as a durable winner.
+
+Alternating order reduces one simple bias from warming or environmental drift. It does not eliminate all bias. The function pointer measurement boundary can also affect inlining relative to a real caller. If the production call is statically dispatched and inlined, a benchmark through a function pointer may test a different optimization context. The experiment must eventually reproduce the relevant call shape.
+
+## Allocation Is Both Work and Lifetime
+
+An allocation has an immediate cost, but retained ownership can matter more than allocation frequency. A small view stored inside an `Arc` backed object may keep a large buffer alive. Reusing a buffer can reduce allocator traffic while preserving a large peak capacity indefinitely. Counting allocations without measuring retained bytes can therefore reward a design that increases steady state memory.
+
+Trace ownership through the hot path. Does each layer clone a `String` because it needs ownership, or because the API requires it unnecessarily? Can a parser return borrowed fields while the input remains valid? Would an owned compact result let the input buffer be released earlier? Borrowing avoids copies but can extend the owner's lifetime; ownership can cost a copy while reducing long term retention. The right choice follows the lifecycle of the data.
+
+Serialization often exposes a simple reuse opportunity. The following library function writes records into a caller owned string, retaining its capacity for later calls.
+
+```rust
+use std::fmt::Write;
+
+struct Record<'a> {
+    id: u64,
+    name: &'a str,
+}
+
+fn render(records: &[Record<'_>], output: &mut String) {
+    output.clear();
+    for record in records {
+        writeln!(output, "{}\t{}", record.id, record.name)
+            .expect("writing to String cannot fail");
+    }
+}
+
+fn main() {
+    let records = [
+        Record { id: 1, name: "alpha" },
+        Record { id: 2, name: "beta" },
+    ];
+    let mut output = String::new();
+    render(&records, &mut output);
+    assert_eq!(output, "1\talpha\n2\tbeta\n");
+    let capacity = output.capacity();
+    render(&records, &mut output);
+    assert_eq!(output.capacity(), capacity);
+}
+```
+
+The API communicates reuse directly through `&mut String`. It also makes the caller responsible for deciding when retained capacity should be reduced or the buffer dropped. If one exceptional response grows the buffer to hundreds of megabytes, reusing it forever may be undesirable. A size based retention policy can preserve ordinary reuse while releasing exceptional capacity.
+
+Preallocation should follow a credible estimate. Reserving a maximum possible size for every small request can waste memory and increase pressure on caches or the allocator. Repeated growth may be acceptable if inputs are small or unpredictable. Measure the distribution and total memory budget rather than assuming that one reserve call is always an improvement.
+
+## Data Layout Determines What Traversal Touches
+
+Cache behavior depends on which bytes a loop needs and how those bytes are arranged. An array of large records can force a scan over widely separated hot fields even when the loop ignores most payload data. Separating frequently scanned metadata from cold payloads can improve locality. The transformation changes representation and may complicate updates, so it should serve a measured access pattern.
+
+The following library code shows two representations of the same conceptual records.
+
+```rust
+struct Row {
+    score: u64,
+    payload: [u8; 128],
+}
+
+struct Columns {
+    scores: Vec<u64>,
+    payloads: Vec<[u8; 128]>,
+}
+
+fn sum_rows(rows: &[Row]) -> u64 {
+    rows.iter().fold(0, |sum, row| sum.wrapping_add(row.score))
+}
+
+fn sum_columns(columns: &Columns) -> u64 {
+    columns.scores.iter().copied().fold(0, u64::wrapping_add)
+}
+
+fn split_rows(rows: Vec<Row>) -> Columns {
+    let mut scores = Vec::with_capacity(rows.len());
+    let mut payloads = Vec::with_capacity(rows.len());
+    for row in rows {
+        scores.push(row.score);
+        payloads.push(row.payload);
+    }
+    Columns { scores, payloads }
+}
+```
+
+The column representation makes score scans contiguous, but now every insertion and removal must preserve equal lengths and matching indices. An owning type should enforce that invariant rather than exposing both vectors for arbitrary mutation. If most operations need the score and payload together, the original row representation may be better. Layout optimization is a choice about access patterns, not a universal preference for one arrangement.
+
+False sharing is another layout effect. Independent counters updated by different threads can contend when they occupy one cache line. Padding or sharding may help, but the relevant cache line behavior is target dependent and padding increases memory use. More importantly, sharing one global counter may be unnecessary if the application can combine per worker counts periodically. Removing an unnecessary synchronization requirement is often more effective than tuning its placement.
+
+## Dispatch Trades Runtime Work for Code Shape
+
+Static dispatch can let the compiler specialize and inline operations for concrete types. It can also create many versions of a generic function, increasing code size and build work. Dynamic dispatch introduces an indirect call and may limit inlining, but it can reduce duplication and place a stable boundary around heterogeneous behavior. The effect depends on the operation's size and the surrounding optimization opportunities.
+
+This complete library example isolates the two call shapes without claiming one will dominate every workload.
+
+```rust
+trait Transform {
+    fn apply(&self, value: u64) -> u64;
+}
+
+struct Multiply(u64);
+
+impl Transform for Multiply {
+    fn apply(&self, value: u64) -> u64 {
+        value.wrapping_mul(self.0)
+    }
+}
+
+fn sum_static<T: Transform>(transform: &T, values: &[u64]) -> u64 {
+    values.iter().fold(0_u64, |sum, &value| {
+        sum.wrapping_add(transform.apply(value))
+    })
+}
+
+fn sum_dynamic(transform: &dyn Transform, values: &[u64]) -> u64 {
+    values.iter().fold(0_u64, |sum, &value| {
+        sum.wrapping_add(transform.apply(value))
+    })
+}
+```
+
+The transform is tiny, so call overhead and optimization visibility may be material. If `apply` instead performs a network operation, the indirect call is unlikely to dominate end to end latency. If the compiler can see the concrete dynamic value at the call site, it may optimize more than the source spelling suggests. Inspect the actual build rather than assuming that `dyn` guarantees a particular instruction sequence.
+
+Avoid forcing inlining everywhere. An inline annotation can influence optimization, but excessive duplication can hurt instruction cache behavior and binary size. Large generic stacks can produce similar effects. A useful boundary is often to keep the hot inner loop concrete while erasing implementation types at a coarser service boundary. That is an architectural hypothesis to test, not a style rule.
+
+## Profiles Should Explain the Bottleneck
+
+A CPU profile attributes sampled execution to code paths, but a slow service can spend most of its time waiting rather than consuming CPU. Wall clock tracing, lock contention measurements, queue depth, and dependency latency may be needed to explain the full path. A flat CPU profile can make a small local function look important simply because all the expensive waiting is absent from the sample.
+
+Separate self time from inclusive time. A wrapper can appear expensive because it calls the actual bottleneck. Likewise, allocation cost may be spread across many call sites while one ownership choice causes all of them. Use the profile to form a causal hypothesis: repeated cloning of a request buffer, a contended lock around a tiny critical section, or a scan over cold fields. Then change the design and predict which measurements should move.
+
+The maximum possible benefit is constrained by the fraction of total cost affected. If parsing accounts for one tenth of request time, making parsing twice as fast improves total time by much less than twofold. This simple accounting prevents spending days on a visually interesting hot loop while a serialized dependency dominates the product metric. Recompute the bottleneck after a substantial change because the limiting component may shift.
+
+## Correctness Must Survive the Optimization
+
+A benchmark only compares implementations usefully when they implement the required semantics. A handwritten parser that skips validation may be faster because it accepts a different language. A cache that omits invalidation may be faster because it returns stale data outside the contract. A lock free structure with an invalid reclamation scheme may appear fast until undefined behavior changes the experiment entirely.
+
+Preserve an executable reference model where feasible. Compare optimized output against a simple implementation across representative and boundary inputs. Keep overflow, Unicode, error handling, and cancellation behavior in the contract. If the optimization intentionally relaxes a guarantee, publish that as a product or API decision and measure the new behavior honestly.
+
+Unsafe code requires a soundness argument independent of its timing result. Passing a benchmark or a test suite does not establish pointer validity or aliasing correctness. Prefer a safe representation change when it captures most of the benefit. The best performance work often removes work or improves locality while keeping the compiler's strongest checks available.
+
+## Exercises
+
+1. A microbenchmark shows a parser is twice as fast, but request latency barely changes. Give three explanations that should be investigated before concluding the benchmark is useless.
+
+2. Reusing one response buffer removes most allocations but increases steady state memory after a large response. Explain the ownership cause and propose a retention policy.
+
+3. A generic implementation beats a dynamic one in a function pointer benchmark. Explain why the call shape may invalidate the intended comparison and describe a better experiment.
+
+## Reasoned Solutions
+
+1. Parsing may be a small fraction of total latency, the benchmark input distribution may differ from production, or the service may be limited by queueing or dependencies. The microbenchmark can still establish a local improvement. Measure the parser's contribution in the real path and verify that the optimized version is actually used under the same build configuration.
+
+2. `clear` removes contents but retains capacity, so one exceptional allocation remains owned by the reusable buffer. Drop or shrink buffers above a measured retention threshold, use size classes, or return oversized buffers to a pool with its own byte budget. The policy should balance future reuse against memory pressure rather than minimize allocation count alone.
+
+3. A function pointer can prevent the inlining and specialization that a concrete production caller allows, or affect the two implementations differently. Benchmark the real static call shape and the real dynamic boundary, inspect optimized output, and include end to end measurements. Report code size and build cost if those are part of the design tradeoff.
+
+## Further Reading
+
+- [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html) documents optimization and code generation configuration.
+- [black_box](https://doc.rust-lang.org/std/hint/fn.black_box.html) specifies its best effort optimization barrier role.
+- [Rust compiler command options](https://doc.rust-lang.org/rustc/command-line-arguments.html) describes emitted artifacts for inspection.

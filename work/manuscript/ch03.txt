@@ -1,0 +1,197 @@
+# Chapter 3 Borrow Scopes Reborrowing and Splitting Access
+
+## A borrow has a useful region
+
+The lexical scope of a variable answers where its name can be written. The region for which a borrow must remain valid answers where a particular access promise is needed. These are related but different. Modern Rust can often end a borrow before the enclosing block ends, because later code no longer uses the borrowed result. This is commonly called nonlexical lifetimes.
+
+The practical consequence is that local reasoning should follow uses rather than counting braces. A reference created early in a function does not necessarily reserve access until the function returns. Conversely, a reference stored in another object or captured by a closure may keep access reserved longer than the nearby statements suggest. The checker follows the relationships between values through control flow.
+
+```rust
+fn main() {
+    let mut names = vec![String::from("one")];
+    let first = &names[0];
+    assert_eq!(first.len(), 3);
+    names.push(String::from("two"));
+    assert_eq!(names.len(), 2);
+}
+```
+
+Here the shared borrow is needed for the assertion involving `first`. It is not needed for the later push. Adding another use of `first` after the push changes the constraint graph: now the reference must remain valid across an operation that requires exclusive access and may relocate the vector's allocation.
+
+Dropping a reference leaves its referent in place. At the reference's last use, the earlier borrowing promise no longer needs to authorize later accesses. Distinguish liveness for borrow analysis from destruction of owned resources, especially when a guard type has a destructor.
+
+## Reborrowing lends an existing permission
+
+An exclusive reference is not copyable, but using it does not always permanently move it. Many operations implicitly create a shorter reborrow of the referent. During that reborrow, the original reference cannot be used in a conflicting way; afterward it can regain usefulness. This is how functions can repeatedly receive the same mutable reference.
+
+```rust
+fn add_marker(bytes: &mut Vec<u8>) {
+    bytes.push(0xff);
+}
+
+fn main() {
+    let mut bytes = vec![1, 2];
+    let access = &mut bytes;
+    add_marker(access);
+    add_marker(access);
+    assert_eq!(access.as_slice(), &[1, 2, 0xff, 0xff]);
+}
+```
+
+Each call lends the existing exclusive capability for the duration required by the callee. It does not create two simultaneous independent mutable references to the vector. The function signature bounds the nested use, and the caller may continue once that use ends.
+
+An explicit `&mut *access` makes the reborrow visible. It can be useful when generic inference otherwise treats a reference as an owned generic argument and moves the reference value. A generic `fn identity<T>(value: T) -> T` sees an exclusive reference as one possible `T`; passing it can transfer that reference. A function whose parameter is explicitly `&mut U` has a clearer reborrowing context. If a generic call unexpectedly consumes a mutable reference, inspect the inferred parameter type before adding clones or changing ownership.
+
+Reborrowing also permits a temporary shared view through an exclusive reference. While that shared view remains in use, mutation through the original exclusive handle must pause. The original handle's stronger authority does not override the promise made by its nested shared access.
+
+## The checker understands structural separation
+
+A struct's fields are distinct places, so Rust can often borrow them separately. This supports useful APIs without runtime checking. For example, a processor may read configuration while mutating a buffer, even though both live inside one owner.
+
+```rust
+struct Encoder {
+    prefix: String,
+    output: Vec<u8>,
+    records: usize,
+}
+
+impl Encoder {
+    fn write_record(&mut self, record: &[u8]) {
+        let prefix = &self.prefix;
+        let output = &mut self.output;
+        output.extend_from_slice(prefix.as_bytes());
+        output.extend_from_slice(record);
+        output.push(b'\n');
+        self.records += 1;
+    }
+
+    fn split(&mut self) -> (&str, &mut Vec<u8>) {
+        (&self.prefix, &mut self.output)
+    }
+}
+
+fn main() {
+    let mut encoder = Encoder {
+        prefix: String::from("item="),
+        output: Vec::new(),
+        records: 0,
+    };
+    encoder.write_record(b"42");
+    let (prefix, output) = encoder.split();
+    assert_eq!(prefix, "item=");
+    output.extend_from_slice(b"done\n");
+}
+```
+
+The second method returns the separation as part of its contract. A caller can inspect the prefix and mutate the output without needing access to the whole encoder. However, a helper method taking `&self` generally borrows the whole receiver according to its signature, even if its implementation currently reads only `prefix`. The caller is checked against the signature rather than interprocedural knowledge of that body.
+
+When helper methods create conflicts, consider exposing a smaller helper type or passing the particular fields to a free function. The goal is to express the real access boundary. Repeatedly adding `RefCell` to compensate for a method that borrows too much can turn a simple static separation into a runtime failure problem.
+
+## Index inequality needs an abstraction
+
+For arbitrary indexing, the compiler does not generally prove that two runtime indices refer to different elements. Even if the programmer knows `left != right`, two separate indexing operations into the same mutable slice can appear to request overlapping exclusive access. A library operation can establish the separation once and return references with the correct relationship.
+
+```rust
+fn two_mut<T>(
+    values: &mut [T],
+    first: usize,
+    second: usize,
+) -> Option<(&mut T, &mut T)> {
+    if first == second || first >= values.len() {
+        return None;
+    }
+    if second >= values.len() {
+        return None;
+    }
+    if first < second {
+        let (left, right) = values.split_at_mut(second);
+        Some((&mut left[first], &mut right[0]))
+    } else {
+        let (left, right) = values.split_at_mut(first);
+        Some((&mut right[0], &mut left[second]))
+    }
+}
+
+fn main() {
+    let mut balances = [100_i64, 40, 75];
+    let (source, target) = two_mut(&mut balances, 0, 2).unwrap();
+    *source -= 10;
+    *target += 10;
+    assert_eq!(balances, [90, 40, 85]);
+}
+```
+
+The ordering branches put each requested index into a different slice. `split_at_mut` supplies the proof that those slices do not overlap. The returned pair preserves argument order, so callers need not know which branch was selected. Equal indices are rejected because there is no sound way to return two ordinary exclusive references to the same element for simultaneous use.
+
+The function chooses `Option` for invalid indices. In application code, `values.get_disjoint_mut([first, second])` performs bounds and overlap checks and returns a `Result` in argument order. The explicit split above shows where the disjointness proof comes from.
+
+## Two phase borrowing explains selected nested calls
+
+Code such as `values.push(values.len())` works even though push needs exclusive access and len uses shared access. For selected implicit mutable borrows, the compiler supports a reservation phase before activation. During argument evaluation, the reserved borrow permits certain shared reads; at the call, it becomes the exclusive borrow required by the method.
+
+```rust
+fn main() {
+    let mut values = vec![10_usize, 20];
+    values.push(values.len());
+    assert_eq!(values, [10, 20, 2]);
+}
+```
+
+This is a limited compiler mechanism, not a general rule that every exclusive borrow can coexist with shared access until the first write. An explicit `&mut` in source code does not receive the same two phase treatment. Refactoring a method call into a free function call with an explicit mutable argument can therefore change borrow checking even if the runtime behavior appears equivalent.
+
+```rust,compile_fail
+fn append_length(values: &mut Vec<usize>, length: usize) {
+    values.push(length);
+}
+
+fn main() {
+    let mut values = vec![1, 2];
+    append_length(&mut values, values.len());
+}
+```
+
+The straightforward repair is to compute the length before creating the explicit exclusive borrow. That makes evaluation order and permission order agree. Avoid designing an API around subtle dependence on two phase borrowing when a clear local variable expresses the same intent.
+
+The reservation cannot protect a reference that must survive activation. A push of a reference into the same vector, or a callback that keeps an alias alive through mutation, introduces a different conflict. Two phase borrowing helps evaluate inputs; it does not make invalidation safe.
+
+## Returning a reference extends the relevant relationship
+
+The most significant borrow conflicts often arise when methods return references. A temporary mutable operation that returns a number may release its borrow immediately after the call. The same operation returning `&mut Entry` transfers an ongoing access capability to the caller. That capability remains relevant for every later use of the entry.
+
+Suppose a cache method takes `&mut self` and returns a reference to a cached item. While the result remains in use, the caller cannot freely invoke another mutable cache operation. This remains true if the second operation seems unrelated. The method contract exposes a relationship with the receiver as a whole. Some designs can provide structural separation; others need independent owned handles, immutable snapshots, or a callback that confines the use.
+
+A callback is especially useful when a temporary view should not escape. Its return type can be independent of the borrowed view, allowing the owner to resume mutation after the callback completes. A callback that returns a reference tied to the view deliberately preserves the relationship and therefore does not solve the same problem.
+
+When a borrow appears to last too long, trace the result rather than only the input. Does it live in a collection? Does an iterator retain the owner borrow? Does a closure capture it? Does a guard's destructor need the reference? These paths often explain why introducing an apparently harmless local binding changes the error.
+
+## Refactoring around permission phases
+
+A useful pattern is to divide an operation into an observation phase, a decision phase, and a mutation phase. First read enough state to compute an owned decision: an index, enum, key, or small summary. End the borrowed observation. Then acquire exclusive access to perform the update. This is not a requirement to copy all data; it is a way to make the actual dependency small.
+
+For example, finding the position of a record and then modifying that position can be easier than keeping a reference from a search alive while also trying to change the collection. The index must be used before an intervening structural change invalidates its meaning. If other operations can remove or reorder records between phases, use a generation checked identifier or a synchronization boundary. Borrowing correctness does not automatically prove that a remembered index still denotes the intended record.
+
+Another pattern is to move invariant preserving behavior onto a smaller owner. If a method needs only a mutable output buffer and a shared schema, make those its inputs. A large receiver can accidentally couple independent resources and make its clients appear more sequential than the underlying problem requires.
+
+Borrow checker resistance can reveal either a missing local abstraction or a real overlapping dependency. The correct response is to identify which. Shortening a borrow is valuable when the earlier access has truly ended. Hiding it with unsafe code while the dependency remains creates a correctness obligation that the original error was accurately describing.
+
+## Exercises
+
+1. A method returns `&mut Item` from a vector. Its caller wants to append another item and then inspect the returned item. Explain the conflict and propose two representations that avoid keeping a vector element reference across the append.
+
+2. Why can two distinct struct fields often be borrowed separately while two arbitrary indices in a slice need a splitting operation?
+
+3. Rewrite the rejected `append_length` example so it preserves the same result without depending on two phase borrowing. Explain why storing an ordinary `usize` differs from storing a reference into the vector.
+
+## Reasoned Solutions
+
+1. Appending requires exclusive access to the vector and may invalidate an element reference by reallocating. Store an index and reacquire a reference after append, provided ordering and deletion rules preserve its meaning. Alternatively store independently allocated items behind owned handles, or use an arena with stable identifiers. The owner still must prevent deletion during a borrowed use.
+
+2. Field projections expose fixed nonoverlapping storage relationships to the checker. Runtime index expressions can be equal, and Rust does not generally solve arbitrary index arithmetic. A safe splitter checks or constructs the disjointness condition and encodes the result as distinct borrowed slices or elements.
+
+3. Compute `let length = values.len();` and then call `append_length(&mut values, length);`. The number has no borrowing relationship with vector storage. A stored reference would still reserve access to some part of the vector for its later use, so merely placing that reference in a separate local would not remove the conflict.
+
+## Further Reading
+
+- [The Rust Compiler Development Guide on two phase borrows](https://rustc-dev-guide.rust-lang.org/borrow_check/two_phase_borrows.html) describes the selected compiler cases.
+- [The Rust standard library slice documentation](https://doc.rust-lang.org/std/primitive.slice.html) documents safe splitting and element access APIs.
+- [The Rustonomicon on splitting borrows](https://doc.rust-lang.org/nomicon/borrow-splitting.html) develops the structural separation principle.

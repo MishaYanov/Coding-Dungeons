@@ -1,0 +1,581 @@
+[
+  {
+    "level": 15,
+    "mission_title": "The Gate of False Credentials",
+    "scene": "The Trait Foundry issues dispatch tickets for Ferrum's evacuation trams. Its old console stores destination, approval, receipt, and failure as unrelated optional fields. A ticket can claim to be delivered without ever naming a destination. Your task is to replace that console's model before the next departure. The fiction gives you the problem; the evidence you earn comes from a small Rust API and examples of transitions its callers can and cannot express.",
+    "objective": "Represent dispatch phases so their data and permitted operations agree, including a genuinely uncertain delivery outcome.",
+    "loadout": [
+      1,
+      4,
+      9,
+      14
+    ],
+    "win_conditions": [
+      "Invalid destination and oversized payload are rejected before an approved ticket is constructed.",
+      "Sending consumes approval, and an ordinary client cannot send the same approval value again.",
+      "A failure before handoff returns reusable approval, while an unknown post-handoff outcome remains distinguishable."
+    ],
+    "boss_title": "The Receipt That Never Happened",
+    "boss_brief": "Design a dispatch API for a payload, a nonzero destination identifier, and a receipt. Input begins unchecked. Validation produces an approved ticket that owns the payload. Starting dispatch consumes that ticket. A local capacity rejection occurs before handoff and must return the approved ticket intact. After handoff, a lost acknowledgement must produce an uncertain outcome carrying the operation identifier, rather than another approved ticket that can be sent blindly. A confirmed delivery produces a receipt. Choose runtime enums, state parameters, or a combination, and write client snippets for every outcome. Your design must also explain which constructors are public and what information a caller can inspect without regaining mutation that would invalidate approval.",
+    "constraints": [
+      "Use private representation for validated evidence; no unsafe code is required.",
+      "A consumed Rust value is not evidence that a remote side effect occurred exactly once.",
+      "Preserve the payload on pre-handoff rejection without requiring a deep clone."
+    ],
+    "debrief": "Validation belongs at the constructor that first establishes the facts. An approved ticket can own a checked destination and payload, with shared inspection and consuming transition methods. A pre-handoff error may carry that same approved value because no delivery attempt was accepted. After handoff, return a different outcome containing an operation identifier and whatever status evidence exists. That value must not silently convert back into permission to issue a fresh operation. A receipt requires explicit confirmation under the chosen transport contract. Typestate is useful for the local phase changes; an enum is often simpler for branching outcomes and heterogeneous storage. Private fields make those types credible evidence instead of decorative names.",
+    "hint1": "Draw the arrows first. Put an owned value on each arrow and write the exact fact that permits the transition. The arrow for an absent acknowledgement should not end at the same state as a local refusal to begin.",
+    "hint2": "Separate validation failure, admission failure, and uncertain delivery into different result shapes. Have the first two return the relevant owned input when reuse is legitimate. Have the uncertain result carry a stable operation identifier instead. Check the public constructors and accessors: a caller who can replace a validated field can manufacture evidence the transition methods were supposed to protect.",
+    "side_quest": "Add an operator console that stores tickets in all phases in one collection. Keep the phase-specific payloads inside an enum, and let a match expose the precise operation available for each variant. Then add expiry to approval. Decide where the current clock must be consulted and explain why a successful validation performed earlier cannot establish that approval is still current when dispatch finally begins.",
+    "route_choices": [
+      {
+        "label": "Forge a public contract",
+        "level": 16,
+        "reason": "Make these state types usable without freezing every internal choice."
+      },
+      {
+        "label": "Open the protocol dungeon",
+        "level": 40,
+        "reason": "Apply consuming transitions to a connection with partial external progress."
+      }
+    ],
+    "reward": "Phase Sight distinguishes validated evidence from a wished-for state."
+  },
+  {
+    "level": 16,
+    "mission_title": "The Museum of Broken Promises",
+    "scene": "A thousand tools depend on the Foundry's public registry crate. Its maintainers want to replace the storage engine, add plugin metadata, and improve diagnostics. The museum next door exhibits upgrades that compiled perfectly in their own repository and broke their clients. You receive four surviving client fragments and the proposed release. Your expedition is a compatibility investigation: identify what each client relies on before deciding which changes can leave the museum alive.",
+    "objective": "Design an evolution plan around observable client capabilities, including auto traits and borrowing behavior.",
+    "loadout": [
+      4,
+      5,
+      9,
+      10,
+      11,
+      15
+    ],
+    "win_conditions": [
+      "List construction, matching, trait implementation, borrowing, and thread-bound promises used by representative clients.",
+      "Separate an internal representation change from a change to a public capability.",
+      "Provide compile-time client checks for the promises the release intends to retain."
+    ],
+    "boss_title": "The Semver Mimic",
+    "boss_brief": "A registry exposes an opaque Registry type, a borrowed entries iterator, and a trait implemented by external plugins. One client moves Registry to a worker thread. Another retains an entry view while reading another entry. A third implements the plugin trait without importing your dependency types. A fourth stores plugins behind an erased interface. The proposed release adds thread-local scratch storage, changes the iterator's capture behavior, and adds optional metadata to the plugin model. Produce a release review with an explicit compatibility decision for each client. Propose a design that preserves the intended clients while allowing the storage engine to change. You may choose a major release for a genuine contract change, but you must name the exact capability that changes.",
+    "constraints": [
+      "Do not equate unchanged method names with source compatibility.",
+      "Keep the proposed stable client checks small enough to explain which promise each one protects.",
+      "An opaque return type still exposes its bounds and lifetime relationships."
+    ],
+    "debrief": "Start from the client evidence rather than from the proposed implementation. A non-Send scratch field can remove a previously available transfer capability even behind private fields. Iterator changes can restrict how long a view is usable or which other borrows may coexist. A plugin trait affects implementors as well as callers, and erased use depends on dyn compatibility. Preserve those properties with an internal scratch strategy, a precise borrowing surface, and an extension mechanism that does not silently add impossible obligations. Where preservation is impractical, record the deliberate break and release it accordingly. Client compilation tests catch important regressions, while documentation and behavioral tests still carry promises such as ordering, allocation, and failure effects.",
+    "hint1": "Imagine the proposed crate as a replacement linked into each client. What operation used to be expressible that no longer is? Write that operation as a tiny function rather than judging the change by the privacy of its new fields.",
+    "hint2": "Use helpers that require Send, functions that hold one borrowed entry while requesting another, an external trait implementation, and an erased plugin value. These checks target properties without naming hidden iterator types. Keep new metadata behind an evolution strategy appropriate to the existing public enum or struct. A private representation gives freedom only within the public capabilities already promised.",
+    "side_quest": "Prepare two release notes for the same internal refactor. In the first, all intended client capabilities survive; describe only the observable cost or behavior changes that matter. In the second, the iterator intentionally becomes lending and clients may no longer retain multiple views. Explain the migration in terms of storage reuse and retention, and show where an owned adapter can preserve the old workflow at an explicit copying cost.",
+    "route_choices": [
+      {
+        "label": "Enter the release workshop",
+        "level": 41,
+        "reason": "Carry compatibility claims into feature matrices and packaged artifacts."
+      },
+      {
+        "label": "Inspect erased machinery",
+        "level": 10,
+        "reason": "Revisit which capabilities survive when a concrete implementation is hidden."
+      }
+    ],
+    "reward": "Contract Ledger reveals promises hidden outside the printed signature."
+  },
+  {
+    "level": 17,
+    "mission_title": "The Workshop of Borrowed Spells",
+    "scene": "The Foundry's maintenance scripts repeat the same resource ritual: acquire a guard, perform a calculation, then release the resource on every ordinary scope exit. Someone offers a macro that removes the repetition. Its first demonstration looks wonderful; its second evaluates an expensive acquisition twice, and its third changes where return goes. You are asked to build a smaller spell whose expansion has a contract a reviewer can actually inspect.",
+    "objective": "Design a resource-scoping macro whose evaluation, control flow, and cross-crate names are deliberate.",
+    "loadout": [
+      6,
+      11,
+      12,
+      16
+    ],
+    "win_conditions": [
+      "The acquisition expression runs exactly once and may return a non-Copy guard.",
+      "The macro documents how question-mark propagation and early return interact with the caller.",
+      "A downstream test succeeds without depending on imports present only in the defining crate."
+    ],
+    "boss_title": "The Mirror Expansion",
+    "boss_brief": "Specify and implement a declarative scoped_resource macro for a fallible guard acquisition and a user block. Its purpose is to name the acquired guard inside the block and return the block's result. Choose whether early return and question-mark propagation act in the surrounding function or in an introduced closure; either policy is acceptable if the syntax and documentation make it clear. Test a side-effecting acquisition, a guard that is not Copy, a body that returns an error, and a body that tries to return a reference to the local guard. Finally, use the macro from a separate test crate with no convenient helper imports. Present the expansion of one invocation so another developer can verify the ownership story.",
+    "constraints": [
+      "Use macro_rules rather than a procedural macro for this challenge.",
+      "Do not introduce an invisible second acquisition or require Clone to hide an ownership error.",
+      "Releasing a local guard does not promise that remote asynchronous cleanup completed."
+    ],
+    "debrief": "Bind acquisition once in a scope whose lifetime is visible in the expanded code. Match its error path explicitly or use propagation according to the chosen control-flow contract. An introduced closure changes what return and question mark target, so that is API behavior rather than harmless implementation detail. The guard should be dropped on the exits supported by the ownership model; attempting to return a reference to a guard that dies with the expansion must be rejected. Qualify defining-crate helpers appropriately and ensure an external expansion can legally access them. Test the actual downstream context instead of relying on a unit test that inherits local imports. A readable expansion is part of the earned artifact.",
+    "hint1": "Write the nonmacro version first. Mark acquisition, the guard's last possible use, each early exit, and the final result expression. Your macro should compress that program without quietly choosing a different control-flow boundary for the user.",
+    "hint2": "A local binding gives the acquisition expression one evaluation and gives the guard a scope. A nested closure may make error typing convenient, but it intercepts return and propagation. Decide that behavior openly. For cross-crate helpers, inspect both path qualification and visibility: hygiene cannot grant access to a private function. Include an intentionally rejected escaping-reference example alongside successful cases.",
+    "side_quest": "Make an expansion inspection checklist for a teammate's macro. Include argument evaluation order, temporary lifetime, introduced bindings, move behavior, propagation targets, helper visibility, and diagnostics for malformed syntax. Then find one convenience you would deliberately leave out of scoped_resource because supporting it would make the expansion harder to predict than the repeated source code it replaces. Explain that trade in a short API note.",
+    "route_choices": [
+      {
+        "label": "Freeze part of the spell",
+        "level": 18,
+        "reason": "Compare token generation with actual compile-time execution."
+      },
+      {
+        "label": "Audit the contract",
+        "level": 42,
+        "reason": "Review generated ownership and failure behavior through explicit invariants."
+      }
+    ],
+    "reward": "Expansion Lens exposes the program underneath a convenient invocation."
+  },
+  {
+    "level": 18,
+    "mission_title": "The Frozen Signal Vault",
+    "scene": "Ferrum's signal vault manufactures fixed-capacity frame cartridges. Capacity is selected when a device is built; the number of useful bytes changes with every message. An apprentice encoded both facts as the same const parameter and now needs a different type for every packet arriving from the street. You must reopen the vault with a representation that separates manufactured capacity, runtime content, and the wire format's fixed-width length field.",
+    "objective": "Use const generics for a genuine type-level capacity while keeping dynamic length and checked encoding at runtime.",
+    "loadout": [
+      2,
+      11,
+      15
+    ],
+    "win_conditions": [
+      "One Cartridge<CAP> value accepts several payload lengths up to its capacity without changing type.",
+      "Construction or insertion preserves the initialized-byte and used-length invariant for all supported CAP values.",
+      "Wire length checks do not depend on host pointer width or unsupported arithmetic in array types."
+    ],
+    "boss_title": "The Capacity Doppelganger",
+    "boss_brief": "Design Cartridge<const CAP: usize> for initialized bytes plus a runtime used length. The cartridge must support replacing its payload from a slice, reject oversized input without changing the previous payload, and report the encoded size of a four-byte length prefix plus the used bytes. A payload length that cannot fit the wire's u32 field must be rejected even on a wider machine. Show where a const function is useful for a fixed cartridge configuration and where the same operation executes at runtime for incoming data. Include CAP equal to zero in your reasoning. Your stable design must not rely on an array type written as CAP plus four merely because that arithmetic is valid in an ordinary value expression.",
+    "constraints": [
+      "Use initialized storage such as [u8; CAP]; this level does not require MaybeUninit.",
+      "Perform all rejection checks before mutating an existing accepted payload.",
+      "No build script may infer the wire format from size_of::<usize>()."
+    ],
+    "debrief": "Keep capacity in the array type and actual content length in a checked field. Validate the incoming slice length before copying, then update the used length after the copy; ordinary byte copying introduces no user callback that could invalidate the staged argument. Expose only the used prefix. For encoding, convert the runtime length to the protocol's fixed-width field and use checked addition for the header size in usize. A const function is eligible for compile-time evaluation when called in a const context, while runtime inputs still require runtime computation. Zero capacity naturally admits the empty payload. Separate header and payload or write into caller-provided output rather than requiring unsupported generic array-length arithmetic.",
+    "hint1": "Write two different statements: how much storage this type contains, and how many bytes this value currently uses. Only the first needs to distinguish types. Then list the checks that must succeed before the old payload may be overwritten.",
+    "hint2": "A fixed initialized array and a used counter avoid partial-initialization machinery. Return a slice ending at the validated counter. Wire length is a protocol value, not automatically a usize. Keep conversion to u32 and checked total-size arithmetic separate. If an array needs room for both header and payload, consider a different output representation instead of making stable const arithmetic do more than it supports.",
+    "side_quest": "Give the vault two cartridge capacities and a runtime request that may fit either. Design a dispatcher using an enum or borrowed slice interface so callers do not need a fresh monomorphized type for every incoming length. Compare the cost and public type surface of this approach with always allocating a vector. Record which capacity decisions remain compile-time configuration and which decisions legitimately belong to runtime policy.",
+    "route_choices": [
+      {
+        "label": "Descend into initialization",
+        "level": 32,
+        "reason": "Replace fully initialized bytes with a carefully tracked initialized prefix when that is justified."
+      },
+      {
+        "label": "Ship the cartridge crate",
+        "level": 41,
+        "reason": "Turn compile-time and target assumptions into tested support claims."
+      }
+    ],
+    "reward": "Capacity Compass separates type identity from a changing value."
+  },
+  {
+    "level": 19,
+    "mission_title": "The Surveyors Who Share a Horizon",
+    "scene": "Beyond the Foundry lies the Clockwork Wilds, where several surveyors search the same catalog of place names. The catalog belongs to their coordinator, and the report should borrow the matching names rather than copy every string. Ordinary unscoped workers demand a lifetime the coordinator cannot offer. You can either change who owns the horizon or choose a boundary that proves every surveyor returns before the horizon can disappear.",
+    "objective": "Build a scoped parallel search that returns borrowed matches in input order without cloning the catalog's strings.",
+    "loadout": [
+      3,
+      4,
+      8,
+      12
+    ],
+    "win_conditions": [
+      "The result borrows from the caller's catalog and remains usable after all scoped workers join.",
+      "Worker-local results are combined in original input order despite completion-order differences.",
+      "The design handles an empty input and states its policy for zero workers and worker panic."
+    ],
+    "boss_title": "The Unreturning Survey Team",
+    "boss_brief": "Implement a function that searches an immutable slice of owned strings in parallel and returns references to the strings containing a chosen ASCII marker. The input and marker are caller-owned. Divide the catalog into contiguous ranges, let scoped workers produce their own vectors of borrowed matches, and combine those vectors in range order. Your result must not borrow from any worker-local vector or temporary copy of a name. State how many workers you create for small inputs, what zero means for the requested worker count, and what your function does when a worker panics. Include a test where a later range finishes earlier while the final match order remains the catalog's order.",
+    "constraints": [
+      "Do not leak the catalog, require static input, or clone its strings.",
+      "Use standard-library scoped threads; no external executor is needed.",
+      "Worker completion order must not accidentally define report order."
+    ],
+    "debrief": "Each worker borrows a contiguous region of the caller-owned catalog and returns references into that region. Its local vector owns only the collection of references, not the referenced strings, so moving or consuming that vector does not invalidate the names. Join handles in partition order and append their results in that same order. The scope establishes that workers finish before the function returns, while the returned references remain tied to the input lifetime. Clamp or reject worker count according to an explicit policy, avoid empty partitions when unnecessary, and propagate or represent panic deliberately. Scoped lifetime validity and Send obligations still matter independently; neither justifies claiming fairness or equal work across partitions.",
+    "hint1": "Trace two owners separately: the owner of each string and the owner of a vector containing references to those strings. The worker may own the second while borrowing from the first. Joining can move that vector without moving the catalog's text.",
+    "hint2": "Use contiguous partitions so ordered assembly is simple. Keep the caller's catalog alive outside thread::scope, and create worker closures that capture references into it. Return each worker's matches through its scoped join handle, then consume the handles in partition order. Do not collect references into a temporary cloned catalog. Arrange a test interleaving with synchronization rather than relying only on sleep timing.",
+    "side_quest": "Change the search predicate from a fixed marker to a callback shared by all workers. Derive the callback bounds from how it is captured and called rather than adding every familiar trait. Then compare a shared immutable callback with one distinct callback owned by each worker. Explain how captured state can change Send or Sync requirements even when the callback's argument and return types stay identical.",
+    "route_choices": [
+      {
+        "label": "Study the lock gates",
+        "level": 20,
+        "reason": "Handle state that cannot be partitioned into independent worker ownership."
+      },
+      {
+        "label": "Build the worker expedition",
+        "level": 39,
+        "reason": "Add bounded queues, accounting, and explicit shutdown to a larger pipeline."
+      }
+    ],
+    "reward": "Scoped Banner permits borrowed expeditions with an enforced return boundary."
+  },
+  {
+    "level": 20,
+    "mission_title": "The Observatory of Sleeping Readers",
+    "scene": "The Wilds' observatory publishes numbered weather snapshots. Readers sleep until a requested revision exists, but an old console treats every bell as proof that a new snapshot is ready. Some wake to stale weather; others sleep through shutdown. The observatory needs a protocol in which the protected predicate is authoritative and notifications merely invite another look. Your repair must also prevent a reader's slow processing from occupying the observatory's only lock.",
+    "objective": "Coordinate versioned snapshots and waiting readers with a mutex-protected predicate and a condition variable.",
+    "loadout": [
+      6,
+      7,
+      19
+    ],
+    "win_conditions": [
+      "A waiter returns a snapshot meeting its requested revision or a documented stopped outcome.",
+      "Spurious or coalesced notifications do not create false readiness or lose a completed publication.",
+      "Readers process independently owned snapshot handles after releasing the state lock."
+    ],
+    "boss_title": "The Bell Without a Forecast",
+    "boss_brief": "Design an Observatory holding the current revision, an immutable shared snapshot, and an open or stopped phase. A reader asks for a revision and may wait until that revision is available. A publisher prepares a replacement snapshot outside the lock, installs it under the lock with an advancing revision, and wakes relevant waiters. Shutdown must release readers whose targets will never be reached. Implement or precisely sketch the wait loop, publication, and stop transitions using Mutex, Condvar, and Arc. Specify revision exhaustion and poisoning policy. Demonstrate a notification before a reader begins waiting, a wake with no relevant state change, and shutdown while a reader waits for a future revision. User processing must happen after access to protected state ends.",
+    "constraints": [
+      "Every decision to wait or return must inspect the predicate under the same mutex.",
+      "Never call an arbitrary reader callback while holding the observatory lock.",
+      "A notification is not a stored event count or a substitute for the revision field."
+    ],
+    "debrief": "Store revision, snapshot, and phase together because they define one observable state. A waiter holds the mutex while checking whether its target is satisfied or shutdown makes it impossible; otherwise Condvar::wait atomically releases the guard and waits, then the loop checks again. Clone the snapshot handle while protected and process it after releasing the guard. Publication changes the predicate before notification, so an early notification is harmless: a later reader sees the ready state. Stopping changes the phase under that same lock and wakes all blocked readers. Checked revision advancement avoids accidental history reuse. Poison recovery needs an invariant-based decision; mechanically taking the inner value is not evidence that interrupted state is trustworthy.",
+    "hint1": "Write the sentence a sleeping reader needs to become true. A bell is only one possible reason to reevaluate that sentence. Include a second exit condition for a target that shutdown has made unreachable, and decide what data must be read together.",
+    "hint2": "The predicate can be current_revision at least target, or phase stopped. Check the ready condition first if your policy permits returning the final snapshot after shutdown. Otherwise distinguish stopped before satisfying the target. Keep the revision and snapshot update within one critical section. Returning an Arc clone lets the reader release the guard before doing expensive work, while the snapshot remains alive independently.",
+    "side_quest": "Allow readers to request the next revision after the one they last observed. Decide whether skipping intermediate revisions is allowed. If every revision must be processed, the latest-snapshot interface is insufficient; design an event log with retention and subscriber progress instead. Explain what happens when a slow reader exceeds retention, and keep that semantic failure distinct from a lost condition-variable notification.",
+    "route_choices": [
+      {
+        "label": "Carry events by channel",
+        "level": 21,
+        "reason": "Compare persistent state predicates with messages that transfer ownership."
+      },
+      {
+        "label": "Track service shutdown",
+        "level": 28,
+        "reason": "Coordinate admission, draining, and observers at service scale."
+      }
+    ],
+    "reward": "Predicate Key opens waits by state rather than by superstition about notifications."
+  },
+  {
+    "level": 21,
+    "mission_title": "The Courier With Two Destinations",
+    "scene": "A relay in the Wilds must deliver each announcement to the east and west towers. Both routes use bounded queues. The old relay reports one Boolean result, hiding the case where east accepted the announcement and west disconnected. Operators then retry both routes and duplicate east's work. Your mission is to give ownership transfer a precise vocabulary and make partial fanout visible instead of compressing several facts into an optimistic success flag.",
+    "objective": "Design a bounded two-recipient fanout protocol that reports partial queue acceptance honestly.",
+    "loadout": [
+      1,
+      14,
+      19,
+      20
+    ],
+    "win_conditions": [
+      "Each announcement has one stable identifier and explicit per-recipient queue-acceptance outcomes.",
+      "A failed send recovers the undelivered value, while earlier successful sends remain recorded.",
+      "The protocol distinguishes queue acceptance from recipient processing and from durable delivery."
+    ],
+    "boss_title": "The Half Delivered Decree",
+    "boss_brief": "Build or sketch a relay that fans an owned announcement out to two bounded standard-library channels. The payload is immutable and can be shared through Arc; its operation identifier must remain stable. One tower may disconnect after the other has accepted its copy. Return a report that describes each recipient separately and gives the caller enough information to retry only destinations whose queue transfer failed. Explain what happens if the relay itself stops after the first successful send but before returning its report. Choose a blocking or nonblocking admission policy and state the consequences of a slow tower. You are not required to create atomic broadcast, but you must identify precisely why two successful or failed send operations do not create it.",
+    "constraints": [
+      "Do not report all-or-nothing delivery unless an additional protocol establishes it.",
+      "Do not hold a shared application-state lock while blocking on a full recipient queue.",
+      "A bounded message count does not bound arbitrary payload bytes or external Arc retention."
+    ],
+    "debrief": "Represent the fanout as separate ownership transfers with a shared operation identity. A successful send establishes that one queue accepted its message; a failed send returns the undelivered copy and says nothing that undoes a prior success elsewhere. A per-recipient report preserves that distinction. If the relay disappears before reporting, the caller has uncertainty and needs recipient deduplication, status lookup, or an authoritative log to retry safely. A blocking policy can couple throughput to the slower tower; a nonblocking policy needs explicit retry or rejection behavior. Shared immutable payloads avoid duplicate byte copies but retain their allocation until the final relevant owner releases it. Atomic broadcast would require additional coordination and failure assumptions beyond these channels.",
+    "hint1": "Replace the Boolean result with a record containing one outcome for each destination. Write down what send returning Ok actually proves. Then place a crash between the two sends and ask which facts the caller can recover without consulting another authority.",
+    "hint2": "Keep the same message identifier in both recipient envelopes. Record each queue-acceptance result as it happens, and retain returned payload ownership on failed sends. Distinguish that local report from a recipient acknowledgement of completed processing. A caller who never receives the report cannot infer which transfer happened. If retries must be safe across that uncertainty, the recipients or a stronger coordinator must recognize repeated operation identifiers.",
+    "side_quest": "Make the east tower process announcements in order while the west tower may batch them. Decide whether the relay's contract requires the two towers to observe the same prefix at every instant or merely eventually receive the same accepted announcements. Add a recovery log or a documented weaker guarantee. Explain how retaining undelivered shared payloads affects memory even when both live channel buffers have fixed capacities.",
+    "route_choices": [
+      {
+        "label": "Prove an atomic transition",
+        "level": 22,
+        "reason": "Study a smaller publication problem with an explicit ordering argument."
+      },
+      {
+        "label": "Assemble the bounded pipeline",
+        "level": 39,
+        "reason": "Extend transfer accounting through workers and result collection."
+      }
+    ],
+    "reward": "Delivery Prism separates accepted, processed, durable, and unknown outcomes."
+  },
+  {
+    "level": 22,
+    "mission_title": "The Observatory Between Two Ticks",
+    "scene": "A tiny instrument in the Wilds publishes two related counters. Readers must see one coherent reading, but the instrument offers only atomic fields and no room for a mutex in this exercise. Someone made every operation sequentially consistent and declared victory. You find readings assembled from opposite sides of an update. The repair is a protocol that detects interference, not a stronger adjective attached to two unrelated loads.",
+    "objective": "Design a single-writer atomic snapshot with a generation protocol, a stated ordering proof, and bounded reader retries.",
+    "loadout": [
+      19,
+      20,
+      21
+    ],
+    "win_conditions": [
+      "Every accepted pair comes from one complete publication under the stated single-writer assumptions.",
+      "Readers return Busy after a defined retry budget rather than claiming guaranteed completion.",
+      "Generation exhaustion cannot silently reuse an old represented history."
+    ],
+    "boss_title": "The Counter Hydra",
+    "boss_brief": "Model a single writer publishing two AtomicUsize payload fields with an AtomicUsize generation. The writer marks the generation odd, stores both payloads, then publishes the next even generation. A reader loads an even generation, reads both payloads, and accepts them only if a second generation load matches. For this challenge, use SeqCst operations throughout so your reasoning can use their total order; do not weaken them as an optimization exercise. Give readers a finite retry budget. Check generation advancement before starting a write and define exhaustion as refusal to publish further updates. Explain why matching generations establish a coherent pair only when your assumptions exclude concurrent writers and generation reuse. All payload accesses remain atomic, including unsuccessful reads.",
+    "constraints": [
+      "Exactly one writer may execute a publication at a time; make that assumption enforceable or explicit.",
+      "No ordinary shared mutable payload storage or raw-pointer reclamation is needed.",
+      "Do not claim wait freedom or successful completion merely because readers avoid a mutex."
+    ],
+    "debrief": "In the SeqCst total order, an accepted reader has matching even generation observations around its payload loads. A writer's odd marker precedes its payload stores and its final even marker follows them. Without generation reuse, an intervening publication would change a generation observation or expose odd state, so acceptance excludes an overlapping write across the observed interval. This proof depends on every relevant operation participating in the stated ordering and on the single-writer discipline. Precheck that both required generation steps fit before changing any state. A finite retry budget gives a useful Busy result under contention; it does not guarantee that a later attempt succeeds. The protocol orders observations but does not retain an independently allocated pointee.",
+    "hint1": "Place every operation on one ordered timeline. Draw a reader's first and second generation loads as brackets. Can any writer payload store fit between the brackets without one of the writer's generation markers becoming visible to that acceptance test?",
+    "hint2": "An even generation identifies a completed publication only while that identifier is not reused. The writer must reserve the next odd and even values before beginning. Readers reject odd first observations and unequal second observations. Keep the payload fields atomic even on discarded attempts, because detecting interference afterward does not retroactively legalize a data race. A second writer would invalidate the simple protocol unless separately serialized.",
+    "side_quest": "Replace the numeric payload with an atomic pointer to a heap-allocated reading, but do not dereference it yet. List the additional lifetime and reclamation obligations that the numeric design did not have. Explain why acquire ordering or a matching generation cannot alone prevent another thread from freeing the pointed-to allocation. Compare retaining a guarded owner with an established reclamation strategy before proposing any unsafe implementation.",
+    "route_choices": [
+      {
+        "label": "Follow suspended time",
+        "level": 23,
+        "reason": "Move from cross-thread observation to state retained between polls."
+      },
+      {
+        "label": "Descend to pointer provenance",
+        "level": 30,
+        "reason": "Separate ordering evidence from the right to access an allocation."
+      }
+    ],
+    "reward": "Ordering Compass locates the exact events that justify an observation."
+  },
+  {
+    "level": 23,
+    "mission_title": "The Engine That Yields No Ground",
+    "scene": "Ferrum's checksum mill has been moved into an async service. It no longer blocks on a socket, yet other work still freezes while one large buffer is examined. The mill contains await syntax, so its keeper insists it must be cooperative. Your mission is to open the state machine and impose an actual work budget. A poll should make measurable progress, preserve unfinished state, and return control while more bytes remain.",
+    "objective": "Implement a finite, budgeted computation future and explain exactly what survives each Pending result.",
+    "loadout": [
+      2,
+      6,
+      12,
+      19
+    ],
+    "win_conditions": [
+      "Each poll examines at most a chosen fixed number of bytes before returning or completing.",
+      "Pending with remaining immediately available work schedules another poll instead of sleeping forever.",
+      "Dropping an unpolled or partially polled future releases its owned input without executing a promised final statement."
+    ],
+    "boss_title": "The Endless First Poll",
+    "boss_brief": "Build a future that owns a Vec<u8> and computes a deliberately noncryptographic wrapping byte sum. Store a cursor and accumulator in the future. Each poll may process at most sixty-four bytes. If work remains, arrange another poll and return Pending; if the buffer is exhausted, return the result. Decide and document your post-completion polling policy within the Future contract. Test empty input, a buffer smaller than one budget, and a buffer spanning several budgets using a controlled waker or a minimal polling harness. Record the cursor after each Pending to demonstrate bounded progress. Explain why moving this future before or between polls is harmless for this particular representation and why that does not generalize to every compiler-generated future.",
+    "constraints": [
+      "No external executor is required to inspect the future's poll behavior.",
+      "Use owned data and indices rather than references into the future's own Vec.",
+      "A wrapping sum is an intentional arithmetic policy, not a cryptographic integrity claim."
+    ],
+    "debrief": "The owned buffer, cursor, accumulator, and terminal policy are the suspended computation. Since the representation contains ordinary movable fields and no address-sensitive self references, safe mutable access through the applicable Unpin relationship is sufficient here. Process one bounded slice, update state, and either finish or wake the current task before returning Pending when more CPU work is already available. A Pending without a future notification can strand the computation. Destruction releases the stored Vec whether the body was polled zero times or many times; cleanup cannot rely on reaching the successful final branch. This exercise makes cooperation explicit while leaving scheduling fairness to the executor and its own work-budget policy.",
+    "hint1": "Erase async syntax and list the state a paused loop needs: input owner, next index, accumulated value, and completion status. Then ask who will request another poll if the operation is waiting only for its own remaining CPU work.",
+    "hint2": "Compute an end index from the cursor and a bounded remaining length, avoiding overflow-prone unchecked cursor arithmetic. Update the accumulator and cursor before returning. When the end has not been reached, call wake_by_ref on the current context's waker and return Pending. A later poll can receive a different waker. Do not store references into your own Vec just to remember where the next byte lives.",
+    "side_quest": "Run two budgeted sums under a tiny round-robin harness and record the maximum bytes processed before the other receives an opportunity to poll. Then make the work budget configurable at construction. Compare latency and polling overhead with measurements rather than asserting that smaller budgets are always faster. Explain why an await on an immediately ready child would not, by itself, create the same explicit scheduling boundary.",
+    "route_choices": [
+      {
+        "label": "Enter the moving house",
+        "level": 24,
+        "reason": "Understand futures whose representation really does depend on address stability."
+      },
+      {
+        "label": "Trace the scheduler bells",
+        "level": 25,
+        "reason": "See how a request for another poll becomes an executor action."
+      }
+    ],
+    "reward": "Poll Budget makes cooperative progress visible in stored state."
+  },
+  {
+    "level": 24,
+    "mission_title": "The House Whose Rooms Must Stay Still",
+    "scene": "Two scouts race to find an open route through the Wilds. Their suspended equipment may contain address-sensitive state, yet the race controller itself must be easy to move between ordinary containers. A previous controller demanded that every scout be Unpin and excluded the very operations it was meant to coordinate. Your repair chooses a stable home for each child and keeps a clear distinction between moving a handle and moving what it owns.",
+    "objective": "Compose two potentially non-Unpin futures using pinned owned handles and an explicit terminal policy.",
+    "loadout": [
+      2,
+      6,
+      10,
+      23
+    ],
+    "win_conditions": [
+      "The combinator accepts child futures without requiring the child types to be Unpin.",
+      "A completed result consumes or retires both child handles without moving a pinned pointee out of storage.",
+      "The review identifies exactly which value is pinned, who owns it, and how it is destroyed."
+    ],
+    "boss_title": "The Twin Room Collapse",
+    "boss_brief": "Design a RaceTwo future that owns two child futures and returns either the left output or the right output, tagged by an enum. Put each child in its own Pin<Box<F>>-style storage so the parent can use safe access to its movable handles. Poll the children according to an explicit order, and explain the bias when both are ready. When one completes, drop the losing child's owned handle and enter a terminal state. Do not promise that dropping the loser reverses any external effect it already performed. Write a representation walkthrough that covers parent movement, child polling, taking an Option containing a pinned handle, and destruction. Then state how a poll after completion behaves without making an unsupported guarantee about the child.",
+    "constraints": [
+      "Use no unsafe projection in the primary solution.",
+      "Do not add Unpin bounds on child futures merely to obtain mutable parent access.",
+      "Keep completed status in the parent so its terminal policy does not repoll a completed child accidentally."
+    ],
+    "debrief": "Box::pin establishes independent stable storage for each child. Pin<Box<F>> is a movable owning handle even when F needs pinning, so the parent can move handles without moving the child values out of their allocations. An Option lets completion take and drop those handles safely. Poll children through pinned mutable projections obtained from the handles, not unrestricted references to their pointees. Store the parent's terminal status before a later poll could touch a completed child. A left-first polling policy is biased and should be documented or deliberately alternated. Dropping the loser performs its local destruction policy, while cancellation semantics for its remote work remain a separate contract. The extra allocations purchase a smaller and auditable proof boundary.",
+    "hint1": "Draw a box around each child allocation and a different box around the parent struct. Move the parent box on paper. Which addresses change? Then identify the operation that would remove the actual child value rather than merely transfer its owner.",
+    "hint2": "Store optional pinned box handles, plus a terminal flag or enum. Parent mutability can access those handles because moving a handle does not move its pinned pointee. Poll with each handle's pinned mutable view. On completion, take and drop the owned handles; do not extract F from its box. Check terminal state before polling any child again, and keep the output outside stored parent state unless its own bounds are accounted for.",
+    "side_quest": "Sketch an allocation-free version with inline children, but stop before writing unchecked projection. List the obligations that a projection implementation would need to maintain across every method, destructor, and manual Unpin implementation. Compare that proof burden with a well-maintained projection helper and with the boxed design. The side quest is complete when you can justify where complexity is paid, rather than when you have removed an allocation at any cost.",
+    "route_choices": [
+      {
+        "label": "Hunt a lost wakeup",
+        "level": 25,
+        "reason": "Make child readiness reliably reach the next polling opportunity."
+      },
+      {
+        "label": "Audit an unsafe boundary",
+        "level": 31,
+        "reason": "Practice whole-abstraction reasoning before implementing manual projection."
+      }
+    ],
+    "reward": "Anchor Sigil distinguishes a movable owner from an address-sensitive pointee."
+  },
+  {
+    "level": 25,
+    "mission_title": "The Bell Thief's Last Message",
+    "scene": "A one-use courier leaves a value in a locked chest and rings a scheduler bell. Some couriers leave before ringing; some readers change which task is waiting; some chests are abandoned. The town records bells instead of chest state, so messages and sleepers drift apart. Your mission is to design a tiny one-shot channel future in which the value or closure state persists independently of whether a notification is coalesced.",
+    "objective": "Specify a single-sender, single-receiver future protocol with no lost completion or closure wakeup.",
+    "loadout": [
+      20,
+      21,
+      23,
+      24
+    ],
+    "win_conditions": [
+      "Polling registers interest and checks readiness under a race-free protocol.",
+      "Dropping an unresolved sender makes a waiting receiver observe closure rather than remain Pending forever.",
+      "Completion wakes outside the protected critical section, and a later poll can replace an outdated waker."
+    ],
+    "boss_title": "The Unrung Completion",
+    "boss_brief": "Design a one-shot pair using Arc, Mutex, and safe Waker operations. One noncloneable sender can resolve one owned value or drop without sending. The receiver's waker may change across polls. Model waiting, ready value, sender gone, and receiver gone as states or equivalent data. Explain send, poll, and the drop of each endpoint. A sender cannot overwrite a result. A surviving sender must retain neither a payload nor a waker after the receiver abandons the operation. Test completion racing with registration. Use stored state as the authority and wake only after releasing the lock.",
+    "constraints": [
+      "The sender is not cloneable; multiple-producer reference accounting is outside this boss.",
+      "Do not call wake while holding the state mutex.",
+      "Do not treat the number of wake calls as the number of stored results."
+    ],
+    "debrief": "Check readiness and register interest under the same mutex. Poll takes a ready value, reports closure, or installs the current waker. The sender stores readiness or closure under the lock and takes the registered waker to invoke after unlocking. Receiver drop marks abandonment and takes both the retained payload and the registered waker under the lock. Drop them after unlocking because either destructor can run arbitrary code. Clone the incoming waker outside the lock and drop any displaced waker after unlocking. Keep readiness or closure in state even with no waker registered so a later poll can observe it.",
+    "hint1": "Enumerate states before writing poll. There must be a persistent difference between nobody has sent yet and nobody can ever send. Now place the empty check and waker installation on a timeline with a producer attempting to complete between them.",
+    "hint2": "One mutex can make checking and registering one coherent operation. The sender takes the registered waker while publishing readiness, releases the guard, then wakes. If send happens first, the receiver sees the stored value; if registration happens first, send obtains the waker. Endpoint destruction must publish its own state transition too. Move payloads and obsolete notification handles out before expensive or reentrant destruction when that behavior matters.",
+    "side_quest": "Use a test waker to count scheduling requests and track its lifetime. Test send before first poll, sender drop after Pending, receiver drop after Pending while the sender stays alive, and a poll with a new waker. Check that receiver drop releases the registered waker. Explain which outcomes are required, then identify the sender-count bookkeeping needed to make the sender cloneable.",
+    "route_choices": [
+      {
+        "label": "Cross the cancellation boundary",
+        "level": 26,
+        "reason": "Treat endpoint destruction as part of a larger operation's observable behavior."
+      },
+      {
+        "label": "Study service ownership",
+        "level": 28,
+        "reason": "Assign an observer to every task and outstanding result."
+      }
+    ],
+    "reward": "Wake Lantern reveals the persistent predicate behind a scheduling signal."
+  },
+  {
+    "level": 26,
+    "mission_title": "The Bridge With a Missing Middle",
+    "scene": "Ferrum's export bridge writes a frame in small pieces. Operators may cancel a wait at any time and later resume, but the current implementation stores the byte offset only inside the temporary future. After cancellation, the connection still looks ready while its next write begins in the middle of an old frame. The bytes are memory-safe; the conversation is ruined. Your repair must leave every interrupted operation in a state another method can understand.",
+    "objective": "Keep resumable partial-write progress in its resource owner across future cancellation.",
+    "loadout": [
+      6,
+      15,
+      23,
+      24,
+      25
+    ],
+    "win_conditions": [
+      "Dropping the operation future cannot discard the frame buffer or its acknowledged local write offset.",
+      "A new frame cannot interleave with an unfinished frame through the safe public API.",
+      "Tests cancel at controlled Pending boundaries and resume without skipping or duplicating locally accepted bytes."
+    ],
+    "boss_title": "The Vanishing Cursor",
+    "boss_brief": "Design an Exporter that owns a pending encoded frame and a byte offset. A temporary future borrows it to advance a mock sink. Define the sink contract explicitly: Ready with a count means that many bytes were accepted, while Pending accepts no bytes for that invocation. The future may be dropped after any returned Pending. Progress must remain available for a later resume operation, and ordinary send-new-frame must refuse while a frame is unfinished. Build a deterministic mock that sometimes accepts a short prefix and sometimes returns Pending. Describe or implement the transition order that updates the offset after Ready without adding a suspension point in between. Separately explain why this local byte-progress contract does not prove whether a remote peer committed the logical request.",
+    "constraints": [
+      "Keep indispensable progress in Exporter rather than only in the borrowed future.",
+      "No asynchronous work may be assumed to run from Drop.",
+      "The primary mock contract must not hide external effects behind a Pending result."
+    ],
+    "debrief": "The exporter owns both the bytes and progress, so destroying one borrowed attempt releases access without losing the resumable record. After the sink returns an accepted count, update the owner's offset immediately in the same poll execution; cancellation occurs when the future is dropped between polling calls, not at an arbitrary source instruction inside a running poll. Pending leaves the acknowledged offset unchanged under the chosen sink contract. Define zero accepted bytes with nonempty input as a no-progress error rather than spinning. An unfinished state permits resume or explicit abort and prevents another frame from interleaving. Completing local transmission can clear the pending frame, but a lost response still leaves application-level outcome uncertain. That uncertainty requires a peer protocol or stable operation identifier beyond local cancellation safety.",
+    "hint1": "Ask what survives when the caller drops only the temporary operation. Any byte buffer or cursor needed by the next attempt must belong to something that survives that drop. A connection marked simply ready is missing evidence about its unfinished wire state.",
+    "hint2": "Represent idle and pending-frame states in the exporter. The future borrows the pending state and advances an offset into its owned buffer. After Ready(n), validate n against the remaining slice and record progress before any further return. After Pending, preserve all state. A resume method can borrow it again; a new-frame method must reject or queue according to an explicit policy rather than overwrite the pending bytes.",
+    "side_quest": "Replace the local mock sink with a remote request protocol that can lose its acknowledgement. Write three distinct outcomes: no attempt accepted locally, partial or complete local transmission, and peer-confirmed completion. Decide which outcomes permit a fresh identifier and which require consulting the same identifier. The task is to preserve uncertainty honestly; a timeout or dropped future is not an undo command sent backward through the network.",
+    "route_choices": [
+      {
+        "label": "Publish the future contract",
+        "level": 27,
+        "reason": "Expose borrowing and cancellation behavior through a reusable async interface."
+      },
+      {
+        "label": "Navigate the protocol fortress",
+        "level": 40,
+        "reason": "Integrate partial progress into typed and runtime connection states."
+      }
+    ],
+    "reward": "Resume Rune keeps the operation's history outside a disposable wait."
+  },
+  {
+    "level": 27,
+    "mission_title": "The Guild of Unnamed Futures",
+    "scene": "The Wilds' inspection guild accepts scanners from different workshops. Each scanner borrows the inspected bytes and may suspend, while the guild wants to place returned work on a multithreaded scheduler. A scanner being Send and Sync has been mistaken for evidence about every future it creates. Your mission is to publish the operation's actual bounds, preserve useful borrowing, and choose one clear location where concrete implementations become erased plugins.",
+    "objective": "Design static and erased async scanner interfaces with deliberate Send and lifetime contracts.",
+    "loadout": [
+      4,
+      9,
+      10,
+      19,
+      23,
+      24
+    ],
+    "win_conditions": [
+      "The static interface explicitly guarantees the returned future's Send property where generic callers need it.",
+      "The erased interface permits borrowing scanner and input without accidentally requiring static data.",
+      "A separate owned boundary explains what an unscoped scheduler's static requirement would demand."
+    ],
+    "boss_title": "The Contract Hydra",
+    "boss_brief": "Design a scanner operation that borrows both its receiver and an input byte slice, suspends, and returns an owned inspection report. First give generic callers an interface whose returned future is explicitly Send. Then design an object-safe adapter returning a pinned boxed future with the appropriate borrowing lifetime and Send bound, so heterogeneous scanners can share one registry. Demonstrate the intended contracts with compile-time helper functions rather than requiring an actual runtime: one helper accepts Send futures, another accepts Send plus static futures. Show why a call borrowing a local input may satisfy the first and fail the second. Provide an owned request wrapper or another explicit handoff design for the unscoped case, and account for any copies or shared ownership it introduces.",
+    "constraints": [
+      "Do not infer the future's Send property solely from scanner Send or Sync bounds.",
+      "Keep the inspection report owned so its lifetime does not introduce another hidden output borrow.",
+      "Do not use native async trait syntax as if it automatically supplied an erased dyn interface."
+    ],
+    "debrief": "A static method can return impl Future with an explicit Send bound, making the operation promise available to generic callers. The erased adapter can return Pin<Box<dyn Future<Output = Report> + Send + 'a>>, tying the future to the receiver and input borrows that it actually retains. The scanner object's bounds describe transfer or shared access to the scanner, while the future's bounds describe suspended operation state. Neither implies static lifetime. For an unscoped handoff, ensure the retained scanner and request contain no shorter borrowed state, then move those owners into an outer async block. That wrapper can borrow its owned data internally while its complete future owns the backing storage. An owned handle can still contain nonstatic borrows, so establish the required static bounds explicitly. Erasure and ownership handoff remain separate decisions.",
+    "hint1": "Write three different questions: can the scanner move between threads, can this operation move between threads, and can this operation outlive the current stack frame? Find a distinct trait or lifetime relationship for each rather than expecting one bound to answer all three.",
+    "hint2": "Use an explicit returned-future Send bound at the generic boundary. At the registry boundary, box and pin the future while retaining a named lifetime for borrowed receiver and input. Test that value with a Send-only helper. A static helper should reject short-lived borrowed backing data. To cross that later boundary, move an owner of the bytes into the outer future instead of pretending move turns a reference into owned storage.",
+    "side_quest": "Add a scanner whose synchronous preparation uses Rc, then drops that temporary before its first suspension. Explain how it may still produce a Send future if no non-Send state survives the relevant boundary. Contrast it with a scanner that retains Rc across suspension and is valid only for local execution. Decide whether the registry should reject that implementation or offer a separate local adapter with an intentionally weaker operation contract.",
+    "route_choices": [
+      {
+        "label": "Supervise the guild",
+        "level": 28,
+        "reason": "Own accepted operations, their failures, and their shutdown outcomes."
+      },
+      {
+        "label": "Return to erasure",
+        "level": 10,
+        "reason": "Reassess which concrete facts a dynamic interface must preserve."
+      }
+    ],
+    "reward": "Future Seal publishes thread and lifetime obligations at the operation boundary."
+  },
+  {
+    "level": 28,
+    "mission_title": "The Last Light in the Wilds",
+    "scene": "The district is closing its gates for repair. Some jobs are queued, some workers are running, one has failed, and another may have changed a remote system before disappearing. The old supervisor reports clean shutdown as soon as it sends cancellation requests. Your final mission in the Clockwork Wilds is to build a report that earns its certainty. Every accepted operation must end somewhere on the ledger, including the places where certainty is impossible.",
+    "objective": "Design an accountable shutdown protocol with bounded admission, observed worker termination, and honest uncertain outcomes.",
+    "loadout": [
+      6,
+      14,
+      19,
+      20,
+      21,
+      26,
+      27
+    ],
+    "win_conditions": [
+      "Admission closure and accepted-work registration cannot race into an unaccounted operation.",
+      "Every accepted identifier appears in exactly one terminal report category after the defined shutdown procedure.",
+      "Clean drain, local cancellation, worker failure, and uncertain external effect are distinguishable outcomes."
+    ],
+    "boss_title": "The Supervisor That Declared Victory",
+    "boss_brief": "Specify a finite service with a bounded input queue, a fixed worker limit, and a supervisor that owns all worker completion observations. Every accepted job has an identifier and one ledger entry. Shutdown first closes admission, then attempts a graceful drain, then may escalate at a deadline. Build a deterministic failure script containing a queued job, an ordinary job error, a worker panic before reporting, and a job whose remote effect may have occurred before local interruption. Define report categories and an accounting equation that includes uncertainty rather than calling it success. State where accepted-work registration becomes authoritative, who keeps active-work capacity owned, how abandoned queued work is recorded, and what evidence the supervisor gathers before claiming every local worker stopped.",
+    "constraints": [
+      "A cancellation request alone cannot count as observed termination.",
+      "Queue capacity does not replace an active-worker bound or a variable-payload byte budget.",
+      "No terminal category may assert absence of a remote effect without a protocol that establishes it."
+    ],
+    "debrief": "Use one authoritative admission transition to reject new work or register its identifier before it can become active. A work envelope owns its capacity through the stage the bound is meant to cover. The supervisor retains completion handles and gathers their results, including panic or explicit failure, while continuing to drain any channels needed for worker progress. Terminal accounting can partition accepted identifiers into completed, ordinary failed, locally abandoned before effects, and externally uncertain, with more categories when useful. A worker failure is not automatically proof that its active operation had no effect. Deadline escalation changes the shutdown result rather than retroactively turning it into a clean drain. Report local termination separately from remote certainty and persistent recovery obligations.",
+    "hint1": "Draw one row for every accepted identifier. Walk the failure script and refuse to erase a row merely because a worker or reply channel disappears. For each final label, write the evidence that lets the supervisor use that label instead of unknown.",
+    "hint2": "Separate admission state, job state, and worker state. Closing admission must coordinate with registration. A job can stop locally while its external outcome remains uncertain; a worker can stop without reporting a normal result. Join or otherwise observe each owned worker, retain enough active-job identity to classify interrupted work, and ensure the supervisor does not block worker completion by abandoning a bounded result channel it still expects workers to use.",
+    "side_quest": "Design a rolling restart instead of total shutdown. Decide which accepted jobs drain in the old generation, which may transfer to the new generation, and which require persistent status or deduplication before retry. Put a generation on local worker identity without confusing it with the operation's stable external identifier. Explain the recovery authority if both generations briefly exist and one loses its final acknowledgement.",
+    "route_choices": [
+      {
+        "label": "Build the endgame pipeline",
+        "level": 39,
+        "reason": "Implement concrete queue ownership and join ordering for a bounded batch."
+      },
+      {
+        "label": "Enter the versioned archive",
+        "level": 38,
+        "reason": "Give decisions an explicit consistency and retry model."
+      }
+    ],
+    "reward": "Last Light Ledger accounts for every accepted operation without inventing certainty."
+  }
+]

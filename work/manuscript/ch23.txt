@@ -1,0 +1,211 @@
+# Chapter 23 Futures Are Suspended State Machines
+
+Calling an async function constructs a value representing work. Polling that value executes the function until it completes or reaches a point where it cannot currently proceed. The distinction between construction and execution explains many surprising observations: a log at the beginning of an async body may never appear, a borrowed argument remains borrowed while the future exists, and dropping an unpolled future can release resources without running the body.
+
+Model the future as a state machine. It retains values needed after suspension, including those whose destructors still have to run. A local whose scope ends before the await can be dropped first. The future also keeps the awaited operation and the control state needed to resume. These are obligations the future must preserve, rather than a list of fields at fixed offsets. The compiler chooses the concrete layout and may represent different suspension points differently.
+
+## Construction Captures Arguments
+
+An async function's body does not run merely because the function was called. Its arguments are captured into the returned future. That can transfer ownership immediately even though the body has not yet inspected the value. Dropping the future then drops those captured arguments according to the language's rules.
+
+The following complete program observes the difference through a drop counter and polls a separate immediately ready future without an executor.
+
+```rust
+use std::cell::Cell;
+use std::future::Future;
+use std::pin::pin;
+use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
+
+struct Token(Rc<Cell<usize>>);
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+async fn use_token(_token: Token) -> u32 {
+    7
+}
+
+fn main() {
+    let drops = Rc::new(Cell::new(0));
+    let future = use_token(Token(Rc::clone(&drops)));
+    assert_eq!(drops.get(), 0);
+    drop(future);
+    assert_eq!(drops.get(), 1);
+
+    let mut ready = pin!(async { 12_u32 });
+    let mut context = Context::from_waker(Waker::noop());
+    assert_eq!(ready.as_mut().poll(&mut context), Poll::Ready(12));
+}
+```
+
+A no operation waker is appropriate here because the polled future completes immediately. It would be inappropriate for a future whose progress depends on receiving notifications that the executor must act on. Polling is easy to demonstrate manually; waiting correctly is a separate executor responsibility.
+
+Compare an `async fn` with a normal function returning an async block. The normal function can perform synchronous validation before constructing its return value. This can deliberately split eager work from deferred work. The distinction affects error timing and cancellation: eager work has already occurred even if the returned future is never polled.
+
+## What Await Actually Delegates
+
+An await expression polls a child future as part of polling its parent. If the child is ready, the parent receives its output and continues. If the child is pending, the parent normally becomes pending as well, retaining the child and the state needed to resume. Await does not inherently create a thread, spawn an independent task, or introduce parallelism.
+
+Consequently, two awaits written in sequence are sequential with respect to the surrounding control flow. The second child is not necessarily even constructed until the first completes. To make independent operations progress concurrently, some enclosing combinator or task arrangement must poll both. This is concurrency through interleaved progress, which can occur on a single thread.
+
+The following library example separates eager construction from deferred execution. Each function is complete and may be compiled as library code.
+
+```rust
+use std::future::{self, Future};
+
+fn prepare(
+    text: String,
+) -> Result<impl Future<Output = usize>, &'static str> {
+    if text.is_empty() {
+        return Err("empty input");
+    }
+    Ok(async move {
+        future::ready(()).await;
+        text.len()
+    })
+}
+
+async fn deferred_check(text: String) -> Result<usize, &'static str> {
+    if text.is_empty() {
+        return Err("empty input");
+    }
+    Ok(text.len())
+}
+```
+
+`prepare` can return an error before the caller obtains a future. `deferred_check` returns a future whose output is a result; its check happens only when polled. Neither form is universally better. An API should choose based on what it means to accept an operation and which resources should be acquired before scheduling.
+
+The `ready` await in this example does not suspend. An await point is a place where suspension is possible, not a promise that the current poll returns to the executor. A loop containing awaits can still run for a long time if every awaited operation is immediately ready. Cooperative scheduling may require a runtime specific yield mechanism or a deliberate work budget.
+
+## Implementing a Small Future
+
+A future's `poll` method receives a pinned mutable reference and a context containing the current task's waker. It returns `Ready(output)` when complete or `Pending` when the task must wait. If it returns pending and progress can later occur, the design must arrange a wakeup. Returning pending without a wakeup path can strand a task forever.
+
+This deliberately simple future yields once by scheduling its own task and then returning a value on the next poll.
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Wake, Waker};
+
+struct YieldOnce {
+    yielded: bool,
+}
+
+impl Future for YieldOnce {
+    type Output = u32;
+
+    fn poll(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<u32> {
+        if self.yielded {
+            Poll::Ready(99)
+        } else {
+            self.yielded = true;
+            context.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+struct CountWake(AtomicUsize);
+
+impl Wake for CountWake {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn main() {
+    let notifications = Arc::new(CountWake(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&notifications));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(YieldOnce { yielded: false });
+    assert_eq!(future.as_mut().poll(&mut context), Poll::Pending);
+    assert_eq!(notifications.0.load(Ordering::Relaxed), 1);
+    assert_eq!(future.as_mut().poll(&mut context), Poll::Ready(99));
+}
+```
+
+The `bool` state does not depend on a stable address, so this type is `Unpin`. That is why mutating its field through the pinned receiver is straightforward. A wrapper containing an address sensitive child future needs a projection strategy discussed in the next chapter.
+
+The notification counter is not an executor. It records that a wake occurred, and the test manually performs the next poll. A real executor must associate the notification with a runnable task and ensure the task is polled without concurrent mutable access to its future.
+
+## Suspension Determines Stored Resources
+
+Every value retained across suspension affects the future's size, destruction behavior, and auto traits. Retaining a large array can make a future unexpectedly large. Retaining a non `Send` value can prevent migration between executor threads. Retaining a guard can keep a lock or permit held while unrelated work waits.
+
+A useful review technique is to stop at each await and list the live resources. Include references, owned buffers, transaction handles, lock guards, and child futures. Ask which of them must remain alive. A smaller lexical scope can end a temporary's lifetime before the await, making both the intent and the generated state clearer.
+
+The next complete library example demonstrates a future that remains sendable because a non sendable temporary is confined to a synchronous block.
+
+```rust
+use std::future;
+use std::rc::Rc;
+
+fn require_send<T: Send>(_: T) {}
+
+async fn summarize() -> usize {
+    let length = {
+        let local = Rc::new(String::from("temporary"));
+        local.len()
+    };
+    future::ready(()).await;
+    length
+}
+
+fn main() {
+    require_send(summarize());
+}
+```
+
+This pattern is useful when a synchronous library uses local reference counting internally but produces an owned or copied result suitable for asynchronous work. It avoids changing the entire representation solely to satisfy a scheduler's boundary. The scope is also a communication device: future maintainers can see that the local object is intentionally absent from suspended state.
+
+Do not infer the exact future layout from source structure. Compiler optimizations and lowering details are not an ABI contract. Measure size when it matters, and treat size observations as properties of a concrete toolchain and build. The semantic obligations concern lifetimes and behavior, not a promised enum representation.
+
+## Completion and Repeated Polling
+
+After a future returns ready, callers should stop polling it unless its particular contract says otherwise. The general `Future` trait does not require repeated polls after completion to return the same value. A future may panic or otherwise behave unhelpfully, although safe polling must still obey Rust's memory safety rules.
+
+A combinator that polls several children must therefore track which children completed. Accidentally polling a completed child on the next invocation is a state machine bug. The parent may store each result and remove or mark the corresponding child before returning pending for the remaining work.
+
+Similarly, the output is transferred out of the future. If it owns a buffer, that buffer is now the caller's resource. The future cannot casually return the same owned buffer twice. This ownership fact explains why a completed future often has a distinct terminal state rather than behaving like a reusable query.
+
+Fusing a future means adapting it to a defined post completion behavior, commonly remaining pending. That can simplify loops that combine multiple optional operations, but it is an additional abstraction rather than a universal property of all futures.
+
+## Async Does Not Remove Blocking
+
+Ordinary blocking operations remain blocking inside an async function. A filesystem call, synchronous channel receive, CPU intensive loop, or blocking mutex acquisition can occupy the executor thread until it returns. The `async` keyword does not transform arbitrary system calls into readiness driven operations.
+
+This matters most on a single threaded executor, where one blocking operation can stop every other task. On a multithreaded executor, enough blocked tasks can occupy the entire worker pool. Moving blocking work to an appropriate dedicated facility changes scheduling, but the offloaded work's cancellation and shutdown behavior then need their own contract.
+
+The future abstraction is intentionally small. It describes resumable computation and notification. It does not choose a reactor, thread pool, timer service, admission policy, or supervision tree. Keeping those responsibilities distinct helps diagnose whether a failure comes from the future's state machine, the executor's scheduling, or the application's resource protocol.
+
+## Exercises
+
+1. An async function owns a file handle argument, but the caller immediately drops the returned future without polling it. Explain which code runs and what happens to ownership of the handle.
+
+2. A loop awaits an operation that is always immediately ready. Explain why the loop can starve other tasks despite containing an await on every iteration.
+
+3. A future is unexpectedly non `Send`. A diagnostic points to an `Rc` created before an await and used only for a synchronous calculation. Propose a source change that expresses the intended lifetime clearly.
+
+## Reasoned Solutions
+
+1. Constructing the future captures the argument without running the async body. Dropping the future drops the captured handle, so its destructor can release the resource. Statements in the body, including logging or explicit cleanup, never execute. Cleanup that must happen even for unpolled operations belongs in ownership based destruction or in an eager construction stage with a clear contract.
+
+2. Await continues in the same poll when its child is ready. The loop can therefore consume an unbounded amount of work without returning control to the scheduler. Introduce a runtime appropriate yield or process a bounded amount of work before arranging another poll. The scheduling requirement is cooperative progress, not merely the presence of syntax.
+
+3. Put the `Rc` and its synchronous uses in an inner block that produces an owned or copied summary. Await only after that block ends. This makes the non sendable temporary absent from suspended state. If the object actually must remain alive, choose a local executor or redesign its ownership rather than erasing the requirement.
+
+## Further Reading
+
+- [Future](https://doc.rust-lang.org/std/future/trait.Future.html) specifies polling, wakeups, and completion behavior.
+- [Async functions](https://doc.rust-lang.org/reference/items/functions.html#async-functions) explains construction and argument capture.
+- [Async blocks](https://doc.rust-lang.org/reference/expressions/block-expr.html#async-blocks) documents capture and the unspecified generated representation.

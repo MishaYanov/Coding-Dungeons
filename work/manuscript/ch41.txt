@@ -1,0 +1,155 @@
+# Chapter 41 Shipping a Coherent Rust Crate
+
+A crate is more than the code that compiles in the author's preferred configuration. It is a set of public promises: which types downstream code may name, which compiler versions are supported, which feature combinations work, which platforms are tested, and what happens when a dependency changes. These promises are part of the architecture because downstream programs compile against them.
+
+This chapter follows a fictional protocol library named `framecore`. Its central algorithm validates and describes frames. Some users run it in a server with the standard library. Others want the same frame logic in a constrained environment without operating-system services. The goal is to share a coherent semantic core while keeping transport integration and deployment policy outside that core.
+
+The interesting questions are not how to run `cargo new`. They are where a boundary belongs, how a feature changes obligations, and what evidence supports a compatibility claim. Build configuration is executable architecture: a field in a manifest can enable code paths that the ordinary development build never checks.
+
+## Choose Boundaries From Responsibilities
+
+The frame model should own validation rules, lengths, identifiers, and structured protocol errors. A socket adapter should own reads, writes, buffering, and cancellation behavior. A service should own admission control, retries, logging policy, and shutdown. These layers may live in separate crates when independent dependency or platform requirements justify it. They need not become separate crates merely to imitate a diagram.
+
+One advantage of a small protocol core is that it can be tested without a runtime or network. Another is that its public API need not expose runtime-specific error types or buffer implementations. If an adapter returns a framework's concrete buffer in every public method, that framework becomes part of the library's compatibility surface. Replacing it later can affect downstream code even when the protocol semantics stay identical.
+
+Avoid making the lowest layer artificially generic over every imaginable transport. A byte-slice decoder and an owned frame encoder may be sufficient. Adapters can combine them with their own I/O abstractions. A generic transport trait belongs in the core only when the core genuinely needs to drive transport operations and when its error, lifetime, and async contracts are clear.
+
+There is also a cost to splitting crates. Each crate has a manifest, version, feature graph, documentation surface, and release relationship. A private module can provide encapsulation without introducing those responsibilities. Start from dependencies and independent consumers, then decide whether separate compilation and distribution boundaries are useful.
+
+## Features Add Capabilities
+
+Cargo features are combined across a dependency graph. A library should generally design them as additive capabilities so two downstream users can enable different features without making the shared dependency unusable. A feature that silently changes the meaning of an existing operation is harder to compose than one that exposes an additional adapter.
+
+For `framecore`, `std` can enable operating-system adapters. Error types can implement `core::error::Error` in either configuration. The `trace` feature depends on `std` for diagnostics. Frame validation follows the same protocol in every build.
+
+This illustrative manifest is a project configuration excerpt. Its version and compiler baseline are choices for this example, not a claim about the newest available toolchain.
+
+```text
+[package]
+name = "framecore"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[features]
+default = ["std"]
+std = []
+trace = ["std"]
+```
+
+The baseline here would need to be tested before publication. Merely writing `rust-version` does not prove the source and every dependency actually build on that compiler. Our book examples are checked on the locally available compiler identified in the reading guide; that is separate from the hypothetical crate's support policy.
+
+Mutually exclusive features deserve particular caution. Suppose one feature selects backend A and another selects backend B by defining the same public implementation twice. A downstream graph can enable both even if each direct user enables only one. Prefer exposing both adapters under distinct names or choosing a backend through an explicit type or constructor. If exclusivity is unavoidable, document the composition limit and detect it clearly, but recognize that it restricts downstream use.
+
+Defaults are conveniences, not a reliable global off switch. One dependency can request no default features while another enables them. Review the resolved graph when behavior surprises you. The relevant unit is the dependency instance and Cargo's resolver rules, not just the line in one manifest.
+
+## Keep the Semantic Core Small
+
+The following complete library example demonstrates a core that needs neither allocation nor operating-system services. It accepts only lengths that can be represented in a four-byte length field and computes total encoded size with checked arithmetic. Optional tracing does not change the result.
+
+```rust
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LengthError {
+    PayloadTooLarge,
+    AddressSpaceOverflow,
+}
+
+pub fn encoded_length(payload_len: usize)
+    -> Result<usize, LengthError>
+{
+    if u32::try_from(payload_len).is_err() {
+        return Err(LengthError::PayloadTooLarge);
+    }
+    let length = payload_len.checked_add(4)
+        .ok_or(LengthError::AddressSpaceOverflow)?;
+    #[cfg(feature = "trace")]
+    {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "encoded length {length}");
+    }
+    Ok(length)
+}
+```
+
+The two errors are distinct because a payload length may fit the protocol field while header plus payload exceeds the platform's addressable `usize` range. On common wide platforms the second branch is unreachable after the first check, but the source expresses the platform-independent contract. Tests on a wide host alone do not exercise every narrow-target boundary.
+
+`no_std` does not mean no heap, no runtime support of any kind, or suitability for every embedded target. It changes the automatically linked standard-library environment. A library may separately use `alloc` when an allocator is available. Target support also depends on atomic availability, panic strategy, linker setup, and any foreign dependencies. Document the actual requirements rather than using `no_std` as a broad performance or deployment claim.
+
+The trace is best effort. A failed write leaves the length result intact. Writing to standard error can still block. A reusable library can let the application choose the diagnostic sink and timing policy. Test the relevant feature combinations when tracing affects timing or synchronization.
+
+## Public Types Carry Dependency Commitments
+
+If a public function returns a type from another crate, downstream users may need that same crate version to name, construct, or match the result. Two incompatible versions of a dependency define distinct Rust types even when their displayed names look identical. This becomes especially visible in plugin systems, serialization adapters, and public error enums containing foreign error types.
+
+A wrapper can reduce exposure, but it must preserve the operations callers need. Wrapping every useful type behind an opaque handle may force users into awkward conversions or eliminate zero-copy access. Review the boundary from both sides: which dependency details are incidental, and which are intentionally part of the API?
+
+Auto traits also participate in the promise. A future returned by a function may be expected to be `Send`. A public type may currently be `Sync` because of its fields. Adding a non-thread-safe field later can break downstream uses even if no method signature changes. The API chapters explain these implications at the type level; release engineering must actually check them across intended changes.
+
+Error evolution needs the same care. An exhaustive public enum makes adding a variant a source-compatibility concern. A non-exhaustive enum leaves room for additional variants but requires downstream wildcard handling. Hiding all structure in a string is easy to evolve but prevents reliable programmatic recovery. Choose based on expected caller decisions, not only on implementation convenience.
+
+## Build Scripts Cross Another Execution Boundary
+
+A build script runs on the build host and may generate source, probe libraries, or invoke native compilers. The final library may target a different platform. Confusing host and target assumptions can produce generated constants or linker flags that work locally and fail in cross-compilation.
+
+Keep generated output in the designated output directory and make input dependencies explicit. A generator that reads an undeclared schema or environment variable can leave stale output after a change. A generator that embeds the current time can make equivalent builds differ even when source inputs are identical. Reproducibility requires deciding which inputs are legitimate and how they are recorded.
+
+Build dependencies are executable dependencies. A procedural macro and a build script can run code during compilation, before the resulting application starts. Reviewing only runtime dependencies therefore misses part of the supply chain. A smaller dependency set can reduce review and build cost, but rewriting mature functionality locally can introduce its own correctness burden. Evaluate the actual code and maintenance requirements.
+
+Native integration adds another version axis: headers, libraries, target ABI, and compiler flags must agree. A successful Rust type check cannot establish that a linked C library uses the expected structure layout. The FFI chapter's ownership and ABI contracts continue to apply during packaging and deployment.
+
+## Define a Support Matrix With Evidence
+
+A useful continuous integration matrix follows supported claims. If the crate supports the minimum compiler, test it. If it supports no default features, compile and test that configuration. If adapters are optional, exercise each supported adapter and meaningful combinations. If the crate promises multiple targets, include target-specific compilation and runtime tests where execution is available.
+
+Testing only `--all-features` is insufficient. Code excluded by the maximal configuration can contain broken imports or missing bounds. Testing only the default configuration misses optional integrations. At the same time, testing every mathematical subset becomes impractical as features grow. Reduce the configuration space by designing additive features and identify representative combinations from real dependency interactions.
+
+The following command sequence is a starting point for this fictional crate, not a universal complete matrix. A project with foreign libraries, runtime integrations, or platform-specific behavior needs additional checks tied to those promises.
+
+```text
+cargo test --locked
+cargo test --locked --no-default-features
+cargo test --locked --all-features
+cargo check --locked --all-targets
+cargo doc --locked --no-deps
+cargo package --locked
+```
+
+`--locked` asks Cargo to use the recorded dependency resolution rather than updating it as part of the command. This improves repeatability for that resolution, but it does not by itself make the entire build hermetic. Compiler versions, target toolchains, native libraries, environment inputs, and build scripts can still matter.
+
+Package validation catches another class of problems: files present in a development checkout may be absent from the distributed package. Examples may reference a workspace-only path. Generated code may depend on an untracked file. Reviewing and building the actual packaged artifact tests the boundary that users receive.
+
+## Documentation Is Executable API Design
+
+Examples should demonstrate the intended ownership path. If every example clones a buffer before calling the API, investigate whether the API forces unnecessary ownership or whether the example hides an important borrow. If every error is unwrapped, readers cannot see which failures are expected and which are invariant violations.
+
+Document the dimensions that types do not express: cancellation behavior, allocation behavior where promised, ordering, blocking, fairness, panic conditions, and external side effects. Avoid promising exact implementation details unless callers need them. A documented guarantee can become a compatibility obligation even when no compiler checks it.
+
+Rustdoc examples can compile as tests, which helps prevent drift. Compile-fail examples can show forbidden usage, but a test that merely fails for any reason may pass after an unrelated syntax error. Keep rejected examples small and inspect the intended diagnostic category during maintenance. The book's example checks follow this distinction between accepted programs, rejected programs, and nonstandalone sketches.
+
+Finally, release notes should explain behavior changes from the caller's perspective. A new internal data structure matters when it changes latency, allocation, ordering, or requirements. A compiler baseline change matters even if the runtime behavior stays identical. A clear compatibility story is a technical feature because it lets downstream developers make reliable integration decisions.
+
+## Exercises
+
+1. Your library's default feature enables a network adapter. Two downstream dependencies disagree about whether defaults should be enabled. Explain the likely composition and redesign the feature layout if the core must remain usable without networking.
+
+2. A public future becomes non-`Send` after a refactor introduces `Rc` across an await point. Describe a regression check that captures the intended API property without depending on the future's concrete anonymous type.
+
+3. A build script generates protocol constants from a schema file and an environment variable. Specify the declared inputs, generated output location, and cross-compilation considerations.
+
+## Reasoned Solutions
+
+1. One user's request can enable the default feature for the shared dependency, so another user's disabled defaults do not necessarily remove it. Keep the core independent, make networking an explicit additive adapter feature, and avoid changing core validation semantics when networking is enabled. Inspect the resolved feature graph when diagnosing integration behavior.
+
+2. Write a compile-time helper accepting `T: Send` and pass the returned future into it using representative borrowed inputs. The check tests the property callers need while leaving the concrete future opaque. Add separate checks for any intended lifetime constraints; `Send` alone does not imply `'static`.
+
+3. Declare schema and environment changes as rerun triggers, write generated files under `OUT_DIR`, and distinguish host execution from target properties. Use target configuration supplied by the build environment rather than assuming the host's sizes or ABI describe the target. Keep nondeterministic data out of generated protocol constants.
+
+## Further Reading
+
+- [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html) documents feature composition and optional dependencies.
+- [Cargo dependency resolution](https://doc.rust-lang.org/cargo/reference/resolver.html) explains resolution and version identity concerns.
+- [Rust version](https://doc.rust-lang.org/cargo/reference/rust-version.html) documents declaring a compiler support baseline.
+- [Build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html) documents host-side generation and change tracking.
+- [Cargo package](https://doc.rust-lang.org/cargo/commands/cargo-package.html) describes validating the distributable package.

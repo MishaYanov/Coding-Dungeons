@@ -1,0 +1,160 @@
+# Chapter 22 Atomics Require an Ordering Argument
+
+An atomic operation makes a particular memory access indivisible according to the atomic model. It does not make a surrounding algorithm indivisible. Two atomic increments do not form one transaction, and an atomic pointer does not keep its pointee alive. The difficult work is identifying which observations must be ordered and which resources must remain valid while another thread can observe them.
+
+Start an atomic design with a proof written in ordinary language. Identify the state, the thread allowed to change each part, the event that publishes a change, and the observation that authorizes another thread to use it. Then choose orderings that establish those relationships. Beginning with a collection of `Relaxed` operations and adding stronger orderings until tests pass reverses the reasoning process.
+
+## Atomicity and Invariants
+
+Consider counting completed requests. If the count is only a statistic, each request can increment an atomic counter with relaxed ordering. The count must not lose increments, but reading it need not grant access to other request state. Relaxed ordering expresses that limited role.
+
+```rust
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+
+fn main() {
+    let completed = AtomicUsize::new(0);
+    thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                for _ in 0..1_000 {
+                    completed.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        }
+    });
+    assert_eq!(completed.load(Ordering::Relaxed), 4_000);
+}
+```
+
+The scope joins the workers before the final assertion. The counter's increments are atomic, and completion of the scoped threads provides the necessary lifetime and synchronization context for the final observation. The counter is not being used as a publication flag for some separate buffer.
+
+If the counter instead means that request records in another allocation are ready to read, the design changes. The reader needs a relationship between the record writes and its subsequent reads. Atomicity of the count alone does not establish that relationship. An ordering choice is meaningful only in relation to the rest of the accesses.
+
+All accesses must still satisfy Rust's memory model. Mixing conflicting atomic and non atomic accesses without the required synchronization is not a clever optimization. Atomic operations of incompatible sizes over overlapping memory also have constraints. A raw pointer obtained from an atomic does not suspend these rules.
+
+## Publication Through Release and Acquire
+
+A release operation can publish preceding work to an acquire operation that observes the appropriate value through the relevant synchronization relationship. The critical phrase is observes: an acquire load that still sees the old value has not thereby acquired the new publication. In a one shot flag, the reader waits until it sees the published state.
+
+This complete program uses atomic payload storage so that even a weakened version would remain memory safe, while the ordering proof remains visible.
+
+```rust
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread;
+
+fn main() {
+    let payload = AtomicUsize::new(0);
+    let ready = AtomicBool::new(false);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            payload.store(42, Ordering::Relaxed);
+            ready.store(true, Ordering::Release);
+        });
+        scope.spawn(|| {
+            while !ready.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            assert_eq!(payload.load(Ordering::Relaxed), 42);
+        });
+    });
+}
+```
+
+There is one writer and one publication. The payload store is sequenced before the release store. The reader exits its loop only after an acquire load reads the published `true`. The payload read follows that acquisition. These relationships order the payload write before the read. The payload load can be relaxed because the flag carries the inter thread ordering.
+
+If both accesses to `ready` were relaxed, the flag would still be atomic, but the algorithm would lack the required publication edge for the payload observation. It is not enough to say that one source line appears before another in the writer. Source order within one thread and visibility constraints across threads are different pieces of the proof.
+
+The loop is educational, not a general waiting strategy. It consumes CPU while waiting and can perform badly when a producer is descheduled. A condition variable, channel, or appropriate runtime notification primitive is often preferable. Correct ordering does not imply acceptable scheduling behavior.
+
+## Sequential Consistency Has a Specific Scope
+
+`SeqCst` adds a single total order for sequentially consistent operations, consistent with the model's other constraints. It is a useful conservative choice while designing an algorithm, especially when reasoning about multiple atomic locations. It is not a transaction over all memory, and it does not repair dangling pointers, missing ownership, or a logically incomplete state machine.
+
+For example, storing `x = 1` and then `y = 1` as two sequentially consistent operations does not prevent a reader from running between them. A reader can legitimately see a partial domain transition if the algorithm permits that interleaving. To present an all or nothing pair, encode the pair in one suitably supported atomic representation, use a versioned protocol with a correct read algorithm, or use a lock.
+
+Stronger orderings can simplify one part of a proof but should not hide other obligations. A reference count may use carefully chosen orderings for increments and final destruction; replacing them all with `SeqCst` can preserve correctness but does not by itself establish when reclamation is safe. A hand written reference counter also needs to handle overflow, weak references, allocation layout, and races around the last owner.
+
+Orderings are not portable performance estimates. Their cost depends on architecture, compiler lowering, contention, and the surrounding instructions. Measure the workload after correctness is established. A lock can outperform a complicated atomic retry loop under contention while being easier to audit.
+
+## Compare Exchange Is a Conditional Transition
+
+Compare exchange attempts to replace a value only if it still equals an expected value. Failure returns the observed value so that the caller can decide whether to retry. The weak form may fail spuriously, which is convenient for loops that already tolerate retry. The computation inside a retry loop must be safe to repeat.
+
+Here is a bounded permit counter. It illustrates a domain precondition that must be checked against the value actually being changed.
+
+```rust
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn try_take(available: &AtomicUsize) -> bool {
+    let mut current = available.load(Ordering::Relaxed);
+    loop {
+        if current == 0 {
+            return false;
+        }
+        match available.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn main() {
+    let available = AtomicUsize::new(2);
+    assert!(try_take(&available));
+    assert!(try_take(&available));
+    assert!(!try_take(&available));
+    assert_eq!(available.load(Ordering::Relaxed), 0);
+}
+```
+
+Relaxed ordering is sufficient for this counter's stated purpose: deciding whether a numeric permit was obtained. This example does not publish a resource stored elsewhere. If returning a permit also hands off access to a buffer, then the buffer ownership and visibility protocol require additional reasoning. A counter named `available` does not automatically encode that protocol.
+
+Do not perform an external side effect while computing the next value in a retry loop. If a failed compare exchange repeats the computation, it could send duplicate messages, charge twice, or allocate repeatedly. Compute a pure candidate first; perform the committed side effect only after a successful transition, and still consider failure between those two events.
+
+The success and failure orderings describe different paths. A failed compare exchange performs a load rather than the successful replacement, so it cannot have release ordering on failure. The required failure ordering depends on whether the newly observed value authorizes reading published data. Avoid copying a pair of orderings from another algorithm without copying its proof.
+
+## The ABA Problem Is About Identity
+
+A compare exchange compares the represented value. If a location changes from A to B and back to A, a thread holding an old expectation of A may succeed even though an important history occurred. When A is a pointer, the address may even refer to a newly allocated object after the old object was removed and freed. Equal bits need not mean the same logical state.
+
+Generation counters can distinguish some histories, but a finite counter can wrap. A proof needs either a bound that makes wrapping impossible while an old observation remains relevant or a protocol that tolerates wrapping. Calling a large counter practically infinite is a risk assumption, not a mathematical invariant.
+
+Memory reclamation is a separate difficulty. An atomic pointer load does not retain ownership of the allocation. Another thread may remove and free the object before the first thread dereferences it. Acquire ordering can order writes to an object that remains valid; it cannot make freed storage valid again. Hazard pointers, epoch based reclamation, reference counting, and guarded ownership schemes address this problem with different costs and constraints.
+
+This is why a short lock free stack implementation can be much more dangerous than its line count suggests. The pointer update may be correct while allocation lifetime is wrong. Use an established abstraction when possible, and inspect its reclamation model as part of evaluating the API.
+
+## Progress Guarantees Need Their Own Proof
+
+The words nonblocking, lock free, and wait free describe different progress properties. An operation that does not use a mutex may still spin indefinitely. A compare exchange loop can starve one participant while others repeatedly succeed. An allocator or destructor called by an otherwise atomic algorithm may block internally.
+
+State the level at which a progress claim applies. Does at least one thread make progress under contention, or does every operation finish within a bounded number of its own steps? What assumptions are made about scheduling, memory allocation, and stalled participants? Without those details, saying an algorithm is lock free often communicates less than saying exactly what it does when contended.
+
+Contention also affects cache coherence. Many threads incrementing one atomic can force ownership of the same cache line to move repeatedly. Sharding counters and combining them later may improve throughput when exact instantaneous totals are unnecessary. That is a semantic relaxation: readers receive an aggregate snapshot with defined approximation or consistency properties. Performance follows from changing the required behavior, not simply from selecting a weaker ordering.
+
+## Exercises
+
+1. A program writes a payload, sets a relaxed ready flag, and reads the payload after seeing the flag. Explain the missing relationship. Distinguish a payload stored atomically from ordinary unsynchronized memory.
+
+2. A compare exchange retry loop invokes a callback to compute its next value. The callback sends a notification. Explain why a successful final update can still produce several notifications.
+
+3. A shared atomic pointer is loaded with acquire ordering. Another thread removes and frees the allocation. Explain why acquire does not authorize dereferencing the old pointer and name two families of solutions.
+
+## Reasoned Solutions
+
+1. The ready flag lacks a release acquire publication relationship. With atomic payload storage, the program can remain memory safe while observing a result the intended protocol did not allow. With conflicting ordinary memory accesses and no other synchronization, the design can contain a data race and exhibit undefined behavior. Establish ownership and synchronization together rather than treating a flag as an informal promise.
+
+2. The comparison can fail because another thread changed the value, or the weak operation can fail spuriously. The callback can therefore run repeatedly before one update succeeds. Keep retry computation free of externally visible effects. After success, emit an event tied to that committed transition, while accounting for the possibility of interruption before event delivery.
+
+3. Ordering relates accesses; it does not extend allocation lifetime. Reclamation can occur after the load and before dereference. A lock or ownership guard can retain validity, while hazard pointers or epoch based schemes can defer reclamation until readers are no longer exposed. Reference counting is another approach when acquiring a reference is itself made safe by the surrounding protocol.
+
+## Further Reading
+
+- [Atomic memory model](https://doc.rust-lang.org/std/sync/atomic/index.html) defines constraints on atomic and conflicting accesses.
+- [Ordering](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html) specifies the supported memory orderings.
+- [AtomicUsize](https://doc.rust-lang.org/std/sync/atomic/struct.AtomicUsize.html) documents compare exchange success and failure behavior.

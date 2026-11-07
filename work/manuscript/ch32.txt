@@ -1,0 +1,239 @@
+# Chapter 32 Initialization as a State Machine
+
+## Storage can exist before a value exists
+
+Low level code often needs to allocate space before it can construct every value that will occupy it. A foreign function may fill an output record. A collection may reserve capacity and initialize elements gradually. A fixed array constructor may fail after producing only a prefix. These situations require representing storage without pretending that a complete `T` already exists.
+
+`MaybeUninit<T>` provides such storage. A `MaybeUninit<T>` can be valid even when its bytes do not represent a valid initialized `T`. That permission belongs to the wrapper type, not to `T`. Converting to `T`, obtaining a reference to `T`, or running `T`'s destructor requires proof that the appropriate value has actually been established.
+
+An uninitialized integer is not an integer with a random but stable numeric value. Reading uninitialized storage as an ordinary initialized integer violates the required contract. Similarly, a null reference is not an empty reference waiting to be repaired. Types can have validity requirements that apply before any explicit dereference.
+
+The state machine has at least two states: storage without a `T`, and storage containing one valid `T`. More complex structures track which fields or elements have reached the second state. Correct code updates that state alongside every write, read that transfers ownership, replacement, and destruction.
+
+## Write establishes a value without destroying an old one
+
+`MaybeUninit::write` initializes the slot and returns a mutable reference to the newly written value. It does not drop any previous inner value. This makes it suitable for initially empty storage, but writing twice without consuming or dropping the first value can leak resources.
+
+```rust
+use std::mem::MaybeUninit;
+
+fn main() {
+    let mut storage = MaybeUninit::<String>::uninit();
+    storage.write(String::from("prepared"));
+    // SAFETY: write established a valid String and nothing has moved
+    // or dropped that value since initialization.
+    let value = unsafe { storage.assume_init() };
+    assert_eq!(value, "prepared");
+}
+```
+
+`assume_init` consumes the wrapper and returns its initialized value. The unsafe operation asserts a fact the compiler does not track for this wrapper. It does not perform initialization, inspect the bytes for validity, or convert an arbitrary representation into a valid string.
+
+Dropping the wrapper does not drop the inner `T`. That behavior is essential when storage is uninitialized, and it means implementations must track cleanup explicitly after initialization. If the wrapper in the example simply went out of scope after the write, the string allocation would be leaked. The wrapper's validity makes that memory safe, but it does not make it desirable.
+
+The same distinction applies to `assume_init_read`, which reads an initialized value without consuming the wrapper. The caller must account for ownership afterward. Calling it twice on the same owning string would duplicate ownership unless the state machine prevents the second use. `assume_init_drop` destroys an established value but does not automatically record that the slot has become uninitialized.
+
+## Zeroed storage is not universal initialization
+
+Filling bytes with zero is appropriate only when zero bytes form a valid value of the target type and satisfy any additional abstraction invariants. Integers and some simple records can have valid all zero representations. References, nonzero integers, and many enums cannot. Even a representation that satisfies a narrow language validity condition may fail a type's deeper safe method invariants.
+
+Therefore `MaybeUninit::zeroed` does not make `assume_init` universally safe. It provides storage with zeroed contents under its contract. The implementation still needs a type specific proof before interpreting it as `T`. Padding may also have behavior that prevents treating returned object representations as a stable all zero byte array.
+
+For ordinary construction, prefer real constructors and safe array helpers. `Default` is a semantic operation that produces a valid default value; it is not a claim that a type's representation is all zero. A default string is constructed through its type's valid initialization behavior, not through a general memset convention.
+
+When a foreign API specifies zero initialized configuration structures, verify the exact foreign layout and validity rules at that boundary. Use an explicit boundary type rather than assuming an arbitrary Rust struct is suitable. A boolean, enum, pointer, and reserved byte field can each have different requirements.
+
+## A prefix length is an initialization invariant
+
+A common representation stores capacity for `N` values and tracks how many leading elements are initialized. The invariant is that indices below `len` contain valid owned `T` values, while indices from `len` onward are not treated as initialized. The length is therefore part of the memory safety proof, not merely a convenient count.
+
+```rust
+use std::mem::{ManuallyDrop, MaybeUninit};
+
+struct Prefix<T, const N: usize> {
+    storage: [MaybeUninit<T>; N],
+    len: usize,
+}
+
+impl<T, const N: usize> Prefix<T, N> {
+    fn new() -> Self {
+        Self {
+            storage: [const { MaybeUninit::uninit() }; N],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, value: T) -> Result<(), T> {
+        if self.len == N {
+            return Err(value);
+        }
+        self.storage[self.len].write(value);
+        self.len += 1;
+        Ok(())
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        // SAFETY: the previous initialized prefix included this
+        // slot. Decrementing len removes its old drop obligation.
+        Some(unsafe { self.storage[self.len].assume_init_read() })
+    }
+
+    fn as_slice(&self) -> &[T] {
+        // SAFETY: exactly this prefix contains initialized T values.
+        // Array storage is aligned and contiguous, and the returned
+        // shared borrow is tied to this owner.
+        unsafe {
+            std::slice::from_raw_parts(
+                self.storage.as_ptr().cast::<T>(),
+                self.len,
+            )
+        }
+    }
+
+    fn into_array(self) -> Result<[T; N], Self> {
+        if self.len != N {
+            return Err(self);
+        }
+        let owner = ManuallyDrop::new(self);
+        // SAFETY: every element is initialized, array layouts match,
+        // and suppressing owner Drop transfers each value exactly once.
+        let array = unsafe {
+            owner.storage.as_ptr().cast::<[T; N]>().read()
+        };
+        Ok(array)
+    }
+}
+
+impl<T, const N: usize> Drop for Prefix<T, N> {
+    fn drop(&mut self) {
+        while let Some(value) = self.pop() {
+            drop(value);
+        }
+    }
+}
+
+fn main() {
+    let mut prefix = Prefix::<String, 2>::new();
+    assert!(prefix.push(String::from("left")).is_ok());
+    assert_eq!(prefix.as_slice(), &[String::from("left")]);
+    assert!(prefix.push(String::from("right")).is_ok());
+    assert!(prefix.push(String::from("overflow")).is_err());
+    let values = match prefix.into_array() {
+        Ok(values) => values,
+        Err(_) => panic!("expected a complete array"),
+    };
+    assert_eq!(values, [String::from("left"), String::from("right")]);
+}
+```
+
+The write occurs before incrementing `len`. If the counter advanced first and initialization could fail, cleanup might treat an unwritten element as a `T`. The current `write` itself does not call user code, but keeping the order aligned with the invariant makes future changes easier to review.
+
+`pop` decrements the count before transferring ownership out. Once the value is returned, the old storage must no longer be dropped as initialized. Updating the count first ensures the container's cleanup no longer includes that slot. The old bytes may remain physically present, but bytes remaining in memory do not imply an active owned value remains there.
+
+`into_array` requires a complete prefix. It suppresses the original owner's destructor before reading the complete array, transferring each destruction responsibility to the returned array. A partial prefix is returned to the caller as the error value, preserving ownership instead of silently discarding the partially built collection.
+
+This teaching container has a deliberate limitation: if an element destructor panics during its `Drop` loop, the remaining elements can leak. The state update still prevents double destruction, so the representation remains memory safe. A production container may add a cleanup guard that continues dropping remaining elements during unwinding, while considering the consequences of a second panic. Matching a standard collection's full panic behavior requires additional work.
+
+## Partial construction needs partial cleanup
+
+The prefix representation supports fallible construction naturally. If an element builder returns an error or panics, the initialized prefix owns the values already produced. Its destructor drops those values on ordinary unwinding. No completed `[T; N]` is claimed until all elements exist.
+
+A field based struct can use a similar state machine, but the state is a set of initialized fields rather than one prefix count. If the first field owns a string and constructing the second field fails, the first must be dropped or intentionally leaked. A guard with explicit state can provide cleanup. An ordinary temporary struct or tuple of already constructed values is often simpler because safe ownership handles partial evaluation automatically.
+
+This is an important design filter. If the only reason for manual field initialization is aesthetic control over placement, the unsafe complexity may not be justified. If constructing a very large object directly in allocated storage avoids an unacceptable temporary or satisfies a foreign interface, the additional state machine can be worthwhile. Verify the generated behavior and actual requirement before taking on the proof.
+
+Do not create `&mut T` to uninitialized storage and call ordinary methods hoping they will establish its fields. The reference asserts that a valid `T` already exists. Initialization should operate through `MaybeUninit`, raw field addresses, or a safe constructor that owns the required state transition.
+
+## Out parameters must specify success precisely
+
+A foreign function may receive an output pointer and return a status code. The Rust wrapper must know exactly which statuses guarantee full initialization, whether partial initialization requires cleanup, and whether the function writes within the supplied storage. These facts cannot be inferred from a conventional zero return code without an interface contract.
+
+The following local simulation makes the boundary explicit. It is an ordinary Rust function with an unsafe output contract, rather than a claim about any particular foreign library.
+
+```rust
+use std::mem::MaybeUninit;
+
+#[repr(C)]
+#[derive(Debug, PartialEq)]
+struct Statistics {
+    accepted: u64,
+    rejected: u64,
+}
+
+/// # Safety
+/// output must be aligned and writable for one Statistics value.
+/// On true, it is fully initialized. On false, it is untouched.
+unsafe fn fill_statistics(output: *mut Statistics, available: bool) -> bool {
+    if !available {
+        return false;
+    }
+    // SAFETY: the caller supplies writable storage, and write does
+    // not read or drop its previous uninitialized contents.
+    unsafe {
+        output.write(Statistics { accepted: 12, rejected: 3 });
+    }
+    true
+}
+
+fn statistics(available: bool) -> Option<Statistics> {
+    let mut output = MaybeUninit::<Statistics>::uninit();
+    // SAFETY: output supplies aligned writable storage of the exact
+    // required type; no initialized value is being overwritten.
+    let initialized = unsafe {
+        fill_statistics(output.as_mut_ptr(), available)
+    };
+    if initialized {
+        // SAFETY: true is documented to establish every field.
+        Some(unsafe { output.assume_init() })
+    } else {
+        None
+    }
+}
+
+fn main() {
+    assert_eq!(statistics(true), Some(Statistics {
+        accepted: 12, rejected: 3,
+    }));
+    assert_eq!(statistics(false), None);
+}
+```
+
+A real wrapper should also respect the foreign ABI and resource ownership rules. If the output contains pointers, successful initialization may still require validating lengths or adopting resource handles through appropriate constructors. A fully written record is not necessarily semantically valid input for every safe Rust type.
+
+If failure leaves partially initialized owned fields, the status protocol must identify enough state to release them correctly. A foreign cleanup function may be required. Assuming the output is untouched on failure when the library documents partial results can leak resources or cause invalid destruction. Keep that contract next to the wrapper rather than in a distant comment.
+
+## Initialization tracking should survive future edits
+
+The dangerous bugs often arise when a previously infallible step gains user code. A counter update once adjacent to a raw write may become separated by logging, allocation, conversion, or a callback. A panic between them can expose a state the original proof never considered.
+
+Keep initialization state updates close to the operations they describe, and explain why their order is correct. Prefer transitions that leave a conservative state on interruption: undercounting an initialized element can leak, while overcounting an uninitialized element can cause undefined behavior during a read or drop. Both deserve repair, but they differ in severity and in the guards needed to recover.
+
+Testing with destructor counters can reveal leaks and double destruction. A test type can record a unique identifier when dropped, and a fallible builder can fail after each possible prefix length. Include zero capacity, full capacity, failed completion, early pop, and a value type that is not `Copy`. Miri can challenge invalid reference formation and use of uninitialized storage along those tested paths.
+
+`MaybeUninit` is most effective when it is hidden behind a small safe state machine. Callers should manipulate meaningful operations such as push, pop, finish, and abort. They should not need to remember whether one particular slot was written before another method was called. That knowledge belongs in the owner, where it can be checked once and preserved by construction.
+
+## Exercises
+
+1. Why must a prefix container increment its initialized count after writing a new element, and decrement it before returning a popped owner?
+
+2. A programmer calls `assume_init_mut` on an uninitialized object to invoke a method that fills every field. Explain why the plan is invalid before the method body begins.
+
+3. A foreign function returns failure after allocating a string in one output field but before filling a second field. What information must its contract provide for a correct Rust wrapper?
+
+## Reasoned Solutions
+
+1. The count authorizes reads and destruction. Advancing it too early can expose uninitialized storage as a value. Removing a value's count before ownership transfer prevents later cleanup from dropping the old slot again. The physical bytes need not be erased; the logical ownership state must change.
+
+2. Forming the mutable reference already asserts a valid initialized object with appropriate type invariants. A later method cannot retroactively justify that assertion. Write through uninitialized storage APIs or raw field pointers until the complete valid value exists, then form ordinary references.
+
+3. The wrapper must know which fields are initialized on each failure path, who owns any allocated resources, and which cleanup operation can release partial results. A status code alone is insufficient unless it unambiguously specifies that state. Calling `assume_init` on the complete output would be invalid when a field remains uninitialized.
+
+## Further Reading
+
+- [The Rust standard library MaybeUninit documentation](https://doc.rust-lang.org/std/mem/union.MaybeUninit.html) specifies initialization, reads, writes, and destruction obligations.
+- [The Rust standard library ManuallyDrop documentation](https://doc.rust-lang.org/std/mem/struct.ManuallyDrop.html) explains suppression of automatic destruction.
+- [The Rust Reference on destructors](https://doc.rust-lang.org/reference/destructors.html) provides the cleanup model that manual initialization must preserve.

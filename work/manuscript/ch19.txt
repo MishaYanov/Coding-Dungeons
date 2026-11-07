@@ -1,0 +1,163 @@
+# Chapter 19 Thread Boundaries as Type Boundaries
+
+Concurrency changes the meaning of ownership. Inside one thread, a value may contain assumptions about the thread that manipulates it, the references that alias it, or the mechanism that counts its owners. Moving that value to another thread can invalidate those assumptions even though the move itself copies no application data. Rust therefore asks two separate questions: may ownership cross a thread boundary, and may access through a shared reference cross that boundary? The answers are represented by `Send` and `Sync`.
+
+These traits are useful beyond getting a thread example to compile. They let a library publish a concurrency contract without mentioning a particular scheduler. A type can be usable from a worker thread, shareable between workers, neither, or both. Understanding the distinction prevents the common mistake of adding `Arc` and `Mutex` until an error disappears without understanding what the resulting architecture permits.
+
+## Transfer and Shared Access
+
+`T: Send` means transferring ownership of a `T` between threads is safe. It does not mean a particular value is already shared, and it does not promise that methods are lock free. A `String` is `Send`: one thread can finish using it, transfer it, and let another thread mutate or destroy it. Its allocation need not be copied. The ownership handoff ensures that both threads do not independently own the same unique buffer.
+
+`T: Sync` means that a shared reference to `T` can be transferred safely between threads. An equivalent useful formulation is that `&T` is `Send` when `T` is `Sync`. This describes what shared access allows. A shared reference is not automatically a promise of physical immutability because interior mutability exists. It is a promise that the operations available through that reference uphold Rust's safety requirements, including under concurrent use.
+
+The traits are automatically derived from a type's structure where appropriate. A wrapper containing only thread safe components will usually receive the corresponding implementations without annotations. Conversely, adding a field such as `Rc<T>` can remove an auto trait from an otherwise ordinary wrapper. This structural behavior makes private representation relevant to public API compatibility: downstream code may rely on an auto trait even when no explicit implementation appears in source.
+
+Here is a complete program that separates transferring an owned buffer from sharing an immutable one.
+
+```rust
+use std::thread;
+
+fn main() {
+    let owned = String::from("move this allocation");
+    let length = thread::spawn(move || owned.len())
+        .join()
+        .unwrap();
+    assert_eq!(length, 20);
+
+    let values = vec![2_u64, 4, 6, 8];
+    thread::scope(|scope| {
+        let left = scope.spawn(|| values[..2].iter().sum::<u64>());
+        let right = scope.spawn(|| values[2..].iter().sum::<u64>());
+        assert_eq!(left.join().unwrap() + right.join().unwrap(), 20);
+    });
+    assert_eq!(values.len(), 4);
+}
+```
+
+The first closure owns its string. The scoped closures borrow the vector and may read it concurrently. Their bodies finish before the scope returns, so those borrows cannot escape. Automatic joining by the scope may return while thread-local destructors are still running.
+
+## Why Static Is Often Misread
+
+`thread::spawn` requires its closure and result to satisfy `'static` bounds. This does not mean the closure must run forever or that every captured allocation must be leaked. It means the captured value must not contain a borrowed reference whose validity expires too early. An owned `String` ordinarily satisfies `'static` because the string manages its own allocation; dropping it tomorrow or a microsecond later is compatible with that bound.
+
+An owned wrapper can still fail the bound if one of its fields borrows short lived data. Moving `View<'a>` moves the wrapper, not the storage referred to by `'a`. The compiler cannot turn a borrowed resource into an owned resource merely because the closure is marked `move`.
+
+The next example deliberately fails. It is valuable because the closure uses `move` and still cannot satisfy the lifetime requirement.
+
+```rust,compile_fail
+use std::thread;
+
+fn main() {
+    let text = String::from("borrowed");
+    let view = text.as_str();
+    let handle = thread::spawn(move || view.len());
+    assert_eq!(handle.join().unwrap(), 8);
+}
+```
+
+Although this program joins immediately, the signature of `spawn` does not encode a borrowing scope tied to that join. `JoinHandle` can be dropped without joining. A scoped API expresses the stronger guarantee in its types and implementation. Prefer that API when work is naturally nested in a caller's stack frame. Prefer ownership transfer when the job must outlive the call that submits it.
+
+## Send and Sync Are Independent Questions
+
+`Cell<T>` is a useful example of a type that may be moved between threads but cannot be freely shared between them. Its ordinary operations perform unsynchronized interior mutation. If one thread owns a `Cell<u32>`, it can safely use it and later transfer the entire cell to another thread. Sharing `&Cell<u32>` would expose mutation to multiple threads without synchronization, so `Cell<u32>` is not `Sync`.
+
+`Rc<T>` is different. Cloning and dropping its owners update a non atomic reference count. Moving one `Rc` to another thread while another owner remains in the original thread would let both threads modify that count concurrently. Consequently, `Rc` does not become suitable for thread transfer merely because the payload is immutable.
+
+`Arc<T>` makes ownership bookkeeping atomic. It does not automatically make every possible payload safe for concurrent access. `Arc<Cell<u32>>` does not turn cell operations into atomic operations. The allocation is shared and retained correctly, but its contents still have their own concurrency contract. This distinction is a precise instance of a broader rule: a wrapper can protect one invariant without protecting all invariants of the wrapped value.
+
+The following compile time assertions record useful contracts without executing any concurrency.
+
+```rust
+use std::cell::Cell;
+use std::sync::{Arc, Mutex};
+
+fn require_send<T: Send>() {}
+fn require_sync<T: Sync>() {}
+
+fn main() {
+    require_send::<Cell<u32>>();
+    require_send::<String>();
+    require_sync::<String>();
+    require_send::<Arc<Mutex<Vec<u8>>>>();
+    require_sync::<Arc<Mutex<Vec<u8>>>>();
+}
+```
+
+Such assertions are useful in a library's tests when a public type is expected to remain sendable or shareable. They catch accidental changes to the structural contract. They do not establish that application protocols are correct: a perfectly thread safe queue can still deliver work to the wrong account or process a request twice.
+
+## Scoped Parallel Mutation Without Locks
+
+Concurrency does not require shared mutable state. Disjoint mutable regions can be processed concurrently because the exclusivity requirement is satisfied separately for each region. The important operation is proving disjointness before starting the threads.
+
+```rust
+use std::thread;
+
+fn scale(values: &mut [i64], factor: i64) {
+    let middle = values.len() / 2;
+    let (left, right) = values.split_at_mut(middle);
+    thread::scope(|scope| {
+        scope.spawn(move || {
+            for value in left {
+                *value *= factor;
+            }
+        });
+        scope.spawn(move || {
+            for value in right {
+                *value *= factor;
+            }
+        });
+    });
+}
+
+fn main() {
+    let mut values = [1, 2, 3, 4, 5];
+    scale(&mut values, 3);
+    assert_eq!(values, [3, 6, 9, 12, 15]);
+}
+```
+
+`split_at_mut` establishes that the slices do not overlap. Each closure receives its own exclusive reference. The parent cannot access the original slice while these borrows remain active, and the scope waits for the children. No mutex is required because no memory location is accessed by both workers.
+
+This is also an architectural pattern. Partition data into independent ownership domains before selecting synchronization primitives. A batch of records can be divided by index range; independent connections can be owned by independent tasks; a tree operation can split at subtrees. Some divisions introduce load imbalance, but that is a scheduling tradeoff rather than a reason to abandon ownership.
+
+The example creates threads for two tiny slices, which would be a poor performance choice in real computation. Thread creation and joining have costs. The conceptual result is the absence of conflicting access, not a promise of speedup. A reusable worker pool or parallel iterator library may implement the same ownership pattern with better scheduling.
+
+## Unsafe Implementations Are Global Claims
+
+`Send` and `Sync` are unsafe traits because other safe code may rely on their truth. An incorrect implementation can make an otherwise safe program exhibit undefined behavior. The proof must cover all safe operations on the type, including destruction, cloning, callbacks, and error paths.
+
+Imagine a wrapper around a foreign handle. The foreign library says a handle may be used only by its creating thread. The wrapper might contain just an integer identifier, yet that integer's Rust representation does not capture the foreign rule. Automatically receiving `Send` would be wrong for the intended abstraction. Conversely, a raw pointer wrapper might legitimately represent uniquely owned storage that can move between threads, but a manual implementation needs to establish the ownership and destruction rules rather than reason only about the pointer's bit pattern.
+
+Do not implement `Sync` because methods currently take `&self`. That is the very surface through which sharing becomes possible. Inspect interior mutation, foreign operations, retained aliases, and operations performed by `Drop`. Also inspect whether callbacks can reenter the wrapper or expose references beyond a protected interval. A local lock around one method is insufficient when another safe method bypasses that lock.
+
+The proof should be written next to the unsafe implementation in concrete terms. It should identify who owns the resource, how concurrent access is serialized or forbidden, whether thread affinity exists, and why destruction may run on the receiving thread. If these facts are difficult to state, redesigning the wrapper is often more productive than strengthening the comment.
+
+## From Trait Errors to Architecture
+
+A failed `Send` bound is often a compressed design review. Read the chain of causes until reaching the field or borrow that supplies the missing requirement. Ask whether the value actually needs to cross threads. A single threaded executor may be appropriate for thread affine state. A worker may own a resource and accept messages. A copied summary may cross the boundary while the original object stays local.
+
+Adding a mutex changes the access model. Cloning an owned value changes identity and update semantics. Adding `Arc` changes ownership duration and sharing. These are legitimate tools, but they implement different designs. A compiler error is resolved correctly when the chosen design matches the application's required behavior.
+
+For example, a parser with `Rc` nodes may remain on one thread while it produces an owned, compact result for workers. Converting the entire graph to `Arc` would permit a different sharing topology and introduce atomic bookkeeping throughout traversal. Neither choice is universally superior. The important decision is where the ownership boundary belongs.
+
+## Exercises
+
+1. A job contains `String` and `&'a [u8]`. Explain why moving the job into `thread::spawn` may fail even though `String` is `Send`. Give two redesigns with different ownership costs.
+
+2. A cache uses `Arc<RefCell<Vec<u8>>>`. The author argues that `Arc` makes the cache safe for all threads. Identify the invariant protected by `Arc` and the invariant left unprotected. Propose a replacement when concurrent mutation is required.
+
+3. A transformation independently rewrites every element in a large slice. Describe an ownership partition that avoids a lock. State what extra problem remains if some elements take much longer than others.
+
+## Reasoned Solutions
+
+1. `Send` and lifetime validity are separate requirements. The borrowed slice may expire while a spawned thread remains alive. Copying the bytes into `Vec<u8>` gives the job ownership and allocation cost. Using `thread::scope` permits borrowing while requiring every worker body to finish within the scope. A third option is retaining shared ownership of immutable bytes through an appropriate `Arc` allocation.
+
+2. `Arc` protects the shared ownership count and allocation lifetime. `RefCell` performs dynamic borrow checking suitable for a single thread; it does not serialize concurrent payload access. `Arc<Mutex<Vec<u8>>>` provides exclusive access through a guard, although lock duration and panic behavior still need design. If mutation can be isolated to one owner, a channel based cache actor is another design with different latency and failure behavior.
+
+3. Split the slice into disjoint mutable chunks and give each worker one chunk. The borrow checker can verify the partition when it is expressed through safe slice APIs. No worker accesses another worker's elements. Unequal work introduces load imbalance: one worker can dominate total latency. Smaller chunks and dynamic job scheduling can improve balance while preserving exclusive ownership of each chunk.
+
+## Further Reading
+
+- [Send](https://doc.rust-lang.org/std/marker/trait.Send.html) defines the transfer contract and lists important implementations.
+- [Sync](https://doc.rust-lang.org/std/marker/trait.Sync.html) defines the relationship between shared references and thread transfer.
+- [Scoped threads](https://doc.rust-lang.org/std/thread/fn.scope.html) documents the lifetime and joining guarantees used by the partitioning examples.
