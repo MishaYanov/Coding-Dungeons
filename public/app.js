@@ -82,6 +82,7 @@ const state = {
   attempts: [],
   workbenchModes: new Map(),
   hardClears: new Set(),
+  exerciseClears: null,
   creature: null,
   specialEncounter: null,
   drafts: new Map(),
@@ -212,6 +213,7 @@ function applyProgress(progress) {
   state.attempts = list(progress.attempts);
   state.workbenchModes = new Map(list(progress.workbench?.modes).map((mode) => [mode.level, mode]));
   state.hardClears = new Set(list(progress.workbench?.hardClears));
+  state.exerciseClears = Array.isArray(progress.workbench?.clears) ? new Set(progress.workbench.clears) : null;
   $("header-callsign").textContent = state.profile.callsign;
   $("open-profile").title = `Edit ${state.profile.callsign}`;
 }
@@ -488,7 +490,7 @@ function answerFeedback(container, response, data, prompt) {
     container.hidden = true;
     return;
   }
-  if (prompt?.assessment) {
+  if (prompt?.assessment || prompt?.exampleAnswer) {
     const assessment = response.assessment;
     const scored = assessment?.status === "scored" && Number.isInteger(assessment.score);
     container.dataset.verdict = scored ? "correct" : "saved";
@@ -585,6 +587,51 @@ function testFeedback(container, result, data) {
   container.hidden = false;
 }
 
+function renderSuggestion(data, prompt, input, hero) {
+  const panel = make("div", "hint-actions");
+  const show = button("Show code suggestion", "button button-quiet");
+  panel.append(show);
+  show.addEventListener("click", async () => {
+    show.disabled = true;
+    try {
+      const result = await api("/api/workbench/suggestion", {hero, method:"POST", body:{
+        page:data.page, promptId:prompt.id, exerciseId:prompt.exerciseId,
+      }});
+      if (hero !== state.hero || !panel.isConnected || hardMode(data.level)) return;
+      const snippet = text(result.snippet);
+      const apply = button("Apply suggestion", "button button-quiet");
+      const undo = button("Undo suggestion", "button button-quiet");
+      let previous;
+      let applied;
+      undo.hidden = true;
+      apply.addEventListener("click", () => {
+        if (input.disabled || hardMode(data.level)) return;
+        previous = input.value;
+        input.setRangeText(snippet, input.selectionStart, input.selectionEnd, "end");
+        applied = input.value;
+        input.dispatchEvent(new Event("input"));
+        input.focus();
+        apply.disabled = true;
+        undo.hidden = false;
+      });
+      undo.addEventListener("click", () => {
+        if (input.disabled || input.value !== applied) return toast("The draft changed. Use the editor to adjust the snippet.");
+        input.value = previous;
+        input.dispatchEvent(new Event("input"));
+        undo.hidden = true;
+        apply.disabled = false;
+        input.focus();
+      });
+      panel.replaceChildren(make("p", "fine-print", text(result.text)), make("pre", "test-output", snippet), apply, undo);
+    } catch (error) {
+      if (hero === state.hero && panel.isConnected) toast(error.message);
+    } finally {
+      show.disabled = false;
+    }
+  });
+  return panel;
+}
+
 function renderPrompt(data, prompt, index) {
   const hero = state.hero;
   const codePrompt = prompt.type === "code";
@@ -643,6 +690,7 @@ function renderPrompt(data, prompt, index) {
     valueOf = () => input.value;
   }
   form.append(input);
+  if (runnable && prompt.suggestion && !hardMode(data.level)) form.append(renderSuggestion(data, prompt, input, hero));
 
   const criteria = list(prompt.criteria).filter((criterion) => text(criterion));
   if (criteria.length) {
@@ -804,7 +852,7 @@ function renderPrompt(data, prompt, index) {
 
 function renderHints(data) {
   const hero = state.hero;
-  if (!pageNumber(data.level) || (hardMode(data.level) && !enabled(state.levels.get(Number(data.level))?.forge))) return null;
+  if (!pageNumber(data.level) || (hardMode(data.level) && !state.hardClears.has(Number(data.level)))) return null;
   const hints = data.hintKinds === undefined ? ["hint1", "hint2"] : list(data.hintKinds);
   const kinds = hints.filter((kind) => Object.hasOwn(hintLabels, kind));
   if (!kinds.length) return null;
@@ -832,7 +880,7 @@ function renderHints(data) {
       try {
         const result = await api(`/api/levels/${data.level}/reveal/${kind}`, {hero});
         if (number === request && hero === state.hero && panel.isConnected && (!hardMode(data.level)
-            || enabled(state.levels.get(Number(data.level))?.forge))) {
+            || state.hardClears.has(Number(data.level)))) {
           panel.replaceChildren(make("p", "", text(result.text) || "No guide note is available here."));
         }
       } catch (error) {
@@ -907,15 +955,22 @@ function clearGuideEncounters() {
 function updateCreature(animateLevel = null) {
   const encounter = state.creature;
   if (!encounter) return;
-  encounter.update(enabled(state.levels.get(encounter.level)?.forge), {
+  encounter.update(creatureCleared(encounter.level, encounter.exerciseId), {
     animate: !state.loading && encounter.level === animateLevel,
   });
 }
 
+function creatureCleared(level, exerciseId) {
+  if (exerciseId && state.exerciseClears) return state.exerciseClears.has(exerciseId);
+  return enabled(state.levels.get(level)?.forge);
+}
+
 function creatureEncounter(data, quest) {
   const isBoss = data.page === Number(quest.bossPage);
-  const isGraded = list(data.prompts).some((prompt) => prompt.exerciseId);
-  if (!isBoss && !isGraded) return null;
+  const active = list(data.prompts).find((prompt) => prompt.exerciseId);
+  const drill = levelExercises(quest.level)[0];
+  const exerciseId = active?.exerciseId ?? drill?.id;
+  if ((!isBoss && !active) || !exerciseId) return null;
 
   const world = state.world.id;
   const level = Number(quest.level);
@@ -932,21 +987,19 @@ function creatureEncounter(data, quest) {
   canvas.setAttribute("aria-hidden", "true");
   card.append(heading, canvas);
 
-  const drillPage = pageNumber(levelExercises(level)[0]?.page);
-  if (isGraded) {
+  const drillPage = pageNumber(drill?.page);
+  if (active) {
     card.append(make("p", "fine-print", "Pass the challenge tests to defeat this creature."));
   } else if (drillPage) {
     const hint = make("p", "fine-print");
     hint.append(bookLink("Open the graded drill", drillPage), " to defeat this creature.");
     card.append(hint);
-  } else {
-    card.append(make("p", "fine-print", "Save your challenge draft and complete Forge self-review below."));
   }
 
   const renderer = mountCreature(canvas, {
     world,
     level,
-    defeated: enabled(state.levels.get(level)?.forge),
+    defeated: creatureCleared(level, exerciseId),
     onStateChange(phase) {
       card.dataset.state = phase;
       const copy = phase === "ready" ? "Awaiting Forge" : "Defeated · Forge earned";
@@ -954,7 +1007,7 @@ function creatureEncounter(data, quest) {
       if (phase === "defeating" && card.isConnected) card.scrollIntoView({ block: "nearest" });
     },
   });
-  state.creature = { ...renderer, level };
+  state.creature = { ...renderer, level, exerciseId };
   return card;
 }
 
@@ -1058,6 +1111,11 @@ function renderGuide(data) {
   }
   const encounter = quest && creatureEncounter(data, quest);
   if (encounter) content.push(encounter);
+  if (text(data.projectReview)) {
+    const review = section("Project review");
+    review.append(make("p", "fine-print", data.projectReview));
+    content.push(review);
+  }
   const difficulty = renderDifficulty(data);
   if (difficulty) content.push(difficulty);
   list(data.prompts).forEach((prompt, index) => {
@@ -1360,6 +1418,7 @@ async function activateHero(selected, preferredPage = null) {
   state.drafts = readDrafts(state.hero);
   state.workbenchModes = new Map();
   state.hardClears = new Set();
+  state.exerciseClears = null;
   state.progressError = "";
   state.page = null;
   state.loading = false;

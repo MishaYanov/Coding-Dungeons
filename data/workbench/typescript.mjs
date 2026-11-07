@@ -34,11 +34,15 @@ function heavyIds(items: readonly Cargo[]): string[] {
 }`,
     tests: [
       example('heavy-items-in-order', `const cargo = [{ id: 'N', weightKg: 12 }, { id: 'S', weightKg: 3 }, { id: 'E', weightKg: 18 }];
-assert(JSON.stringify(heavyIds(cargo)) === '["N","E"]', 'Keep heavy cargo IDs in input order.');`),
+const ids = heavyIds(cargo);
+assert(Array.isArray(ids) && ids.length === 2 && ids[0] === 'N' && ids[1] === 'E',
+  'Keep heavy cargo IDs in an array in input order.');`),
       sealed('ten-kilo-threshold-and-fresh-output', 'Edges', `const items = Object.freeze([
   Object.freeze({ id: 'under', weightKg: 9.9 }), Object.freeze({ id: 'edge', weightKg: 10 }),
 ]);
-assert(JSON.stringify(heavyIds(items)) === '["edge"]');
+const result = heavyIds(items);
+assert(Array.isArray(result) && result.length === 1 && result[0] === 'edge');
+assert(result !== heavyIds(items));
 const first = heavyIds([]);
 assert(Array.isArray(first) && first.length === 0 && first !== heavyIds([]));`),
     ],
@@ -82,14 +86,17 @@ canUnload({ kind: 'assigned', dock: 'N' }, fixedDocks);` }],
 }`,
     tests: [
       example('label-nonnegative-weights', `const result = labelMatching([3, -1, 0], weight => weight + ' kg');
-assert(JSON.stringify(result) === '["3 kg","0 kg"]', 'Call the labeler for the retained weights in order.');`),
+assert(Array.isArray(result) && result.length === 2 && result[0] === '3 kg' && result[1] === '0 kg',
+  'Return an array with labels for the retained weights in order.');`),
       sealed('callback-count-and-nan', 'Callbacks', `const calls = [];
 const result = labelMatching(Object.freeze([NaN, -5, 0, 2, -1, 2]), weight => {
   calls.push(weight);
   return String(weight);
 });
-assert(JSON.stringify(calls) === '[0,2,2]' && JSON.stringify(result) === '["0","2","2"]');
-assert(labelMatching([], () => { throw new Error('unexpected call'); }).length === 0);`),
+assert(calls.length === 3 && calls[0] === 0 && calls[1] === 2 && calls[2] === 2);
+assert(Array.isArray(result) && result.length === 3 && result[0] === '0' && result[1] === '2' && result[2] === '2');
+const empty = labelMatching([], () => { throw new Error('unexpected call'); });
+assert(Array.isArray(empty) && empty.length === 0);`),
     ],
     typeTests: [{ id: 'label-callback-type', code: `const fixedWeights: readonly number[] = [1, 3];
 const matchingLabels: string[] = labelMatching(fixedWeights, weight => weight.toFixed(1));
@@ -115,6 +122,7 @@ function readDockStatus(raw: string): DockStatus | undefined {
 }`,
     tests: [
       example('decode-closed-dock-zero', `const result = readDockStatus('{"dock":0,"open":false}');
+assert(result !== null && typeof result === 'object' && !Array.isArray(result), 'Return a dock status record.');
 assert(result?.dock === 0 && result.open === false, 'Dock zero and a closed status are valid values.');`),
       sealed('reject-malformed-manifests', 'Validation', `for (const raw of [
   '{', 'null', '[]', 'true', '1', '{}', '{"dock":0}', '{"open":false}', '{"dock":"0","open":false}',
@@ -174,6 +182,7 @@ export function decide(destination: string): Decision {
 }`,
     tests: [
       example('route-north', `const result = submission.decide('north');
+assert(result !== null && typeof result === 'object' && !Array.isArray(result));
 assert(result.kind === 'route' && result.dock === 1, 'North uses dock one.');`),
       sealed('normalized-routes-and-invalid', 'Validation', String.raw`for (const [name, dock] of [[' SOUTH ', 2], ['\tNoRtH\n', 1]]) {
   const result = submission.decide(name);
@@ -203,10 +212,15 @@ const invalidShape: Decision = { kind: 'route' };` }],
 }`,
     tests: [
       example('pluck-capacity', `const docks = [{ id: 'N', capacity: 24 }, { id: 'S', capacity: 12 }];
-assert(JSON.stringify(pluck(docks, 'capacity')) === '[24,12]', 'Read each selected property in input order.');`),
+const values = pluck(docks, 'capacity');
+assert(Array.isArray(values) && values.length === 2 && values[0] === 24 && values[1] === 12,
+  'Read each selected property into an array in input order.');`),
       sealed('supports-multiple-keys-and-empty', 'Edges', `const docks = Object.freeze([{ id: 'N', capacity: 0 }, { id: 'S', capacity: 3 }]);
-assert(JSON.stringify(pluck(docks, 'id')) === '["N","S"]');
-assert(JSON.stringify(pluck(docks, 'capacity')) === '[0,3]');
+const ids = pluck(docks, 'id');
+assert(Array.isArray(ids) && ids.length === 2 && ids[0] === 'N' && ids[1] === 'S');
+const values = pluck(docks, 'capacity');
+assert(Array.isArray(values) && values.length === 2 && values[0] === 0 && values[1] === 3);
+assert(values !== pluck(docks, 'capacity'));
 const empty = pluck([], 'id');
 assert(Array.isArray(empty) && empty.length === 0 && empty !== pluck([], 'id'));`),
     ],
@@ -233,6 +247,7 @@ function applyPatch(dock: Dock, patch: DockPatch): Dock {
 }`,
     tests: [
       example('patch-open-only', `const next = applyPatch({ id: 'N', capacity: 24, open: true }, { open: false });
+assert(next !== null && typeof next === 'object' && !Array.isArray(next));
 assert(next.id === 'N' && next.capacity === 24 && next.open === false, 'Keep omitted fields and preserve false.');`),
       sealed('preserve-zero-and-id', 'Validation', `const original = { id: 'E', capacity: 8, open: false };
 const next = applyPatch(original, { id: 'replace', capacity: 0 });
@@ -272,6 +287,7 @@ function advance(job: Job): Job {
 }`,
     tests: [
       example('start-queued-job', `const result = advance({ state: 'queued', id: 'J-2' });
+assert(result !== null && typeof result === 'object' && !Array.isArray(result));
 assert(result.state === 'running' && result.id === 'J-2', 'A queued job starts running.');`),
       sealed('terminal-states-keep-data', 'States', `const cancelled = advance({ state: 'cancelled', id: 'J-7', reason: 'Weather' });
 assert(cancelled.state === 'cancelled' && cancelled.id === 'J-7' && cancelled.reason === 'Weather');
@@ -337,8 +353,11 @@ async function probeAll(docks: readonly string[], query: (dock: string) => Promi
   }));
 }`,
     tests: [
-      example('open-and-closed-docks', `const result = await probeAll(['N', 'S'], async dock => dock === 'N');
-assert(result.length === 2 && result[0].dock === 'N' && result[0].ok === true && result[0].open === true);
+      example('open-and-closed-docks', `const pending = probeAll(['N', 'S'], async dock => dock === 'N');
+assert(pending instanceof Promise, 'Return a promise for the probe results.');
+const result = await pending;
+assert(Array.isArray(result) && result.length === 2, 'Return an array with one result per dock.');
+assert(result[0].dock === 'N' && result[0].ok === true && result[0].open === true);
 assert(result[1].dock === 'S' && result[1].ok === true && result[1].open === false,
   'A closed dock is still a successful probe.');`),
       sealed('mixed-errors-preserve-order', 'Errors', `const called = [];
@@ -350,7 +369,8 @@ const result = await probeAll(Object.freeze(['slow', 'sync', 'reject', 'last']),
   return Promise.resolve(true);
 });
 assert(called.length === 4 && new Set(called).size === 4);
-assert(JSON.stringify(result.map(probe => probe.dock)) === '["slow","sync","reject","last"]');
+assert(Array.isArray(result) && result.length === 4);
+assert(result[0].dock === 'slow' && result[1].dock === 'sync' && result[2].dock === 'reject' && result[3].dock === 'last');
 assert(result[0].ok === true && result[0].open === false && result[3].ok === true && result[3].open === true);
 assert(result[1].ok === false && typeof result[1].reason === 'string');
 assert(result[2].ok === false && typeof result[2].reason === 'string');`),
@@ -417,6 +437,7 @@ function handle(value: unknown, seen: Map<string, Destination>): Decision {
     tests: [
       example('route-first-command', `const seen = new Map();
 const result = handle({ id: ' A ', to: 'north' }, seen);
+assert(result !== null && typeof result === 'object' && !Array.isArray(result));
 assert(result.kind === 'route' && result.dock === 1, 'Route the first north command to dock one.');
 assert(seen.size === 1 && seen.get('A') === 'north', 'Store the normalized ID in the supplied map.');`),
       sealed('deduplicate-and-conflict', 'State', `const seen = new Map([['A', 'north']]);

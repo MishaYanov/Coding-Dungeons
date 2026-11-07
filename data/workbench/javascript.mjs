@@ -10,12 +10,16 @@ export default [
 }`,
     tests: [
       example('normalize-name', `const badge = makeBadge('  Jo ');
+assert(badge !== null && typeof badge === 'object' && !Array.isArray(badge), 'Return a badge record.');
+assert(Object.keys(badge).sort().join(',') === 'name,visits');
 assert(badge.name === 'JO' && badge.visits === 0, 'Expected a badge named JO with zero visits.');`),
       sealed('fresh-badges', 'Identity', `const first = makeBadge('Jo');
 const second = makeBadge('Jo');
+assert([first, second].every(badge => badge !== null && typeof badge === 'object' && !Array.isArray(badge)));
 first.visits++;
 assert(first !== second && first.visits === 1 && second.visits === 0);`),
       sealed('blank-name', 'Edges', `const badge = makeBadge('  ');
+assert(badge !== null && typeof badge === 'object' && !Array.isArray(badge));
 assert(badge.name === '' && badge.visits === 0 && Object.keys(badge).sort().join(',') === 'name,visits');`),
     ],
   },
@@ -48,11 +52,15 @@ assert(readLimit('0x10', 1) === 16 && readLimit('1e2', 1) === 100);`),
 }`,
     tests: [
       example('matching-order', `const input = [{ id: 'a', quantity: 2 }, { id: 'b', quantity: 8 }, { id: 'a', quantity: 4 }];
-assert(JSON.stringify(quantitiesFor(input, 'a')) === '[2,4]', 'Collect matching quantities in input order.');`),
+const result = quantitiesFor(input, 'a');
+assert(Array.isArray(result) && result.length === 2 && result[0] === 2 && result[1] === 4,
+  'Collect matching quantities in an array in input order.');`),
       sealed('keeps-zero', 'Edges', `const input = Object.freeze([
   Object.freeze({ id: 'a', quantity: 0 }), Object.freeze({ id: 'a', quantity: 5 }),
 ]);
-assert(JSON.stringify(quantitiesFor(input, 'a')) === '[0,5]');`),
+const result = quantitiesFor(input, 'a');
+assert(Array.isArray(result) && result.length === 2 && result[0] === 0 && result[1] === 5);
+assert(result !== quantitiesFor(input, 'a'));`),
       sealed('fresh-no-match', 'Identity', `const input = [{ id: 'not-matched', quantity: 6 }];
 const first = quantitiesFor(input, 'other');
 const second = quantitiesFor(input, 'other');
@@ -89,6 +97,8 @@ assert(shippingCents(5001, 'standard') === 0 && shippingCents(0) === 500);`),
 }`,
     tests: [
       example('unfinished-only', `const summary = pendingSummary([{ done: true, minutes: 100 }, { done: false, minutes: 7 }]);
+assert(summary !== null && typeof summary === 'object' && !Array.isArray(summary), 'Return a summary record.');
+assert(Object.keys(summary).sort().join(',') === 'count,minutes');
 assert(summary.count === 1 && summary.minutes === 7, 'Only unfinished tasks contribute to the totals.');`),
       sealed('counts-zero-minutes', 'Edges', `const summary = pendingSummary([
   { done: false, minutes: 0 }, { done: false, minutes: 13 }, { done: true, minutes: 2 },
@@ -112,6 +122,7 @@ assert(summary.count === 2 && summary.minutes === 13);`),
 }`,
     tests: [
       example('decode-valid-item', `const item = decodeItem('{"id":"  crates  ","count":0}');
+assert(item !== null && typeof item === 'object' && !Array.isArray(item), 'Return a decoded item record.');
 assert(item?.id === 'crates' && item.count === 0, 'Trim the ID and accept zero.');`),
       sealed('reject-invalid-shapes', 'Validation', `for (const raw of [
   'null', '[]', '[{"id":"dock","count":1}]', '42', '"x"', '{}', '{"id":"x"}', '{"count":2}',
@@ -121,6 +132,7 @@ assert(item?.id === 'crates' && item.count === 0, 'Trim the ID and accept zero.'
       sealed('project-exact-fields', 'Shape', `const raw = '{"count":1,"id":"Cargo","extra":true}';
 const first = decodeItem(raw);
 const second = decodeItem(raw);
+assert(first !== null && typeof first === 'object' && !Array.isArray(first));
 assert(first !== second && first.id === 'Cargo' && first.count === 1);
 assert(Object.keys(first).sort().join(',') === 'count,id');`),
     ],
@@ -141,6 +153,7 @@ assert(Object.keys(first).sort().join(',') === 'count,id');`),
     tests: [
       example('zero-and-syntax-error', `const zero = parseCount('0');
 const broken = parseCount('{');
+assert([zero, broken].every(result => result !== null && typeof result === 'object' && !Array.isArray(result)));
 assert(zero.ok === true && zero.value === 0, 'Valid JSON zero is a valid count.');
 assert(broken.ok === false && broken.reason === 'syntax', 'Malformed JSON is a syntax error.');`),
       sealed('rejects-count-shapes', 'Validation', `for (const raw of ['-1', '1.5', '"2"', 'null', 'true', '[2]', '{}']) {
@@ -168,6 +181,7 @@ assert(parseCount('2.0').value === 2 && parseCount('1e2').value === 100);`),
 }`,
     tests: [
       example('issues-in-order', `const dispenser = makeTicketDispenser('LAB');
+assert(dispenser !== null && typeof dispenser === 'object' && !Array.isArray(dispenser), 'Return a dispenser object.');
 assert(dispenser.issued() === 0 && dispenser.next() === 'LAB-1' && dispenser.next() === 'LAB-2',
   'A new dispenser starts at zero and numbers tickets from one.');
 assert(dispenser.issued() === 2);`),
@@ -187,6 +201,8 @@ assert(third.next() === 'P-1' && third.issued() === 1 && third.issued() === 1);`
     tests: [
       example('copy-theme-path', `const profile = { name: 'Jo', settings: { theme: 'light', zoom: 2 }, tags: ['captain'] };
 const result = setTheme(profile, 'dark');
+assert(result !== null && typeof result === 'object' && !Array.isArray(result));
+assert(result.settings !== null && typeof result.settings === 'object' && !Array.isArray(result.settings));
 assert(result.settings.theme === 'dark' && profile.settings.theme === 'light', 'Change the returned theme only.');
 assert(result.settings.zoom === 2 && result.name === 'Jo');`),
       sealed('shares-only-untouched-data', 'Identity', `const tags = Object.freeze(['a']);
@@ -208,17 +224,22 @@ assert(result.active === false && result.settings.locale === 'en' && profile.set
       example('numeric-order', `const input = [
   { name: 'Nia', score: 2, active: true }, { name: 'Jo', score: 10, active: true },
 ];
-assert(JSON.stringify(leaderboard(input)) === '["Jo","Nia"]', 'Sort active players by numeric score, highest first.');`),
+const result = leaderboard(input);
+assert(Array.isArray(result) && result.length === 2 && result[0] === 'Jo' && result[1] === 'Nia',
+  'Return an array of active names ordered by numeric score, highest first.');`),
       sealed('stable-ties-and-active-flag', 'Ordering', `const players = Object.freeze([
   Object.freeze({ name: 'Zed', score: 9, active: true }), Object.freeze({ name: 'Out', score: 90, active: false }),
   Object.freeze({ name: 'Ari', score: 9, active: true }), Object.freeze({ name: 'Truthy', score: 90, active: 1 }),
   Object.freeze({ name: 'Neg', score: -4, active: true }),
 ]);
-assert(JSON.stringify(leaderboard(players)) === '["Zed","Ari","Neg"]');
+const result = leaderboard(players);
+assert(Array.isArray(result) && result.length === 3 && result[0] === 'Zed' && result[1] === 'Ari' && result[2] === 'Neg');
+assert(result !== leaderboard(players));
 assert(players[0].name === 'Zed' && players[1].name === 'Out');`),
       sealed('empty-rankings', 'Edges', `const empty = leaderboard([]);
 assert(Array.isArray(empty) && empty.length === 0 && empty !== leaderboard([]));
-assert(leaderboard([{ name: 'Out', score: 9, active: false }]).length === 0);`),
+const inactive = leaderboard([{ name: 'Out', score: 9, active: false }]);
+assert(Array.isArray(inactive) && inactive.length === 0);`),
     ],
   },
   {
@@ -227,22 +248,28 @@ assert(leaderboard([{ name: 'Out', score: 9, active: false }]).length === 0);`),
   return Promise.all(ids.map(id => load(id)));
 }`,
     tests: [
-      example('collect-values', `const values = await loadInOrder([2, 1], async id => id * 10);
-assert(JSON.stringify(values) === '[20,10]', 'Return values in input order.');`),
+      example('collect-values', `const pending = loadInOrder([2, 1], async id => id * 10);
+assert(pending instanceof Promise, 'Return a promise for the loaded values.');
+const values = await pending;
+assert(Array.isArray(values) && values.length === 2 && values[0] === 20 && values[1] === 10,
+  'Return an array of values in input order.');`),
       sealed('starts-before-await-and-stable-results', 'Concurrency', `const jobs = [];
 const outcome = loadInOrder([2, 1, 2], id => new Promise(resolve => jobs.push({ id, resolve })));
+assert(outcome instanceof Promise);
 for (let turn = 0; turn < 8; turn++) await Promise.resolve();
-assert(JSON.stringify(jobs.map(job => job.id)) === '[2,1,2]');
+assert(jobs.length === 3 && jobs[0].id === 2 && jobs[1].id === 1 && jobs[2].id === 2);
 jobs[2].resolve('third');
 jobs[1].resolve('second');
 jobs[0].resolve('first');
-assert(JSON.stringify(await outcome) === '["first","second","third"]');`),
+const values = await outcome;
+assert(Array.isArray(values) && values.length === 3 && values[0] === 'first' && values[1] === 'second' && values[2] === 'third');`),
       sealed('propagates-rejection', 'Errors', `const error = new Error('load failed');
 let rejection;
 try { await loadInOrder([0, 1], id => id ? Promise.reject(error) : Promise.resolve(7)); }
 catch (reason) { rejection = reason; }
 assert(rejection === error);
-assert(JSON.stringify(await loadInOrder([], () => { throw error; })) === '[]');`),
+const empty = await loadInOrder([], () => { throw error; });
+assert(Array.isArray(empty) && empty.length === 0);`),
     ],
   },
   {
@@ -264,7 +291,9 @@ assert(JSON.stringify(await loadInOrder([], () => { throw error; })) === '[]');`
     tests: [
       example('publish-success', `const messages = [];
 const run = makeLatest(async query => query.toUpperCase(), result => messages.push(result));
-await run('gull');
+const pending = run('gull');
+assert(pending instanceof Promise, 'Each run returns a promise.');
+await pending;
 assert(messages.length === 1 && messages[0].ok === true && messages[0].value === 'GULL',
   'The current successful run should publish its value.');`),
       sealed('same-query-race', 'Race Conditions', `const pending = [], messages = [];
@@ -321,7 +350,7 @@ const ledger = { total: 5, add(amount) {
 const record = makeRecorder(ledger);
 assert(amounts.length === 0);
 assert(record.call({ total: 90 }, 0) === 5 && record(-2) === 3);
-assert(JSON.stringify(amounts) === '[0,-2]');`),
+assert(amounts.length === 2 && amounts[0] === 0 && amounts[1] === -2);`),
     ],
   },
   {
@@ -346,8 +375,11 @@ assert(JSON.stringify(amounts) === '[0,-2]');`),
 }`,
     tests: [
       example('success-and-failure-results', `const failure = new Error('broken');
-const result = await runQueue([async () => 'first', () => { throw failure; }, async () => 'last'], 1);
-assert(result.length === 3 && result[0].ok === true && result[0].value === 'first');
+const pending = runQueue([async () => 'first', () => { throw failure; }, async () => 'last'], 1);
+assert(pending instanceof Promise, 'Return a promise for the queue results.');
+const result = await pending;
+assert(Array.isArray(result) && result.length === 3, 'Return one array entry per task.');
+assert(result[0].ok === true && result[0].value === 'first');
 assert(result[1].ok === false && result[1].error === failure, 'Keep the failed task in its original slot.');
 assert(result[2].ok === true && result[2].value === 'last', 'A failure must not stop later tasks.');`),
       sealed('bounded-concurrency-and-input-order', 'Concurrency', `const starts = [];
@@ -372,14 +404,17 @@ for (let completed = 0; completed < tasks.length; completed++) {
 }
 const result = await work;
 assert(starts.length === 4 && new Set(starts).size === 4);
-assert(result.length === 4 && result[2].ok === false && result[2].error === failure);
+assert(Array.isArray(result) && result.length === 4 && result[2].ok === false && result[2].error === failure);
 for (const index of [0, 1, 3]) assert(result[index].ok === true && result[index].value === 'value-' + index);`),
       sealed('invalid-limits-and-empty-queue', 'Errors', `for (const limit of [0, -1, 1.5, NaN, Infinity]) {
+  const pending = runQueue([], limit);
+  assert(pending instanceof Promise);
   let error;
-  try { await runQueue([], limit); } catch (failure) { error = failure; }
+  try { await pending; } catch (failure) { error = failure; }
   assert(error instanceof RangeError);
 }
-assert(JSON.stringify(await runQueue([], 3)) === '[]');`),
+const empty = await runQueue([], 3);
+assert(Array.isArray(empty) && empty.length === 0);`),
     ],
   },
 ];

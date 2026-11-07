@@ -2,7 +2,7 @@
 
 Play through four programming books in a local game reader. Read the book on the left, then use the Game Master on the right for quizzes, coding challenges, hints, and debriefs. Your character sheet tracks XP, skill levels, and path progress.
 
-Challenge pages have a creature from their world. Passing a graded exercise or completing a guided Forge self-review defeats it, and your hero's save keeps the result.
+Open **Code Workbench** on a graded challenge. Run Examples to practice, then Submit solution to run the required suite. Passing the full suite defeats the creature and saves Forge progress. Choose Hard Mode to lock hints, suggestions, and example answers for the encounter and earn an unaided clear. Project review pages keep the book's design work alongside the executable drills.
 
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
@@ -13,7 +13,11 @@ The World Map also links to special encounters. Break the Ironbound Scarab's thr
 | 3 · Rust | 42 | Ownership, API design, concurrency, unsafe Rust, and systems design |
 | 4 · Go | 14 | Foundations, interfaces, error handling, cancellation, and worker pools |
 
-## Play locally
+## Windows desktop
+
+Run `CodingDungeonsSetup.exe` and open **Coding Dungeons** from Start. The packaged app opens its own window and keeps SQLite saves in per-user app data. The Help menu provides runtime diagnostics and save import and export. The desktop build includes the local GM model and can grade written questions with reviewed rubrics. The Go and Rust runners become available after the Windows isolation probe passes.
+
+## Browser development
 
 Install Node.js 24 or newer, then run these commands from the project folder.
 
@@ -26,7 +30,7 @@ Open [the reader](http://127.0.0.1:4173/), choose a world, and create or load a 
 
 Heroes and answers are saved in local SQLite databases under `state/`. The reader includes built book assets, so starting it requires no PDF build.
 
-JavaScript, TypeScript, and Go challenges use guided review. Rust also offers automated grading with a local Linux Docker engine and the `rust:1.99.1-slim-bookworm` image. See [the local setup guide](README.txt) for details.
+JavaScript and TypeScript grade locally in the browser build's Node engine. Rust can also use a local Linux Docker engine and the `rust:1.99.1-slim-bookworm` image in that build. Go uses the staged Windows sandbox. For optional developer model paths, see [.env.example](.env.example).
 
 ## Develop
 
@@ -37,6 +41,8 @@ npm run test:browser
 npm run test:book
 ```
 
-The book test runs the Rust examples with the toolchain pinned in `rust-toolchain.toml`. It needs Python 3 and a host linker. GitHub Actions runs the test suites and validates the book assets on Windows.
+The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go reference checks use Go 1.25.1. See the [standalone app PRD](docs/CODING-DUNGEONS-PRD.md) for the release test matrix.
+
+On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1`. Stage the native toolchains using [the native runner build instructions](native/README.md). Then run `npm run desktop:make`. The setup is under `out/make/squirrel.windows/x64/`. Runtime files and generated installers stay outside Git.
 
 See [book sources and rebuild instructions](docs/BOOK-BUILD.md), [the four-world audit](docs/BOOK-AUDIT.md), and [findings from the follow-up review](docs/REVIEW-FINDINGS.md).

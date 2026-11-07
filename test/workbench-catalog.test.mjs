@@ -64,6 +64,51 @@ function parseDockId(value: unknown): DockId | undefined {
   return typeof value === 'string' && /^D-[0-9]{2}$/.test(value) ? value : undefined;
 }`,
   },
+  {
+    id: 'js-make-badge', language: 'javascript', caseId: 'normalize-name',
+    source: `function makeBadge(rawName) {
+  return Object.assign([], { name: rawName.trim().toUpperCase(), visits: 0 });
+}`,
+  },
+  {
+    id: 'js-leaderboard', language: 'javascript', caseId: 'numeric-order',
+    source: `function leaderboard(players) {
+  const names = players.filter(p => p.active === true).sort((a, b) => b.score - a.score).map(p => p.name);
+  return names.length ? { toJSON() { return names; } } : [];
+}`,
+  },
+  {
+    id: 'js-run-queue', language: 'javascript', caseId: 'success-and-failure-results',
+    source: `async function runQueue(tasks, limit) {
+  if (!Number.isInteger(limit) || limit < 1) throw new RangeError('Invalid limit');
+  const results = [];
+  for (const task of tasks) {
+    try { results.push({ ok: true, value: await task() }); }
+    catch (error) { results.push({ ok: false, error }); }
+  }
+  return results.length ? { ...results, length: results.length } : [];
+}`,
+  },
+  {
+    id: 'ts-heavy-ids', language: 'typescript', caseId: 'heavy-items-in-order',
+    source: `type Cargo = { readonly id: string; readonly weightKg: number };
+function heavyIds(items: readonly Cargo[]): string[] {
+  const ids = items.filter(item => item.weightKg >= 10).map(item => item.id);
+  return ids.length ? { toJSON() { return ids; } } as unknown as string[] : [];
+}`,
+  },
+  {
+    id: 'ts-probe-all', language: 'typescript', caseId: 'open-and-closed-docks',
+    source: `type Probe = { dock: string; ok: true; open: boolean } | { dock: string; ok: false; reason: string };
+async function probeAll(docks: readonly string[], query: (dock: string) => Promise<boolean>): Promise<Probe[]> {
+  const results: Probe[] = [];
+  for (const dock of docks) {
+    try { results.push({ dock, ok: true, open: await query(dock) }); }
+    catch { results.push({ dock, ok: false, reason: 'Unavailable' }); }
+  }
+  return results.length ? Object.assign({length: results.length, map: results.map.bind(results)}, results) as unknown as Probe[] : [];
+}`,
+  },
 ];
 
 for (const { id, language, caseId, source } of mutants) {

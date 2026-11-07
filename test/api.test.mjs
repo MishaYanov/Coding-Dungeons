@@ -220,6 +220,7 @@ test('Code Workbench runs public examples without victory, then saves a full cle
   const body = {page, promptId:prompt.id, exerciseId:exercise.id, code};
 
   await request(`/api/workbench/${level}/mode`, {headers, hero, method:'PATCH', body:{mode:'hard'}});
+  await request('/api/workbench/suggestion', {...requestOptions, body, status:403});
   const {payload:examples} = await request('/api/grade', {...requestOptions, body:{...body, purpose:'examples'}});
   assert.equal(examples.verdict, 'pass');
   assert.equal(examples.newClear, false);
@@ -242,6 +243,47 @@ test('Code Workbench runs public examples without victory, then saves a full cle
   const {payload:won} = await request('/api/progress', {headers, hero});
   assert.equal(won.levels[0].forge, true);
   assert.deepEqual(won.workbench.hardClears, [level]);
+});
+
+test('an authored suggestion is fetched explicitly and marks aid disclosure', async () => {
+  const headers = {'X-Ferrum-World':'javascript'};
+  const {payload:{hero}} = await request('/api/heroes', {method:'POST', headers, body:{name:'Suggestion Scout'}, status:201});
+  const {payload:{quests:[quest]}} = await request('/api/campaign', {headers});
+  const {payload:page} = await request(`/api/pages/${quest.bossPage}`, {headers});
+  const prompt = page.prompts.find(item => item.exerciseId);
+  assert.equal(prompt.suggestion, true);
+  const body = {page:page.page, promptId:prompt.id, exerciseId:prompt.exerciseId};
+  const {payload:suggestion} = await request('/api/workbench/suggestion', {method:'POST', headers, hero, body});
+  assert.match(suggestion.snippet, /trim\(\)/);
+  const {payload:saved} = await request('/api/progress', {headers, hero});
+  assert.deepEqual(saved.workbench.modes, [{level:1, mode:'guided', assisted:true}]);
+});
+
+test('a prior Guided victory does not unlock hints in an uncleared Hard encounter', async () => {
+  const headers = {'X-Ferrum-World':'javascript'};
+  const {payload:{hero}} = await request('/api/heroes', {method:'POST', headers, body:{name:'A Second Trial'}, status:201});
+  const {payload:{quests:[quest]}} = await request('/api/campaign', {headers});
+  const {payload:page} = await request(`/api/pages/${quest.bossPage}`, {headers});
+  const prompt = page.prompts.find(item => item.exerciseId);
+  const code = 'function makeBadge(input) { return { name: input.trim().toUpperCase(), visits: 0 }; }';
+  const body = {page:page.page, promptId:prompt.id, exerciseId:prompt.exerciseId, code};
+  assert.equal((await request('/api/grade', {headers, hero, method:'POST', body})).payload.verdict, 'pass');
+  await request('/api/workbench/1/mode', {headers, hero, method:'PATCH', body:{mode:'hard'}});
+  await request('/api/levels/1/reveal/debrief', {headers, hero, status:403});
+});
+
+test('unscored training submissions reveal the authored answer only on an explicit aid request', async () => {
+  const {hero} = await createHero('Training Reader');
+  const {payload:page} = await request('/api/pages/25');
+  const prompt = page.prompts.find(item => item.id === 'training-1-2');
+  assert.equal(prompt.exampleAnswer, true);
+  const key = {page:page.page, promptId:prompt.id};
+  const {payload:saved} = await request('/api/answers', {hero, method:'POST', body:{...key,value:'My draft'}});
+  assert.equal(saved.feedback, 'Your response is saved.');
+  const {payload:aid} = await request('/api/answers/reveal', {hero, method:'POST', body:key});
+  assert.ok(aid.text.length > saved.feedback.length);
+  const {payload:progress} = await request('/api/progress', {hero});
+  assert.equal(progress.workbench.modes[0].assisted, true);
 });
 
 test('mutations enforce local origin, JSON size and shape, and valid hero sessions', async () => {
@@ -322,11 +364,13 @@ test('hero choice, written drafts, progress, and reading position persist in sep
   await request('/api/profile', { method: 'PATCH', hero: b, body: { callsign: a.name }, status: 409 });
   await request('/api/profile', { method: 'PATCH', hero: a, body: { lastPage: '20' }, status: 404 });
   await request('/api/profile', { method: 'PATCH', hero: a, body: {}, status: 400 });
-  await request('/api/progress/2', { method: 'PATCH', hero: a, body: { forge: true }, status: 409 });
+  const {payload:{quests}} = await request('/api/campaign');
+  const project = quests.find(quest => quest.level === 5);
+  await request('/api/progress/5', { method: 'PATCH', hero: a, body: { forge: true }, status: 409 });
   await request('/api/answers', {
-    method: 'POST', hero: a, body: { page: 37, promptId: 'boss-2', value: 'Move into complete states.' },
+    method: 'POST', hero: a, body: { page: project.bossPage, promptId: 'boss-5', value: 'State the borrowing relationship.' },
   });
-  await request('/api/progress/2', { method: 'PATCH', hero: a, body: { forge: true, explain: true } });
+  await request('/api/progress/5', { method: 'PATCH', hero: a, body: { forge: true, explain: true } });
   await request('/api/progress/2', { method: 'PATCH', hero: a, body: { side: 'true' }, status: 400 });
   await request('/api/progress/1', { method: 'PATCH', hero: a, body: { forge: true }, status: 409 });
   await request('/api/progress/43', { method: 'PATCH', hero: a, body: { scout: true }, status: 404 });

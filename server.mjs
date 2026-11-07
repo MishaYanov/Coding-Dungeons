@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, parse, resolve } from 'node:path';
@@ -8,9 +8,13 @@ import { openStore } from './lib/store.mjs';
 import { grade, runnerStatus } from './lib/grader.mjs';
 import { encounters, evaluateStage, publicEncounter } from './lib/encounters.mjs';
 import { createWrittenGm } from './lib/written-gm.mjs';
-import { runCourseExercise, runLegacyRust, workbenchSummary } from './lib/workbench-service.mjs';
+import { fixtureMetadata, presentWorkbenchRun, runCourseExercise, runLegacyRust, workbenchSummary } from './lib/workbench-service.mjs';
+import { createStandaloneRunner } from './lib/standalone-runner.mjs';
 import javascriptSuites from './data/workbench/javascript.mjs';
 import typescriptSuites from './data/workbench/typescript.mjs';
+import goSuites from './data/workbench/go.mjs';
+import rustSuites, { rustBossCoverage } from './data/workbench/rust.mjs';
+import { suggestions } from './data/workbench/suggestions.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const desktopToken = process.env.FERRUM_DESKTOP_TOKEN;
@@ -28,19 +32,32 @@ const worldSpecs = [
   {id:'rust', name:'Rust', title:'Understanding Rust', subtitle:'The Ferrum Expedition'},
   {id:'go', name:'Go', title:'Understanding Go', subtitle:'World 4'},
 ];
-const courseSuites = {javascript:javascriptSuites, typescript:typescriptSuites};
+const courseSuites = {javascript:javascriptSuites, typescript:typescriptSuites, go:goSuites, rust:rustSuites};
 const rustDatabase = resolve(root, process.env.FERRUM_DB ?? 'state/ferrum.sqlite');
 const writtenGm = createWrittenGm();
+const standalone = createStandaloneRunner();
 
-let localJobActive = false;
-async function runLocalJob(action, busy) {
-  if (localJobActive) return busy;
-  localJobActive = true;
+let queueTail = Promise.resolve();
+let queuedJobs = 0;
+const activeRequests = new Set();
+async function runLocalJob(action, busy, signal) {
+  if (queuedJobs >= 3 || signal.aborted) return busy;
+  queuedJobs += 1;
+  const previous = queueTail;
+  const next = Promise.withResolvers();
+  queueTail = next.promise;
+  await previous;
   try {
-    return await action();
+    return signal.aborted ? busy : await action();
   } finally {
-    localJobActive = false;
+    queuedJobs -= 1;
+    next.resolve();
   }
+}
+
+function authoredTrainingAnswer(worldId, prompt) {
+  return worldId === 'rust' && ['text','code'].includes(prompt.type) && /^training-\d+-\d+$/.test(prompt.id)
+    ? prompt.feedback : null;
 }
 
 async function loadWorld(spec, number) {
@@ -56,8 +73,15 @@ async function loadWorld(spec, number) {
     const prompt = pages[quest?.bossPage - 1]?.prompts.find(prompt => prompt.id === `boss-${exercise.level}`);
     if (prompt?.type !== 'code') throw new Error(`Workbench suite ${exercise.id} is missing its boss card.`);
     prompt.exerciseId = exercise.id;
-    exercises.push({...exercise, title:quest.title, description:prompt.body, starter:prompt.starter});
+    exercises.push({...exercise, title:exercise.title ?? quest.title, description:exercise.description ?? prompt.body,
+      starter:exercise.starter ?? prompt.starter});
   }
+  for (const exercise of exercises) {
+    const definition = JSON.stringify([exercise.tests, exercise.testNames, exercise.typeTests]);
+    exercise.suiteRevision = createHash('sha256').update(definition).digest('hex').slice(0, 12);
+  }
+  const projectReviews = new Map(rust ? rustBossCoverage.filter(entry => entry.status === 'authored-review')
+    .map(entry => [campaign.quests.find(quest => quest.level === entry.level)?.bossPage, entry.reason]) : []);
   const bookUrl = rust ? '/book/ferrum-expedition.pdf' : `/book/${id}/book.pdf`;
   const kitPath = rust ? '/book/ferrum-field-kit.zip' : `/book/${id}/field-kit.zip`;
   const kit = await stat(join(publicDir, kitPath.slice(1))).catch(error => {
@@ -92,10 +116,12 @@ async function loadWorld(spec, number) {
       levelPages:Object.fromEntries(campaign.quests.map(quest => [quest.level, quest.page])),
       total:pages.length,
     },
-    publicPages:pages.map(page => ({...page, prompts:page.prompts.map(
+    publicPages:pages.map(page => ({...page, ...(projectReviews.has(page.page) ? {projectReview:projectReviews.get(page.page)} : {}), prompts:page.prompts.map(
       ({feedback, feedbackByOption, correctOption, ...prompt}) => {
         const assessment = prompt.type === 'text' ? writtenGm.getPrompt(id, prompt.id, prompt.body) : null;
-        return assessment ? {...prompt, assessment} : prompt;
+        if (assessment) return {...prompt, assessment};
+        if (authoredTrainingAnswer(id, {...prompt, feedback})) return {...prompt, exampleAnswer:true};
+        return suggestions.has(prompt.exerciseId) ? {...prompt, suggestion:true} : prompt;
       })})),
   };
 }
@@ -240,8 +266,10 @@ async function levelPatch(request, response, {questMap, gradedLevels, store}, he
 }
 
 function visibleAssessment(world, heroId, level, assessment) {
-  if (world.store.workbenchMode(heroId, level).mode !== 'hard') return assessment;
   const {status, score, rubricVersion} = assessment;
+  if (world.store.workbenchMode(heroId, level).mode !== 'hard') {
+    return {status, score, rubricVersion, feedback:assessment.feedback};
+  }
   const feedback = status === 'scored' ? 'Hard Mode review complete.'
     : status === 'unavailable' ? 'The review is unavailable. Your answer is saved.'
       : 'The GM could not verify this answer.';
@@ -250,7 +278,11 @@ function visibleAssessment(world, heroId, level, assessment) {
 
 function disconnectSignal(response) {
   const controller = new AbortController();
-  response.once('close', () => { if (!response.writableEnded) controller.abort(); });
+  activeRequests.add(controller);
+  response.once('close', () => {
+    activeRequests.delete(controller);
+    if (!response.writableEnded) controller.abort();
+  });
   return controller.signal;
 }
 
@@ -267,7 +299,7 @@ async function saveAnswer(request, response, world, heroId) {
     const result = await runLocalJob(() => writtenGm.assess(worldId, prompt.id, prompt.body, value, {signal}), {
       status:'unavailable', score:null, feedbackId:'busy', feedback:'The local workbench is busy. Try again in a moment.',
       criteria:[], rubricVersion:rubric.version,
-    });
+    }, signal);
     if (signal.aborted) return;
     if (!store.completeAssessment(heroId, page.page, prompt.id, revision, result)) {
       throw new HttpError(409, 'A newer version of this answer was saved.');
@@ -281,7 +313,7 @@ async function saveAnswer(request, response, world, heroId) {
     if (!prompt.options.some(option => option.id === value)) throw new HttpError(400, 'Choose one of the listed options.');
     correct = prompt.correctOption === value;
     feedback = prompt.feedbackByOption?.[value] ?? prompt.feedback;
-  } else if (prompt.type === 'text' && store.workbenchMode(heroId, page.level).mode === 'hard') {
+  } else if (authoredTrainingAnswer(worldId, prompt) || store.workbenchMode(heroId, page.level).mode === 'hard') {
     feedback = 'Your response is saved.';
   }
   store.saveResponse(heroId, page.page, prompt.id, value, feedback, correct);
@@ -292,11 +324,15 @@ async function revealAnswer(request, response, world, heroId) {
   const data = await readJson(request);
   const page = pageAt(world, data.page);
   const prompt = promptAt(page, data.promptId);
-  const reference = prompt.type === 'text' && writtenGm.reveal(world.info.id, prompt.id, prompt.body);
+  const rubric = prompt.type === 'text' ? writtenGm.getPrompt(world.info.id, prompt.id, prompt.body) : null;
+  const reference = rubric ? writtenGm.reveal(world.info.id, prompt.id, prompt.body) : authoredTrainingAnswer(world.info.id, prompt);
   if (!reference) throw new HttpError(404, 'No example answer is available.');
   if (!world.store.revealWorkbenchAid(heroId, page.level)) {
     const prior = world.store.progress(heroId).responses.find(answer => answer.page === page.page && answer.promptId === prompt.id);
-    if (prior?.assessment?.score !== 100) throw new HttpError(403, 'Hard Mode locks the example answer.');
+    if (!rubric || prior?.assessment?.score !== 100 || prior.assessment.rubricVersion !== rubric.version) {
+      throw new HttpError(403, 'Hard Mode locks the example answer.');
+    }
+    world.store.revealWorkbenchAid(heroId, page.level, true);
   }
   json(response, {text:reference});
 }
@@ -307,7 +343,13 @@ function currentProgress(world, heroId) {
   for (const answer of progress.responses) {
     const page = world.pages[answer.page - 1];
     const prompt = page?.prompts.find(item => item.id === answer.promptId);
-    if (!prompt || prompt.exerciseId) continue;
+    if (!prompt) continue;
+    if (prompt.exerciseId) {
+      if (authoredTrainingAnswer(world.info.id, prompt) || world.store.workbenchMode(heroId, page.level).mode === 'hard') {
+        answer.feedback = 'Your response is saved.';
+      }
+      continue;
+    }
     if (prompt.type === 'choice') {
       if (!prompt.options.some(option => option.id === answer.value)) continue;
       answer.correct = prompt.correctOption === answer.value;
@@ -315,7 +357,7 @@ function currentProgress(world, heroId) {
     } else if (prompt.type === 'text' && writtenGm.getPrompt(world.info.id, prompt.id, prompt.body)) {
       answer.feedback = 'Your response is saved.';
       if (answer.assessment) answer.assessment = visibleAssessment(world, heroId, page.level, answer.assessment);
-    } else if (prompt.type === 'text' && world.store.workbenchMode(heroId, page.level).mode === 'hard') {
+    } else if (authoredTrainingAnswer(world.info.id, prompt) || world.store.workbenchMode(heroId, page.level).mode === 'hard') {
       answer.feedback = 'Your response is saved.';
     } else if (prompt.feedback) {
       answer.feedback = prompt.feedback;
@@ -378,19 +420,41 @@ async function submitCode(request, response, world, heroId) {
   store.saveResponse(heroId, page.page, prompt.id, code, 'Your submission is saved.');
   const signal = disconnectSignal(response);
   const noRun = (verdict, output) => ({verdict, output, passed:0, failed:0, passedTests:[], failedTests:[], cases:[], groups:[]});
-  const result = await runLocalJob(() => {
-    if (!world.rust) return runCourseExercise(world.info.id, code, exercise, purpose, signal);
-    if (desktopToken) return noRun('unavailable', 'The packaged Rust runtime is unavailable. Your draft is saved.');
-    return runLegacyRust(grade, code, exercise, purpose);
-  }, noRun('busy', 'Another local evaluation is running. Try again in a moment.'));
+  const result = await runLocalJob(async () => {
+    const language = world.info.id;
+    if (language === 'javascript' || language === 'typescript') {
+      return runCourseExercise(language, code, exercise, purpose, signal);
+    }
+    if (await standalone.status(language)) {
+      const fixtures = fixtureMetadata(exercise).filter(fixture => purpose === 'submit' || fixture.visibility === 'public');
+      const raw = await standalone.grade({language, source:code, exercise, tests:exercise.tests,
+        caseIds:fixtures.map(({id}) => id), signal});
+      return presentWorkbenchRun(raw, fixtures);
+    }
+    if (world.rust && !desktopToken) return runLegacyRust(grade, code, exercise, purpose, signal);
+    return noRun('unavailable', `The local ${world.info.name} sandbox is unavailable. Your draft is saved.`);
+  }, noRun('busy', 'The local evaluation queue is full. Try again in a moment.'), signal);
   if (signal.aborted) return;
   const runId = randomUUID();
+  const {suiteRevision} = exercise;
   let completion = {newClear:false, hardClear:false};
   if (['pass', 'fail', 'compile_error', 'timeout'].includes(result.verdict)) {
     completion = store.recordAttempt(heroId, {page:page.page, promptId:prompt.id, level:page.level,
-      exerciseId:exercise.id, code, purpose, mode, runId, ...result});
+      exerciseId:exercise.id, code, purpose, mode, runId, suiteRevision, ...result});
   }
-  json(response, {...result, purpose, mode, runId, ...completion});
+  json(response, {...result, purpose, mode, runId, suiteRevision, ...completion});
+}
+
+async function revealSuggestion(request, response, world, heroId) {
+  const data = await readJson(request);
+  const page = pageAt(world, data.page);
+  const prompt = promptAt(page, data.promptId);
+  const suggestion = prompt.exerciseId === data.exerciseId ? suggestions.get(prompt.exerciseId) : null;
+  if (!suggestion) throw new HttpError(404, 'No code suggestion is available.');
+  if (!world.store.revealWorkbenchAid(heroId, page.level)) {
+    throw new HttpError(403, 'Hard Mode locks code suggestions.');
+  }
+  json(response, suggestion);
 }
 
 const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8',
@@ -458,8 +522,10 @@ const server = createServer(async (request,response) => {
       if (path === '/api/heroes') return json(response, {heroes:await store.heroes()});
       if (path === '/api/progress') return json(response, currentProgress(world, await requireHero(request, world)));
       if (path === '/api/status') {
-        const runner = world.rust ? (desktopToken ? 'unavailable' : await runnerStatus())
-          : world.exerciseMap.size ? 'available' : 'unavailable';
+        const language = world.info.id;
+        const native = language === 'rust' || language === 'go';
+        const available = native ? await standalone.status(language) : world.exerciseMap.size > 0;
+        const runner = available ? 'available' : world.rust && !desktopToken ? await runnerStatus() : 'unavailable';
         return json(response, {storage:store.label, runner});
       }
       let match = path.match(/^\/api\/pages\/(\d+)$/);
@@ -469,9 +535,11 @@ const server = createServer(async (request,response) => {
         const quest = world.questMap.get(Number(match[1]));
         if (!quest) throw new HttpError(404, 'Level not found.');
         const heroId = await requireHero(request, world);
-        if (!store.revealWorkbenchAid(heroId, quest.level)
-            && !store.progress(heroId).levels.some(level => level.level === quest.level && level.forge)) {
-          throw new HttpError(403, 'Hard Mode locks the guide kit.');
+        if (!store.revealWorkbenchAid(heroId, quest.level)) {
+          if (!store.workbenchState(heroId).hardClears.includes(quest.level)) {
+            throw new HttpError(403, 'Hard Mode locks the guide kit.');
+          }
+          store.revealWorkbenchAid(heroId, quest.level, true);
         }
         return json(response, {text:quest[match[2]]});
       }
@@ -495,6 +563,7 @@ const server = createServer(async (request,response) => {
       if (path === '/api/heroes/load') return await loadHero(request, response, world);
       if (path === '/api/answers') return await saveAnswer(request, response, world, await requireHero(request, world));
       if (path === '/api/answers/reveal') return await revealAnswer(request, response, world, await requireHero(request, world));
+      if (path === '/api/workbench/suggestion') return await revealSuggestion(request, response, world, await requireHero(request, world));
       if (path === '/api/grade') return await submitCode(request, response, world, await requireHero(request, world));
     }
     throw new HttpError(404, 'Route not found.');
@@ -511,10 +580,15 @@ server.listen(port, '127.0.0.1', () => {
   console.log(`Ferrum at http://127.0.0.1:${server.address().port} (${worldMap.get('rust').store.label})`);
   process.parentPort?.postMessage({type:'ferrum-ready', port:server.address().port});
 });
+let shuttingDown = false;
 function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const controller of activeRequests) controller.abort();
   server.close(() => {
     for (const {store} of worlds) store.close();
   });
+  server.closeAllConnections();
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

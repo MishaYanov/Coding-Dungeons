@@ -47,13 +47,16 @@ test('Workbench examples cannot clear a creature and replayed submissions award 
     const example = { ...attempt, purpose: 'examples', mode: 'hard', runId: randomUUID() };
     assert.deepEqual(store.recordAttempt(hero.id, example), { newClear: false, hardClear: false });
     assert.deepEqual(second.progress(hero.id).levels, []);
-    const full = { ...example, purpose: 'submit', runId: randomUUID() };
+    const full = { ...example, purpose: 'submit', runId: randomUUID(), suiteRevision:'suite1', runtimeMs:12 };
     assert.deepEqual(second.recordAttempt(hero.id, full), { newClear: true, hardClear: true });
     assert.deepEqual(store.recordAttempt(hero.id, full), { newClear: false, hardClear: true });
     assert.deepEqual(store.recordAttempt(hero.id, { ...full, runId: randomUUID() }), { newClear: false, hardClear: true });
     assert.equal(second.progress(hero.id).levels[0].forge, true);
     assert.equal(second.progress(hero.id).attempts.length, 2);
+    assert.equal(second.progress(hero.id).attempts[0].suiteRevision, 'suite1');
+    assert.equal(second.progress(hero.id).attempts[0].runtimeMs, 12);
     assert.deepEqual(second.workbenchState(hero.id).hardClears, [1]);
+    assert.deepEqual(second.workbenchState(hero.id).clears, ['cargo-handoff']);
   } finally {
     second.close();
     store.close();
