@@ -70,7 +70,7 @@ export function createGame() {
     hero: null, profile: { callsign: 'Explorer', path: '' }, drafts: new Map(),
     combat: null, combatNotice: '', potionBusy: false, switchingHero: false,
     diamond: null, diamonds: 0, diamondStarting: false, diamondFocus: false,
-    runner: '', storage: '', page: null, total: null, zoom: 1, dialog: null,
+    runner: '', runnerDetail: '', storage: '', page: null, total: null, zoom: 1, dialog: null,
     loading: true, ready: false, readerMessage: 'Opening the campaign book…',
     pageError: null, toast: '',
   };
@@ -394,7 +394,8 @@ export function createGame() {
       const [campaign, status] = await Promise.allSettled([api('/api/campaign'), api('/api/status')]);
       update({
         campaign: campaign.value ?? {}, campaignError: campaign.reason?.message ?? '',
-        total: pageNumber(campaign.value?.total), runner: status.value?.runner ?? '', storage: status.value?.storage ?? '',
+        total: pageNumber(campaign.value?.total), runner: status.value?.runner ?? '',
+        runnerDetail: status.value?.runnerDetail ?? '', storage: status.value?.storage ?? '',
       });
       const saved = savedHero(world);
       if (saved) {

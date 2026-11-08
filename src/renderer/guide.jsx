@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { creatureName, mountCreature } from '../../public/creatures.mjs';
+import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
 
 const promptLabels = { choice: 'CHOICE', text: 'WRITTEN RESPONSE', code: 'CODE WORKBENCH' };
 const hintLabels = { hint1: 'Hint one', hint2: 'Hint two', debrief: 'Debrief' };
@@ -226,6 +227,7 @@ function Prompt({ data, prompt, index, game, actions }) {
   const hard = hardMode(game, data.level);
   const submitDisabled = busy || game.switchingHero || runnerUnavailable || (graded && game.combat?.fallen);
   const titleId = `prompt-title-${data.page}-${index}`;
+  const indentationId = `${titleId}-indent-help`;
   const title = text(prompt.title) || 'Encounter';
   const setMessage = (copy, error = false) => setStatus({ copy, error });
   const attempt = runnable && list(game.attempts).find((item) => String(item.exerciseId) === String(prompt.exerciseId)
@@ -237,6 +239,7 @@ function Prompt({ data, prompt, index, game, actions }) {
     setValue(next);
     setMessage(actions.persistDraft(key, next) ? 'Draft kept on this device' : 'Draft kept in this tab');
   }
+  const indentation = useCodeIndentation(updateValue);
 
   async function save(purpose) {
     const practice = purpose === 'examples';
@@ -326,10 +329,13 @@ function Prompt({ data, prompt, index, game, actions }) {
       })}
     </fieldset> : <textarea ref={input} className={code ? 'code-editor' : 'answer-editor'}
       aria-label={code ? `${game.world.name} code` : 'Your written response'}
+      aria-describedby={code ? indentationId : undefined}
       rows={code ? 12 : 4} maxLength={code ? 49152 : 12000}
       placeholder={code ? `Write your ${game.world.name} solution here` : 'Explain your reasoning and the rule you rely on.'}
       spellCheck={!code} autoCapitalize={code ? 'off' : undefined} autoComplete={code ? 'off' : undefined}
-      autoCorrect={code ? 'off' : undefined} disabled={busy} value={value} onChange={(event) => updateValue(event.target.value)} />}
+      autoCorrect={code ? 'off' : undefined} disabled={busy} value={value}
+      {...(code ? indentation : { onChange: (event) => updateValue(event.target.value) })} />}
+    {code && <p id={indentationId} className="fine-print">{indentationHelp}</p>}
     {runnable && prompt.suggestion && !hard && <CodeSuggestion {...{ data, prompt, input, game, actions, updateValue }} disabled={busy} />}
     <ReviewList title="Review criteria" items={list(prompt.criteria).filter(text)} />
     <ReviewList title={`What the runner checks · ${testNames.length}`} items={testNames} />

@@ -4,6 +4,8 @@ Play through four programming books in a local game reader. Read the book on the
 
 Open **Code Workbench** on a graded challenge. Run Examples to practice, then Submit solution to run the required suite. Passing the full suite defeats the creature and saves Forge progress. Choose Hard Mode to lock hints, suggestions, and example answers for the encounter and earn an unaided clear. Project review pages keep the book's design work alongside the executable drills.
 
+In a code editor, **Tab** inserts four spaces. Press **Escape**, then **Tab** to move focus forward. On selected Guided challenges, **Show code suggestion** offers an authored snippet you can apply or undo.
+
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
 Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world.
@@ -21,7 +23,7 @@ Choose **One Life** when creating a hero to start with 100 HP and one healing po
 
 Run `CodingDungeonsSetup.exe` and open **Coding Dungeons** from Start. The packaged app opens its own window and keeps SQLite saves in per-user app data. The Help menu provides runtime diagnostics and save import and export. The desktop build includes the local GM model and can grade written questions with reviewed rubrics. The Go and Rust runners become available after the Windows isolation probe passes.
 
-**Rust runner offline** means the app cannot use its local Rust compiler and sandbox to grade code. You can still read, save drafts, and answer multiple-choice questions. Runner outages cost no HP. The status is independent of your internet connection; check **Help → Runtime Diagnostics** in the desktop app.
+**Rust runner offline** means the app cannot use its local Rust compiler and sandbox to grade code. You can still read, save drafts, and answer multiple-choice questions. Runner outages cost no HP. In the desktop app, **Help → Runtime diagnostics** shows whether the compiler files are included and why the runner could not start.
 
 ## Browser development
 

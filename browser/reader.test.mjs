@@ -118,6 +118,18 @@ async function jumpTo(page, number) {
   await openBookPage(page, number);
 }
 
+async function indentWithTab(editor, start, end, expected) {
+  await editor.focus();
+  await editor.evaluate((field, [start, end]) => field.setSelectionRange(start, end), [start, end]);
+  await editor.press('Tab');
+  const state = await editor.evaluate((field) => new Promise((resolve) => requestAnimationFrame(() => resolve({
+    focused: document.activeElement === field,
+    value: field.value,
+    selection: [field.selectionStart, field.selectionEnd],
+  }))));
+  assert.deepEqual(state, { focused: true, value: expected, selection: [start + 4, start + 4] });
+}
+
 test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs', async (t) => {
   const page = await newPage(t, '#page=15', null);
   await page.getByText('Your saved heroes will appear here.').waitFor();
@@ -130,6 +142,9 @@ test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs',
   await note.focus();
   await note.press('a');
   await note.press('d');
+  assert.equal(await note.inputValue(), 'ad');
+  await note.press('Tab');
+  assert.equal(await note.evaluate((field) => document.activeElement === field), false);
   assert.equal(await note.inputValue(), 'ad');
   await openBookPage(page, 15);
   await page.getByRole('button', { name: 'World map' }).click();
@@ -170,7 +185,7 @@ test('a hero switch preserves the outgoing page and restores the right answer in
   assert.equal(await selected.isChecked(), true);
 });
 
-test('an offline runner leaves the Rust editor and SQLite draft save available', async (t) => {
+test('an offline runner leaves the Rust editor available and saves Tab indentation to SQLite', async (t) => {
   const gradedPage = pages.find((page) => page.prompts.some((prompt) => prompt.exerciseId));
   const page = await newPage(t, '');
   await createHero(page, 'Forge Apprentice', 1);
@@ -180,8 +195,13 @@ test('an offline runner leaves the Rust editor and SQLite draft save available',
   const exercise = gradedPage.prompts.find((prompt) => prompt.exerciseId);
   const card = page.getByRole('form', { name: exercise.title, exact: true });
   const editor = card.getByRole('textbox', { name: 'Rust code' });
-  const source = '// A saved attempt\nfn draft() {}';
-  await editor.fill(source);
+  const line = '// A saved attempt\n';
+  const source = `${line}    fn draft() {}`;
+  await editor.fill(`${line}fn draft() {}`);
+  await indentWithTab(editor, line.length, line.length, source);
+  await editor.press('Escape');
+  await page.keyboard.press('Tab');
+  assert.equal(await editor.evaluate((field) => document.activeElement === field), false);
   await card.getByRole('button', { name: 'Save draft' }).click();
   await card.getByText('Draft saved', { exact: true }).waitFor();
   const saved = await page.request.get(`${origin}/api/progress`);
@@ -623,7 +643,7 @@ test('a hidden diamond starts a saved goblin fight with two graded stages and on
   assert.ok(saved.every(({ sparkle, diamonds }) => !sparkle && diamonds === 3));
 });
 
-test('an offline Rust runner leaves the goblin editor available and preserves its draft', async (t) => {
+test('an offline Rust runner leaves the goblin editor available and preserves Tab indentation', async (t) => {
   const page = await newPage(t, '', 'rust');
   await createHero(page, 'Goblin Scribe', 1);
   const discovery = (await diamondPages(page, 8, 'rust')).find(({ sparkle }) => sparkle);
@@ -636,8 +656,13 @@ test('an offline Rust runner leaves the goblin editor available and preserves it
   assert.equal(await fight.getByRole('button', { name: 'Submit code', exact: true }).isDisabled(), true);
 
   const editor = fight.getByRole('textbox', { name: 'Goblin code' });
-  const draft = 'pub fn sum_diamonds(values: &[i32]) -> i32 { todo!() }';
-  await editor.fill(draft);
+  const firstLine = 'pub fn sum_diamonds(values: &[i32]) -> i32 {\n';
+  const placeholder = 'REPLACE';
+  const draft = `${firstLine}    todo!()\n}`;
+  await editor.fill(`${firstLine}${placeholder}todo!()\n}`);
+  await indentWithTab(editor, firstLine.length, firstLine.length + placeholder.length, draft);
+  await editor.press('Shift+Tab');
+  assert.equal(await editor.evaluate((field) => document.activeElement === field), false);
   await page.reload();
   await openBookPage(page, discovery.number);
   await editor.waitFor();

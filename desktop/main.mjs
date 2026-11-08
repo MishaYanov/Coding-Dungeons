@@ -47,6 +47,37 @@ function registerReaderActions(window, origin, directory, links) {
   });
 }
 
+async function showRuntimeDiagnostics(origin, token, runtime) {
+  const window = mainWindow;
+  const component = (label, included) => `${label} · ${included ? 'Included' : 'Missing'}`;
+  const detail = [
+    component('JavaScript engine', runtime.available.javascript),
+    component('TypeScript and JavaScript tools', runtime.available.typescript),
+    component('Offline GM model and executable', runtime.available.model),
+    component('Rust sandbox files', runtime.nativeLanguages.includes('rust')),
+    component('Go sandbox files', runtime.nativeLanguages.includes('go')),
+    '',
+  ];
+  const statuses = await Promise.all([['Rust', 'rust'], ['Go', 'go']].map(async ([label, world]) => {
+    try {
+      const response = await fetch(`${origin}/api/status`, {
+        headers: {'X-Ferrum-Desktop-Token': token, 'X-Ferrum-World': world},
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!response.ok) throw new Error('Status request failed.');
+      const status = await response.json();
+      return `${label} runner · ${status.runner === 'available' ? 'Ready' : status.runnerDetail || 'Unavailable'}`;
+    } catch {
+      return `${label} runner · Could not check the local engine.`;
+    }
+  }));
+  if (!window || window.isDestroyed()) return;
+  await dialog.showMessageBox(window, {
+    message: `Coding Dungeons ${app.getVersion()} runtime diagnostics`,
+    detail: [...detail, ...statuses].join('\n'),
+  });
+}
+
 async function start() {
   const appPath = app.getAppPath();
   const userData = app.getPath('userData');
@@ -115,20 +146,7 @@ async function start() {
       label: 'Help',
       submenu: [{
         label: 'Runtime diagnostics',
-        click: () => {
-          const components = [
-            ['JavaScript engine', runtime.available.javascript],
-            ['TypeScript and JavaScript tools', runtime.available.typescript],
-            ['Offline GM model and executable', runtime.available.model],
-            ['Rust sandbox files', runtime.nativeLanguages.includes('rust')],
-            ['Go sandbox files', runtime.nativeLanguages.includes('go')],
-          ];
-          const detail = components.map(([label, available]) => `${label} · ${available ? 'Included' : 'Missing'}`);
-          void dialog.showMessageBox(mainWindow, {
-            message: 'Desktop runtime inventory',
-            detail: detail.join('\n'),
-          });
-        },
+        click: () => void showRuntimeDiagnostics(origin, token, runtime),
       }],
     },
   ]));

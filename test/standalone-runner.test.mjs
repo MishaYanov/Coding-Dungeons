@@ -41,7 +41,29 @@ test('native execution stays unavailable after a failed probe or an asset hash m
     command: async () => { called++; return { code: 0, stdout: probePass }; },
   });
   assert.equal(await tampered.status('go'), false);
+  assert.equal((await tampered.diagnostics('go')).reason, 'integrity');
   assert.equal(called, 1);
+});
+
+test('offline diagnostics distinguish broker startup failures without revealing raw output', async t => {
+  const directory = await bundle(t, 'rust');
+  for (const [probe, reason] of [
+    [{reason: 'spawn'}, 'probe-launch'],
+    [{reason: 'timeout'}, 'probe-timeout'],
+    [{stderr: 'The isolation probe requires a Windows desktop process outside an existing AppContainer.\nprivate path'}, 'app-container'],
+    [{stderr: 'CreateProcessW LPAC failed: private path'}, 'process-launch'],
+    [{stderr: 'The restricted process did not pass the isolation probe (exit 17).'}, 'probe-process'],
+    [{stderr: 'private path'}, 'probe-failed'],
+  ]) {
+    const runner = createStandaloneRunner({ directory, platform: 'win32', architecture: 'x64',
+      command: async () => ({ code: 2, stdout: '', ...probe }),
+    });
+    const diagnostic = await runner.diagnostics('rust');
+    assert.equal(diagnostic.available, false);
+    assert.equal(diagnostic.reason, reason);
+    assert.ok(diagnostic.detail);
+    assert.doesNotMatch(diagnostic.detail, /private path/);
+  }
 });
 
 test('Rust stages the harness after compiling the source and uses only broker case results', async t => {

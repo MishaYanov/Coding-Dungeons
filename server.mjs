@@ -660,9 +660,13 @@ const server = createServer(async (request,response) => {
       if (path === '/api/status') {
         const language = world.info.id;
         const native = language === 'rust' || language === 'go';
-        const available = native ? await standalone.status(language) : world.exerciseMap.size > 0;
+        const diagnostics = native ? await standalone.diagnostics(language) : null;
+        const available = diagnostics?.available ?? world.exerciseMap.size > 0;
         const runner = available ? 'available' : world.rust && !desktopToken ? await runnerStatus() : 'unavailable';
-        return json(response, {storage:store.label, runner});
+        return json(response, {
+          storage:store.label, runner,
+          ...(desktopToken && diagnostics?.detail ? {runnerDetail:diagnostics.detail} : {}),
+        });
       }
       let match = path.match(/^\/api\/pages\/(\d+)$/);
       if (match) return json(response, world.publicPages[pageAt(world, Number(match[1])).page-1]);

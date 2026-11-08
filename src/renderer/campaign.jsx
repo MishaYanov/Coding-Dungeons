@@ -214,13 +214,13 @@ function CombatStatus({ game }) {
 }
 
 function GameMaster({ game }) {
-  const { world, campaign, runner, storage, page, hero, profile } = game;
+  const { world, campaign, runner, runnerDetail, storage, page, hero, profile } = game;
   const ready = runner.toLowerCase() === 'available';
   const guided = world && world.id !== 'rust' && !campaign.exercises?.length;
   const runnerLabel = !world ? 'Choose a world' : guided ? 'Guided practice'
     : ready ? `${world.name} runner ready` : runner ? `${world.name} runner offline` : 'Runner status unknown';
   const runnerTitle = guided ? 'Save your code and check it against the encounter debrief'
-    : [storage, runner && `${world?.name} runner ${runner}`].filter(Boolean).join(' · ') || 'Practice status';
+    : [storage, runnerDetail || (runner && `${world?.name} runner ${runner}`)].filter(Boolean).join(' · ') || 'Practice status';
   const title = page?.title || (hero ? profile.callsign : 'Your expedition');
   return (
     <section className="guide-panel" id="guide-panel" aria-labelledby="guide-title" tabIndex={-1}>
