@@ -165,29 +165,60 @@ try {
     Copy-Item -LiteralPath (Join-Path $rustRoot "$wasi/lib") -Destination $wasiDestination -Recurse
 
     $go = Join-Path $payload 'go'
-    Copy-IntoFolder (Join-Path $goRoot 'bin/go.exe') (Join-Path $go 'bin')
     $goTools = 'pkg/tool/windows_amd64'
-    $assemblerTools = @('asm.exe', 'compile.exe', 'link.exe') | ForEach-Object { Join-Path $goRoot "$goTools/$_" }
-    Copy-IntoFolder $assemblerTools (Join-Path $go $goTools)
-    $goPackages = Join-Path $go 'pkg'
-    New-Item -ItemType Directory -Path $goPackages -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $goRoot 'pkg/include') -Destination $goPackages -Recurse
+    $goExecutables = @("$goTools/compile.exe", "$goTools/link.exe")
     Copy-IntoFolder @('go.env', 'VERSION', 'LICENSE', 'PATENTS' | ForEach-Object { Join-Path $goRoot $_ }) $go
-    Copy-IntoFolder (Join-Path $goRoot 'lib/time/zoneinfo.zip') (Join-Path $go 'lib/time')
-    Copy-Item -LiteralPath (Join-Path $goRoot 'lib/fips140') -Destination (Join-Path $go 'lib') -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $go $goTools) -Force | Out-Null
 
-    $goSource = Join-Path $goRoot 'src'
-    $goDestination = Join-Path $go 'src'
-    $directories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($file in Get-ChildItem -LiteralPath $goSource -Recurse -File) {
-        $relative = [IO.Path]::GetRelativePath($goSource, $file.FullName)
-        if ($relative -match '^(cmd|testdata)\\' -or $file.Name.EndsWith('_test.go')) { continue }
-        if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Unexpected Go source link at $relative." }
-        $target = Join-Path $goDestination $relative
-        $folder = [IO.Path]::GetDirectoryName($target)
-        if ($directories.Add($folder)) { [IO.Directory]::CreateDirectory($folder) | Out-Null }
-        [IO.File]::Copy($file.FullName, $target)
+    $goCache = Join-Path $scratch 'go-cache'
+    $goBuildEnvironment = @{
+        GOROOT = $goRoot; CGO_ENABLED = '0'; GOCACHE = $goCache; GOENV = 'off'; GOFLAGS = ''
+        GOEXPERIMENT = ''; GOWASM = ''; GO111MODULE = 'off'; GOWORK = 'off'
+        GOTOOLCHAIN = 'local'; GOPROXY = 'off'; GOSUMDB = 'off'
     }
+    # Keep Winsock errors for sockets while allowing the Windows host tools to
+    # initialize ordinary files. Apply the patch only to the build's overlay.
+    $pollFile = Join-Path $goRoot 'src/internal/poll/fd_windows.go'
+    $poll = [IO.File]::ReadAllText($pollFile)
+    $oldCheck = 'if initErr != nil {'
+    if (-not $poll.Contains($oldCheck) -or $poll.IndexOf($oldCheck) -ne $poll.LastIndexOf($oldCheck)) {
+        throw 'The pinned Go Windows file initialization has changed.'
+    }
+    $fixedCheck = 'if initErr != nil && net != "file" && net != "console" && net != "pipe" {'
+    $patchedPoll = Join-Path $scratch 'fd_windows.go'
+    [IO.File]::WriteAllText($patchedPoll, $poll.Replace($oldCheck, $fixedCheck))
+    $replace = @{}
+    $replace[$pollFile] = $patchedPoll
+    $overlay = Join-Path $scratch 'go-windows-overlay.json'
+    @{Replace = $replace} | ConvertTo-Json | Set-Content -LiteralPath $overlay -Encoding utf8NoBOM
+    Invoke-WithBuildEnvironment ($goBuildEnvironment + @{GOOS = 'windows'; GOARCH = 'amd64'}) {
+        foreach ($tool in 'compile', 'link') {
+            & (Join-Path $goRoot 'bin/go.exe') build -p=2 -trimpath -overlay $overlay -o (Join-Path $go "$goTools/$tool.exe") "cmd/$tool"
+            if ($LASTEXITCODE -ne 0) { throw "Go Windows $tool build failed with exit code $LASTEXITCODE." }
+        }
+    }
+
+    # Bundle the target standard library so the broker can start both tools
+    # directly without a Go driver, build cache, or source tree at runtime.
+    $goStdlib = Join-Path $go 'stdlib'
+    New-Item -ItemType Directory -Path $goStdlib | Out-Null
+    $exports = Invoke-WithBuildEnvironment ($goBuildEnvironment + @{GOOS = 'wasip1'; GOARCH = 'wasm'}) {
+        & (Join-Path $goRoot 'bin/go.exe') list -p=2 -deps -export -f '{{if .Export}}{{.ImportPath}}|{{.Export}}{{end}}' std
+        if ($LASTEXITCODE -ne 0) { throw "Go standard library build failed with exit code $LASTEXITCODE." }
+    }
+    $index = 0
+    $packages = foreach ($entry in ($exports | Where-Object { $_ } | Sort-Object)) {
+        $name, $archive = $entry -split '\|', 2
+        if ($name -notmatch '^[a-zA-Z0-9_./-]+$' -or
+            -not ([IO.Path]::GetFullPath($archive)).StartsWith($goCache + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Unexpected Go standard library export.'
+        }
+        $file = '{0:D4}.a' -f (++$index)
+        Copy-Item -LiteralPath $archive -Destination (Join-Path $goStdlib $file)
+        "$name $file"
+    }
+    if (-not ($packages -match '^runtime [0-9]{4}\.a$')) { throw 'The Go standard library archive list is incomplete.' }
+    Set-Content -LiteralPath (Join-Path $goStdlib 'packages.txt') -Value $packages -Encoding utf8NoBOM
 
     $notices = Join-Path $payload 'licenses'
     Copy-IntoFolder @(
@@ -205,7 +236,9 @@ try {
     }
 
     $executables = [ordered]@{}
-    foreach ($name in @('broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe', 'rust/wasm-linker.exe', 'go/bin/go.exe')) {
+    $runtimeFiles = @('broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe',
+        'rust/wasm-linker.exe', 'go/stdlib/packages.txt') + ($goExecutables | ForEach-Object { "go/$_" })
+    foreach ($name in $runtimeFiles) {
         $executables[$name] = (Get-FileHash -LiteralPath (Join-Path $payload $name) -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     [ordered]@{

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Security.AccessControl;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 internal static class NativeBroker
@@ -75,41 +76,77 @@ internal static class NativeBroker
 
             // Keep both tools isolated. The broker starts LLD directly because
             // rustc's own subprocess setup can fail inside an AppContainer.
-            int compiled = Compile(toolchain, executable, arguments.ToArray(), directory, null, processLimit: 1);
+            int compiled = Compile(toolchain, executable, arguments.ToArray(), directory, null);
             if (compiled != 0) return compiled;
             RequireFile(archive);
             return Compile(toolchain, linker, new[] {
                 "-flavor", "wasm", "--export=coding_dungeons_run_case", "-z", "stack-size=1048576",
                 "--stack-first", "--no-demangle", "--gc-sections", "--no-entry", "-O0",
                 archive, "-L", wasi, "-lc", "-o", "trial.wasm",
-            }, directory, null, processLimit: 1, logName: "lld");
+            }, directory, null, logName: "lld");
         }
         arguments.AddRange(new[] { "--crate-type=rlib", "--crate-name=ferrum_submission",
             "-o", "libferrum_submission.rlib", "submission.rs" });
-        return Compile(toolchain, executable, arguments.ToArray(), directory, null, processLimit: 1);
+        return Compile(toolchain, executable, arguments.ToArray(), directory, null);
     }
 
     private static int Go(string assets, string directory)
     {
         string toolchain = Path.Combine(assets, "go");
-        string executable = Path.Combine(toolchain, "bin", "go.exe");
-        RequireFile(executable);
+        string tools = Path.Combine(toolchain, "pkg", "tool", "windows_amd64");
+        string compiler = Path.Combine(tools, "compile.exe");
+        string linker = Path.Combine(tools, "link.exe");
+        RequireFile(compiler);
+        RequireFile(linker);
         RequireFile(Path.Combine(directory, "submission.go"));
         RequireFile(Path.Combine(directory, "harness.go"));
-        string cache = Path.Combine(directory, "go-cache");
-        Directory.CreateDirectory(cache);
+        string imports = GoImportConfig(toolchain, directory);
         var environment = new SortedDictionary<string, string> {
             { "GOROOT", toolchain }, { "GOOS", "wasip1" }, { "GOARCH", "wasm" }, { "CGO_ENABLED", "0" },
-            { "GOTOOLCHAIN", "local" }, { "GOENV", "off" }, { "GOPROXY", "off" }, { "GOSUMDB", "off" },
-            { "GO111MODULE", "off" }, { "GOWORK", "off" }, { "GOMAXPROCS", "2" },
-            { "GOPATH", Path.Combine(directory, "go-path") }, { "GOCACHE", cache },
+            { "GOMAXPROCS", "2" },
         };
-        return Compile(toolchain, executable, new[] { "build", "-buildmode=c-shared", "-p=1", "-trimpath", "-ldflags=-s -w",
-            "-o", "trial.wasm", "submission.go", "harness.go" }, directory, environment);
+        int compiled = Compile(toolchain, compiler, new[] {
+            "-p", "main", "-lang=go1.25", "-complete", "-pack", "-importcfg", imports, "-trimpath", directory,
+            "-o", "trial.a", "submission.go", "harness.go",
+        }, directory, environment);
+        if (compiled != 0) return compiled;
+        RequireFile(Path.Combine(directory, "trial.a"));
+        return Compile(toolchain, linker, new[] {
+            "-buildmode=c-shared", "-linkmode=internal", "-importcfg", imports, "-s", "-w", "-o", "trial.wasm", "trial.a",
+        }, directory, environment, logName: "go-link");
+    }
+
+    private static string GoImportConfig(string toolchain, string directory)
+    {
+        string stdlib = Path.Combine(toolchain, "stdlib");
+        RequireDirectory(stdlib);
+        string packages = Path.Combine(stdlib, "packages.txt");
+        RequireFile(packages);
+        if (new FileInfo(packages).Length > 65536)
+            throw new InvalidOperationException("The Go standard library index is too large.");
+
+        string config = Path.Combine(directory, "imports.cfg");
+        var packageNames = new HashSet<string>(StringComparer.Ordinal);
+        using (var stream = new FileStream(config, FileMode.CreateNew, FileAccess.Write))
+        using (var writer = new StreamWriter(stream))
+        {
+            foreach (string row in File.ReadLines(packages))
+            {
+                var entry = Regex.Match(row, @"\A([a-zA-Z0-9_./-]+) ([0-9]{4}\.a)\z");
+                if (!entry.Success || !packageNames.Add(entry.Groups[1].Value))
+                    throw new InvalidOperationException("The Go standard library index is invalid.");
+                string archive = Path.Combine(stdlib, entry.Groups[2].Value);
+                RequireFile(archive);
+                writer.WriteLine("packagefile " + entry.Groups[1].Value + "=" + archive);
+            }
+            if (!packageNames.Contains("runtime"))
+                throw new InvalidOperationException("The Go standard library index is incomplete.");
+        }
+        return config;
     }
 
     private static int Compile(string toolchain, string executable, string[] arguments, string directory,
-        SortedDictionary<string, string> environment, uint processLimit = 8, string logName = null)
+        SortedDictionary<string, string> environment, string logName = null)
     {
         RequireDirectory(toolchain);
         using (var profile = new WindowsSandbox.Profile())
@@ -118,9 +155,9 @@ internal static class NativeBroker
             profile.AllowDirectory(directory, FileSystemRights.Modify, true);
             profile.AllowDirectory(toolchain, FileSystemRights.ReadAndExecute, true);
             return WindowsSandbox.Run(profile, executable, arguments, directory, CompilerTimeoutMs,
-                processLimit, 640, environment,
-                Path.Combine(Path.GetDirectoryName(directory), (logName ?? Path.GetFileName(directory)) + ".log"),
-                delegate { return canceled; });
+                memoryMiB: 640, extraEnvironment: environment,
+                logPath: Path.Combine(Path.GetDirectoryName(directory), (logName ?? Path.GetFileName(directory)) + ".log"),
+                canceled: delegate { return canceled; });
         }
     }
 

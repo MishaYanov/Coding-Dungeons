@@ -1,6 +1,8 @@
 # Windows Native Coding Runner
 
-The app runs Rust and Go through a local Windows broker. The Rust compiler builds the learner library before the app stages the trusted tests. It then builds a static archive with the test harness. The broker starts the WebAssembly linker in a separate AppContainer job to turn that archive into the trial module. The linker calls LLVM's WebAssembly driver directly so its Windows startup does not require access to the executable's parent directories. The Go compiler builds a reactor with a fixed case export. Each case runs in a fresh Wasmtime process with bounded memory, fuel, and wall time. The host requires a normal return from the chosen test. A guest exit request or stdout message cannot grant credit.
+The app runs Rust and Go through a local Windows broker. The Rust compiler builds the learner library before the app stages the trusted tests. It then builds a static archive with the test harness. The broker starts the WebAssembly linker in a separate AppContainer job to turn that archive into the trial module. The linker calls LLVM's WebAssembly driver directly so its Windows startup does not require access to the executable's parent directories. For Go, the broker starts the compiler and linker in separate AppContainer jobs and supplies a prebuilt WASI standard library from the installer. Go produces a reactor with a fixed case export. Each case runs in a fresh Wasmtime process with bounded memory, fuel, and wall time. The host requires a normal return from the chosen test. A guest exit request or stdout message cannot grant credit.
+
+The Go 1.25.1 Windows tools are built with a source overlay that confines Winsock initialization errors to socket descriptors. This lets the tools read and write ordinary files when the sandbox denies Winsock initialization. The overlay applies to the host compiler and linker. The WASI standard library uses the pinned Go distribution.
 
 ## Windows isolation check
 

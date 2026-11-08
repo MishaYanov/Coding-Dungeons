@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const nativeWorkerFiles = ['broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe'];
 const nativeCompilerFiles = {
   rust: ['rust/bin/rustc.exe', 'rust/wasm-linker.exe'],
-  go: ['go/bin/go.exe'],
+  go: ['go/pkg/tool/windows_amd64/compile.exe', 'go/pkg/tool/windows_amd64/link.exe', 'go/stdlib/packages.txt'],
 };
 
 function resolvePackagedFile(directory, name) {

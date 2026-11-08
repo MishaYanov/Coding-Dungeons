@@ -39,7 +39,7 @@ test('desktop exposes the bundled native directory only with its fixed manifest 
   const directory = await makeRuntime(t);
   const native = join(directory, 'standalone-runner');
   const names = ['broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe',
-    'rust/wasm-linker.exe', 'go/bin/go.exe'];
+    'rust/wasm-linker.exe', 'go/pkg/tool/windows_amd64/compile.exe', 'go/pkg/tool/windows_amd64/link.exe', 'go/stdlib/packages.txt'];
   const manifest = {
     version: 1,
     languages: ['rust', 'go'],
@@ -56,7 +56,7 @@ test('desktop exposes the bundled native directory only with its fixed manifest 
   assert.equal(discoverRuntime(directory).nativeRunner, native);
   assert.equal(discoverRuntime(directory).available.native, true);
   const rustOnly = {...manifest, languages: ['rust'], executables: {...manifest.executables}};
-  delete rustOnly.executables['go/bin/go.exe'];
+  for (const name of names.filter(name => name.startsWith('go/'))) delete rustOnly.executables[name];
   await writeFile(manifestFile, JSON.stringify(rustOnly));
   assert.deepEqual(discoverRuntime(directory).nativeLanguages, ['rust']);
   await writeFile(manifestFile, JSON.stringify({...manifest, executables: {...manifest.executables, '../unexpected.exe': 'a'.repeat(64)}}));

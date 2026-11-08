@@ -12,10 +12,10 @@ const digest = content => createHash('sha256').update(content).digest('hex');
 async function bundle(t, language) {
   const directory = await mkdtemp(join(tmpdir(), 'coding-dungeons-bundle-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const compiler = language === 'go' ? 'go/bin/go.exe' : 'rust/bin/rustc.exe';
-  const files = { 'broker.exe': 'broker', 'sandbox-probe.exe': 'probe',
-    'wasm-worker/wasm-worker.exe': 'worker', [compiler]: 'compiler' };
-  if (language === 'rust') files['rust/wasm-linker.exe'] = 'linker';
+  const files = { 'broker.exe': 'broker', 'sandbox-probe.exe': 'probe', 'wasm-worker/wasm-worker.exe': 'worker' };
+  if (language === 'rust') Object.assign(files, {'rust/bin/rustc.exe': 'compiler', 'rust/wasm-linker.exe': 'linker'});
+  else Object.assign(files, {'go/pkg/tool/windows_amd64/compile.exe': 'compiler',
+    'go/pkg/tool/windows_amd64/link.exe': 'linker', 'go/stdlib/packages.txt': 'index'});
   for (const [path, content] of Object.entries(files)) {
     const parts = path.split('/');
     await mkdir(join(directory, ...parts.slice(0, -1)), { recursive: true });
@@ -216,11 +216,9 @@ test('the packaged broker compiles and runs suites from a Windows desktop sessio
     const outcome = await runner.grade(suite);
     assert.equal(outcome.status, 'failed', JSON.stringify(outcome));
     assert.deepEqual(outcome.tests.map(({ id, status }) => [id, status]), [['right', 'passed'], ['wrong', 'failed']]);
-    if (rust) {
-      const exercise = diamondExercise('rust');
-      const sack = await runner.grade({language, source: exercise.reference, exercise});
-      assert.equal(sack.status, 'passed', JSON.stringify(sack));
-      assert.deepEqual(sack.tests.map(item => item.status), ['passed', 'passed', 'passed']);
-    }
+    const exercise = diamondExercise(language);
+    const sack = await runner.grade({language, source: exercise.reference, exercise, tests: exercise.tests});
+    assert.equal(sack.status, 'passed', JSON.stringify(sack));
+    assert.deepEqual(sack.tests.map(item => item.status), ['passed', 'passed', 'passed']);
   });
 });
