@@ -111,6 +111,134 @@ function chunkedStatus(path, { headers, chunks = [] }) {
   });
 }
 
+const javascriptWorld = {'X-Ferrum-World':'javascript'};
+const rustChoice = {page:18, promptId:'checkpoint-1', value:'4'};
+const jsTrial = 'dispatch-floor-trial';
+const trialAnswers = {'relay-order':'b', 'badge-identity':'c'};
+
+async function createOneLifeHero(name, headers) {
+  const {payload:{hero}} = await request('/api/heroes', {method:'POST', headers, body:{name, oneLife:true}, status:201});
+  return hero;
+}
+
+test('One Life charges one wrong answer once and a potion heals only missing HP', async () => {
+  await request('/api/heroes', {method:'POST', body:{name:'Invalid mode',oneLife:'true'}, status:400});
+  const hero = await createOneLifeHero('Potion Keeper');
+  const {payload:initial} = await request('/api/progress', {hero});
+  assert.equal(initial.combat.oneLife, true);
+  assert.equal(initial.combat.hp, 100);
+  assert.equal(initial.combat.potions, 1);
+  const body = {...rustChoice, submissionId:randomUUID()};
+  const {payload:wrong} = await request('/api/answers', {method:'POST', hero, body});
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.combat.hp, 95);
+  assert.equal(wrong.combatEvent.damage, 5);
+  const {payload:retry} = await request('/api/answers', {method:'POST', hero, body});
+  assert.equal(retry.combat.hp, 95);
+  assert.equal(retry.combatEvent.damage, 0);
+  await request('/api/answers', {method:'POST', hero, body:{...body,value:'2'}, status:409});
+  const potion = {submissionId:randomUUID()};
+  const {payload:healed} = await request('/api/combat/potion', {method:'POST', hero, body:potion});
+  assert.equal(healed.combat.hp, 100);
+  assert.equal(healed.combat.potions, 0);
+  assert.equal(healed.combatEvent.healing, 5);
+  const {payload:healedRetry} = await request('/api/combat/potion', {method:'POST', hero, body:potion});
+  assert.equal(healedRetry.combatEvent.healing, 0);
+  const {payload:progress} = await request('/api/progress', {hero});
+  assert.deepEqual(progress.combat, healed.combat);
+  const written = {page:25,promptId:'training-1-3',value:'A draft with no verified score.',submissionId:randomUUID()};
+  const {payload:unscored} = await request('/api/answers', {method:'POST', hero, body:written});
+  assert.equal(unscored.assessment.score, null);
+  assert.equal(unscored.combat.hp, 100);
+  assert.equal(unscored.combatEvent.damage, 0);
+});
+
+test('Trials are scoped to the world, deal one hit per failed submission, and award a single potion', async () => {
+  const headers = javascriptWorld;
+  const hero = await createOneLifeHero('Trial Delver', headers);
+  const {payload:{trials}} = await request('/api/trials', {headers, hero});
+  assert.deepEqual(trials.map(({id}) => id), [jsTrial]);
+  assert.ok(trials[0].questions.every(question => !Object.hasOwn(question, 'answer') && !Object.hasOwn(question, 'correctOption')));
+  const options = {method:'POST', headers, hero};
+  const path = `/api/trials/${jsTrial}`;
+  await request(path, {...options, body:{answers:{'relay-order':'b'},submissionId:randomUUID()}, status:400});
+  const {payload:miss} = await request(path, {...options, body:{answers:{'relay-order':'a','badge-identity':'a'},submissionId:randomUUID()}});
+  assert.equal(miss.correct, false);
+  assert.equal(miss.passed, 0);
+  assert.equal(miss.combat.hp, 95);
+  assert.equal(miss.combatEvent.damage, 5);
+  const clear = {answers:trialAnswers, submissionId:randomUUID()};
+  const {payload:win} = await request(path, {...options, body:clear});
+  assert.equal(win.correct, true);
+  assert.equal(win.combat.potions, 2);
+  assert.equal(win.combatEvent.potionsEarned, 1);
+  assert.deepEqual(win.combat.completedTrials, [jsTrial]);
+  const {payload:replay} = await request(path, {...options, body:clear});
+  assert.equal(replay.combatEvent.potionsEarned, 0);
+  assert.equal(replay.combat.potions, 2);
+  await request(path, {...options, body:{...clear, submissionId:randomUUID()}, status:409});
+  const {payload:{hero:standard}} = await request('/api/heroes', {method:'POST', headers, body:{name:'Standard Trial'}, status:201});
+  const {payload:ordinaryWin} = await request(path, {...options,hero:standard,body:clear});
+  assert.equal(ordinaryWin.combat.oneLife, false);
+  assert.deepEqual(ordinaryWin.combat.completedTrials, [jsTrial]);
+  assert.equal(ordinaryWin.combatEvent.potionsEarned, 0);
+});
+
+test('only a failed full Workbench submission costs HP, and a first clear awards loot once', async () => {
+  const headers = javascriptWorld;
+  const hero = await createOneLifeHero('Workbench Survivor', headers);
+  const {payload:{quests:[quest]}} = await request('/api/campaign', {headers});
+  const {payload:page} = await request(`/api/pages/${quest.bossPage}`, {headers});
+  const prompt = page.prompts.find(item => item.exerciseId);
+  const grade = {method:'POST', headers, hero};
+  const common = {page:page.page,promptId:prompt.id,exerciseId:prompt.exerciseId};
+  const wrong = 'function makeBadge() { return {}; }';
+  const {payload:practice} = await request('/api/grade', {...grade,body:{...common,code:wrong,purpose:'examples'}});
+  assert.equal(practice.verdict, 'fail');
+  assert.equal((await request('/api/progress',{headers,hero})).payload.combat.hp, 100);
+  const {payload:timedOut} = await request('/api/grade', {...grade,body:{...common,
+    code:'function makeBadge() { while (true) {} }',submissionId:randomUUID()}});
+  assert.equal(timedOut.verdict, 'timeout');
+  assert.equal(timedOut.combatEvent.damage, 0);
+  assert.equal(timedOut.combat.hp, 100);
+  const {payload:fail} = await request('/api/grade', {...grade,body:{...common,code:wrong,submissionId:randomUUID()}});
+  assert.equal(fail.combat.hp, 95);
+  assert.equal(fail.combatEvent.damage, 5);
+  const {payload:compileError} = await request('/api/grade', {...grade,body:{...common,
+    code:'function makeBadge(',submissionId:randomUUID()}});
+  assert.equal(compileError.verdict, 'compile_error');
+  assert.equal(compileError.combat.hp, 90);
+  const code = 'function makeBadge(name) { return { name: name.trim().toUpperCase(), visits: 0 }; }';
+  const submission = {...common,code,submissionId:randomUUID()};
+  const {payload:win} = await request('/api/grade', {...grade,body:submission});
+  assert.equal(win.newClear, true);
+  assert.equal(win.combat.potions, 2);
+  const {payload:retry} = await request('/api/grade', {...grade,body:submission});
+  assert.equal(retry.newClear, false);
+  assert.equal(retry.combatEvent.potionsEarned, 0);
+  const {payload:repeat} = await request('/api/grade', {...grade,body:{...submission,submissionId:randomUUID()}});
+  assert.equal(repeat.combat.potions, 2);
+});
+
+test('falling at zero HP survives a restart and leaves reading and drafts available', async () => {
+  const hero = await createOneLifeHero('Fallen Expedition');
+  for (let hit = 0; hit < 20; hit++) {
+    const {payload:result} = await request('/api/answers', {method:'POST',hero,body:{...rustChoice,submissionId:randomUUID()}});
+    assert.equal(result.combat.hp, 95 - hit * 5);
+  }
+  await stop();
+  await start();
+  const {payload:progress} = await request('/api/progress',{hero});
+  assert.equal(progress.combat.fallen,true);
+  assert.equal(progress.combat.hp,0);
+  assert.equal(progress.combat.potions,1);
+  await request('/api/combat/potion',{method:'POST',hero,body:{submissionId:randomUUID()},status:409});
+  await request('/api/answers',{method:'POST',hero,body:{...rustChoice,submissionId:randomUUID()},status:409});
+  await request('/api/progress/1',{method:'PATCH',hero,body:{scout:true},status:409});
+  await request('/api/pages/26',{hero});
+  await request('/api/answers',{method:'POST',hero,body:{page:26,promptId:'boss-1',value:'saved draft'}});
+});
+
 test('reader serves the book and blocks access to private project files', async () => {
   const { payload: home, response } = await request('/');
   assert.match(home.toString(), /<title>Coding Dungeons \| Choose a world<\/title>/);

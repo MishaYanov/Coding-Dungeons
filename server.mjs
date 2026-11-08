@@ -15,6 +15,7 @@ import typescriptSuites from './data/workbench/typescript.mjs';
 import goSuites from './data/workbench/go.mjs';
 import rustSuites, { rustBossCoverage } from './data/workbench/rust.mjs';
 import { suggestions } from './data/workbench/suggestions.mjs';
+import { evaluateTrial, trialsFor } from './lib/trials.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const desktopToken = process.env.FERRUM_DESKTOP_TOKEN;
@@ -215,7 +216,8 @@ async function createHero(request, response, world) {
   const name = heroName(data.name);
   const path = data.path ?? 'all';
   if (!world.pathIds.has(path)) throw new HttpError(400, 'Unknown route.');
-  const hero = await world.store.createHero({id:randomUUID(), name, path:path || 'all'});
+  if (data.oneLife !== undefined && typeof data.oneLife !== 'boolean') throw new HttpError(400, 'Choose whether to enable One Life.');
+  const hero = await world.store.createHero({id:randomUUID(), name, path:path || 'all', oneLife:data.oneLife});
   selectHero(response, world, hero, 201);
 }
 
@@ -261,8 +263,33 @@ async function levelPatch(request, response, {questMap, gradedLevels, store}, he
   if ('answer' in data) changes.answer = string(data.answer, textLimit, 'Answer');
   if ('code' in data) changes.code = string(data.code, codeLimit, 'Code');
   if (!Object.keys(changes).length) throw new HttpError(400, 'Provide a quest log change.');
+  if (store.combatState(heroId).fallen && ['scout','forge','explained','side'].some(key => key in changes)) {
+    throw new HttpError(409, 'This hero has fallen. Choose another hero to keep submitting.');
+  }
   await store.saveLevel(heroId, level, changes);
   json(response, {ok:true});
+}
+
+function publicCombat(state) {
+  return {...state, oneLife:state.mode === 'one-life'};
+}
+
+function prepareSubmission(store, heroId, data, identity, requireId = false) {
+  const combat = store.combatState(heroId);
+  const id = data.submissionId ?? (requireId || combat.mode === 'one-life' ? null : randomUUID());
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+    throw new HttpError(400, 'Send a valid submission ID.');
+  }
+  const ticket = {id, fingerprint:createHash('sha256').update(JSON.stringify(identity)).digest('hex')};
+  const prior = store.combatReceipt(heroId, ticket);
+  if (!prior && combat.fallen) throw new HttpError(409, 'This hero has fallen. Choose another hero to keep submitting.');
+  return {ticket, prior};
+}
+
+function submissionResult(outcome, includeStandard = false) {
+  const result = outcome.replayed && outcome.result?.newClear ? {...outcome.result, newClear:false} : outcome.result;
+  if (!includeStandard && outcome.combat.mode === 'standard') return result;
+  return {...result, combat:publicCombat(outcome.combat), combatEvent:outcome.combatEvent};
 }
 
 function visibleAssessment(world, heroId, level, assessment) {
@@ -294,6 +321,12 @@ async function saveAnswer(request, response, world, heroId) {
   const {store, info:{id:worldId}} = world;
   const rubric = prompt.type === 'text' ? writtenGm.getPrompt(worldId, prompt.id, prompt.body) : null;
   if (rubric) {
+    const {ticket, prior} = prepareSubmission(store, heroId, data, ['written', page.page, prompt.id, value]);
+    const writeResult = outcome => {
+      const result = submissionResult(outcome);
+      return json(response, {...result, assessment:visibleAssessment(world, heroId, page.level, result.assessment)});
+    };
+    if (prior) return writeResult(prior);
     const revision = store.startAssessment(heroId, page.page, prompt.id, value);
     const signal = disconnectSignal(response);
     const result = await runLocalJob(() => writtenGm.assess(worldId, prompt.id, prompt.body, value, {signal}), {
@@ -301,11 +334,13 @@ async function saveAnswer(request, response, world, heroId) {
       criteria:[], rubricVersion:rubric.version,
     }, signal);
     if (signal.aborted) return;
-    if (!store.completeAssessment(heroId, page.page, prompt.id, revision, result)) {
-      throw new HttpError(409, 'A newer version of this answer was saved.');
-    }
-    return json(response, {feedback:'Your response is saved.', correct:null,
-      assessment:visibleAssessment(world, heroId, page.level, result)});
+    const outcome = store.settleCombat(heroId, {...ticket, wrong:result.status === 'scored' && result.score < 100}, () => {
+      if (!store.completeAssessment(heroId, page.page, prompt.id, revision, result)) {
+        throw new HttpError(409, 'A newer version of this answer was saved.');
+      }
+      return {feedback:'Your response is saved.', correct:null, assessment:result};
+    });
+    return writeResult(outcome);
   }
   let correct = null;
   let feedback = prompt.feedback;
@@ -313,6 +348,12 @@ async function saveAnswer(request, response, world, heroId) {
     if (!prompt.options.some(option => option.id === value)) throw new HttpError(400, 'Choose one of the listed options.');
     correct = prompt.correctOption === value;
     feedback = prompt.feedbackByOption?.[value] ?? prompt.feedback;
+    const {ticket, prior} = prepareSubmission(store, heroId, data, ['choice', page.page, prompt.id, value]);
+    const outcome = prior ?? store.settleCombat(heroId, {...ticket, wrong:!correct}, () => {
+      store.saveResponse(heroId, page.page, prompt.id, value, feedback, correct);
+      return {feedback, correct};
+    });
+    return json(response, submissionResult(outcome));
   } else if (authoredTrainingAnswer(worldId, prompt) || store.workbenchMode(heroId, page.level).mode === 'hard') {
     feedback = 'Your response is saved.';
   }
@@ -340,6 +381,7 @@ async function revealAnswer(request, response, world, heroId) {
 function currentProgress(world, heroId) {
   const progress = world.store.progress(heroId);
   progress.workbench = world.store.workbenchState(heroId);
+  progress.combat = publicCombat(world.store.combatState(heroId));
   for (const answer of progress.responses) {
     const page = world.pages[answer.page - 1];
     const prompt = page?.prompts.find(item => item.id === answer.promptId);
@@ -372,9 +414,10 @@ function completedStages(encounter, results) {
 
 async function submitEncounterStage(request, response, store, heroId, encounter) {
   const data = await readJson(request);
-  if (Object.keys(data).some(key => key !== 'stageId' && key !== 'optionId')) {
+  if (Object.keys(data).some(key => !['stageId','optionId','submissionId'].includes(key))) {
     throw new HttpError(400, 'Send a stage and its listed option when required.');
   }
+
   const stageId = string(data.stageId, 64, 'Stage ID');
   const stage = encounter.stages.find(item => item.id === stageId);
   if (!stage) throw new HttpError(400, 'Choose a stage from this encounter.');
@@ -387,6 +430,8 @@ async function submitEncounterStage(request, response, store, heroId, encounter)
   } else if (Object.hasOwn(data, 'optionId')) {
     throw new HttpError(400, 'This stage does not take an option.');
   }
+  const {ticket, prior} = prepareSubmission(store, heroId, data, ['encounter', encounter.id, stageId, optionId]);
+  if (prior) return json(response, submissionResult(prior));
 
   const before = store.encounterResults(heroId, encounter.id);
   if (before.has(stageId)) {
@@ -397,9 +442,16 @@ async function submitEncounterStage(request, response, store, heroId, encounter)
   }
 
   const attempt = await evaluateStage(encounter, stage, optionId);
-  if (attempt.correct) store.recordEncounterStage(heroId, encounter.id, stageId, attempt);
-  const after = store.encounterResults(heroId, encounter.id);
-  json(response, {completed:completedStages(encounter, after), result:after.get(stageId) ?? attempt});
+  const current = store.encounterResults(heroId, encounter.id);
+  if (current.has(stageId)) return json(response, {completed:completedStages(encounter, current), result:current.get(stageId)});
+  const finalStage = encounter.stages.at(-1) === stage;
+  const outcome = store.settleCombat(heroId, {...ticket, wrong:!attempt.correct,
+    rewardKey:attempt.correct && finalStage ? `encounter:${encounter.id}` : undefined}, () => {
+    if (attempt.correct) store.recordEncounterStage(heroId, encounter.id, stageId, attempt);
+    const after = store.encounterResults(heroId, encounter.id);
+    return {completed:completedStages(encounter, after), result:after.get(stageId) ?? attempt};
+  });
+  json(response, submissionResult(outcome));
 }
 
 async function submitCode(request, response, world, heroId) {
@@ -416,6 +468,8 @@ async function submitCode(request, response, world, heroId) {
   if (!['examples','submit'].includes(purpose)) throw new HttpError(400, 'Choose Run Examples or Submit.');
   const code = string(data.code, codeLimit, 'Code');
   if (!code.trim()) throw new HttpError(400, 'Enter code before running tests.');
+  const submission = purpose === 'submit' ? prepareSubmission(store, heroId, data, ['workbench', exercise.id, code]) : null;
+  if (submission?.prior) return json(response, submissionResult(submission.prior));
   const {mode} = store.workbenchMode(heroId, page.level);
   store.saveResponse(heroId, page.page, prompt.id, code, 'Your submission is saved.');
   const signal = disconnectSignal(response);
@@ -435,14 +489,43 @@ async function submitCode(request, response, world, heroId) {
     return noRun('unavailable', `The local ${world.info.name} sandbox is unavailable. Your draft is saved.`);
   }, noRun('busy', 'The local evaluation queue is full. Try again in a moment.'), signal);
   if (signal.aborted) return;
-  const runId = randomUUID();
+  const runId = submission?.ticket.id ?? randomUUID();
   const {suiteRevision} = exercise;
-  let completion = {newClear:false, hardClear:false};
-  if (['pass', 'fail', 'compile_error', 'timeout'].includes(result.verdict)) {
-    completion = store.recordAttempt(heroId, {page:page.page, promptId:prompt.id, level:page.level,
-      exerciseId:exercise.id, code, purpose, mode, runId, suiteRevision, ...result});
+  const report = {...result, purpose, mode, runId, suiteRevision, newClear:false, hardClear:false};
+  if (submission && ['pass','fail','compile_error','timeout'].includes(result.verdict)) {
+    const outcome = store.settleCombat(heroId, {...submission.ticket,
+      wrong:result.verdict === 'fail' || result.verdict === 'compile_error',
+      rewardKey:result.verdict === 'pass' ? `forge:${exercise.id}` : undefined}, () => {
+      const completion = store.recordAttempt(heroId, {page:page.page, promptId:prompt.id, level:page.level,
+        exerciseId:exercise.id, code, purpose, mode, runId, suiteRevision, ...result});
+      return {...report, ...completion};
+    });
+    return json(response, submissionResult(outcome));
   }
-  json(response, {...result, purpose, mode, runId, suiteRevision, ...completion});
+  json(response, report);
+}
+
+async function submitTrial(request, response, world, heroId, trialId) {
+  const trial = trialsFor(world.info.id).find(item => item.id === trialId);
+  if (!trial) throw new HttpError(404, 'Trial not found in this world.');
+  const data = await readJson(request);
+  const result = evaluateTrial(world.info.id, trialId, data.answers);
+  if (!result) throw new HttpError(400, 'Choose an answer for each trial question.');
+  const identity = ['trial', trialId, trial.questions.map(({id}) => data.answers[id])];
+  const {store} = world;
+  const {ticket, prior} = prepareSubmission(store, heroId, data, identity, true);
+  if (prior) return json(response, submissionResult(prior, true));
+  const outcome = store.settleCombat(heroId, {...ticket, wrong:!result.correct, trialId:result.correct ? trialId : undefined}, () => {
+    if (store.combatState(heroId).completedTrials.includes(trialId)) throw new HttpError(409, 'This trial is already cleared.');
+    return result;
+  });
+  json(response, submissionResult(outcome, true));
+}
+
+async function drinkPotion(request, response, store, heroId) {
+  const data = await readJson(request);
+  const {ticket, prior} = prepareSubmission(store, heroId, data, ['potion'], true);
+  json(response, submissionResult(prior ?? store.consumePotion(heroId, ticket), true));
 }
 
 async function revealSuggestion(request, response, world, heroId) {
@@ -519,6 +602,7 @@ const server = createServer(async (request,response) => {
     }
     if (method === 'GET') {
       if (path === '/api/campaign') return json(response, world.publicCampaign);
+      if (path === '/api/trials') return json(response, {trials:trialsFor(world.info.id)});
       if (path === '/api/heroes') return json(response, {heroes:await store.heroes()});
       if (path === '/api/progress') return json(response, currentProgress(world, await requireHero(request, world)));
       if (path === '/api/status') {
@@ -559,6 +643,9 @@ const server = createServer(async (request,response) => {
       if (match) return await levelPatch(request, response, world, await requireHero(request, world), Number(match[1]));
     }
     if (method === 'POST') {
+      const trialRoute = path.match(/^\/api\/trials\/([a-z0-9-]{1,64})$/);
+      if (trialRoute) return await submitTrial(request, response, world, await requireHero(request, world), trialRoute[1]);
+      if (path === '/api/combat/potion') return await drinkPotion(request, response, store, await requireHero(request, world));
       if (path === '/api/heroes') return await createHero(request, response, world);
       if (path === '/api/heroes/load') return await loadHero(request, response, world);
       if (path === '/api/answers') return await saveAnswer(request, response, world, await requireHero(request, world));
@@ -570,6 +657,9 @@ const server = createServer(async (request,response) => {
   } catch (error) {
     if (response.headersSent) return response.destroy();
     if (error.code === 'HERO_EXISTS') return json(response, {error:'A hero with that name already exists. Load it or choose another name.'}, 409);
+    if (['HERO_FALLEN','COMBAT_SUBMISSION_CONFLICT','POTION_UNAVAILABLE','HEALTH_FULL'].includes(error.code)) {
+      return json(response, {error:error.message}, 409);
+    }
     if (!(error instanceof HttpError)) console.error(error.message);
     json(response, {error:error instanceof HttpError ? error.message : 'Ferrum could not complete this request.'}, error.status ?? 500);
   }
