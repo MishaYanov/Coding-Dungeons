@@ -11,10 +11,11 @@ The Go 1.25.1 Windows amd64 installation directory.
 .PARAMETER ArtifactSource
 A local folder containing wasmtime.50.0.1.nupkg, the Microsoft.NETCore.App.Runtime.win-x64
 and Microsoft.NETCore.App.Host.win-x64 packages at 8.0.33, and wasmtime-dotnet-LICENSE
-from Wasmtime .NET commit 4aac1a5958f4da2dadca4ae84e16004516372dd6.
+from Wasmtime .NET commit 4aac1a5958f4da2dadca4ae84e16004516372dd6. Also provide
+the pinned LLVM, zlib, and zstd archives and LLVM license from build-wasm-linker.ps1.
 
 .NOTES
-Use Visual Studio C++ Build Tools and a .NET SDK that can publish net8.0 for win-x64. The script verifies the input package
+Use Visual Studio C++ Build Tools, CMake, Ninja, and a .NET SDK that can publish net8.0 for win-x64. The script verifies the input package
 hashes and publishes from the supplied offline source. Stage these assets before packaging.
 The installed engine still requires the broker's Windows isolation probe to succeed.
 #>
@@ -156,8 +157,8 @@ try {
 
     $rust = Join-Path $payload 'rust'
     Copy-IntoFolder @((Join-Path $rustRoot 'bin/rustc.exe'), $rustDrivers[0].FullName) (Join-Path $rust 'bin')
-    $hostLinker = 'lib/rustlib/x86_64-pc-windows-msvc/bin'
-    Copy-IntoFolder (Join-Path $rustRoot "$hostLinker/rust-lld.exe") (Join-Path $rust $hostLinker)
+    & (Join-Path $desktopRoot 'build-wasm-linker.ps1') -ArtifactSource $artifacts -BuildDirectory (Join-Path $scratch 'linker') `
+        -OutputPath (Join-Path $rust 'wasm-linker.exe') -NoticesDirectory (Join-Path $payload 'licenses')
     $wasi = 'lib/rustlib/wasm32-wasip1'
     $wasiDestination = Join-Path $rust $wasi
     New-Item -ItemType Directory -Path $wasiDestination -Force | Out-Null
@@ -204,7 +205,7 @@ try {
     }
 
     $executables = [ordered]@{}
-    foreach ($name in @('broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe', 'go/bin/go.exe')) {
+    foreach ($name in @('broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe', 'rust/wasm-linker.exe', 'go/bin/go.exe')) {
         $executables[$name] = (Get-FileHash -LiteralPath (Join-Path $payload $name) -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     [ordered]@{

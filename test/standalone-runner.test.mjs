@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createStandaloneRunner } from '../lib/standalone-runner.mjs';
+import { diamondExercise } from '../lib/diamond-encounter.mjs';
 
 const digest = content => createHash('sha256').update(content).digest('hex');
 
@@ -14,6 +15,7 @@ async function bundle(t, language) {
   const compiler = language === 'go' ? 'go/bin/go.exe' : 'rust/bin/rustc.exe';
   const files = { 'broker.exe': 'broker', 'sandbox-probe.exe': 'probe',
     'wasm-worker/wasm-worker.exe': 'worker', [compiler]: 'compiler' };
+  if (language === 'rust') files['rust/wasm-linker.exe'] = 'linker';
   for (const [path, content] of Object.entries(files)) {
     const parts = path.split('/');
     await mkdir(join(directory, ...parts.slice(0, -1)), { recursive: true });
@@ -106,6 +108,28 @@ test('Rust stages the harness after compiling the source and uses only broker ca
   assert.deepEqual(calls, ['probe', 'rust-compile', 'rust-link', 'case', 'case']);
 });
 
+test('Rust reports suite signature errors without exposing fixture text', async t => {
+  const directory = await bundle(t, 'rust');
+  const runner = createStandaloneRunner({ directory, platform: 'win32', architecture: 'x64',
+    command: async (_executable, [operation, scratch]) => {
+      if (operation === 'probe') return { code: 0, stdout: probePass };
+      if (operation === 'rust-compile') {
+        await writeFile(join(scratch, 'libferrum_submission.rlib'), 'object');
+        return { code: 0 };
+      }
+      assert.equal(operation, 'rust-link');
+      await writeFile(join(scratch, '..', 'link.log'), 'harness.rs:5:8: error[E0425]: private fixture text');
+      return { code: 1 };
+    },
+  });
+  const result = await runner.grade({ language: 'rust', source: 'fn run() {}', exercise: {
+    tests: '#[test]\nfn first() { run(); }', testNames: ['first'],
+  } });
+  assert.equal(result.status, 'compile_error');
+  assert.match(result.diagnostics[0].message, /public Rust function signature/);
+  assert.doesNotMatch(result.diagnostics[0].message, /private fixture text/);
+});
+
 test('Go compiler directives cannot reach the broker, while ordinary strings and comments can', async t => {
   const directory = await bundle(t, 'go');
   const calls = [];
@@ -192,5 +216,11 @@ test('the packaged broker compiles and runs suites from a Windows desktop sessio
     const outcome = await runner.grade(suite);
     assert.equal(outcome.status, 'failed', JSON.stringify(outcome));
     assert.deepEqual(outcome.tests.map(({ id, status }) => [id, status]), [['right', 'passed'], ['wrong', 'failed']]);
+    if (rust) {
+      const exercise = diamondExercise('rust');
+      const sack = await runner.grade({language, source: exercise.reference, exercise});
+      assert.equal(sack.status, 'passed', JSON.stringify(sack));
+      assert.deepEqual(sack.tests.map(item => item.status), ['passed', 'passed', 'passed']);
+    }
   });
 });

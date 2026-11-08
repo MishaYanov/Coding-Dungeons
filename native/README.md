@@ -1,6 +1,6 @@
 # Windows Native Coding Runner
 
-The app runs Rust and Go through a local Windows broker. The Rust compiler builds the learner library before the app stages the trusted tests. The Go compiler builds a reactor with a fixed case export. Each case runs in a fresh Wasmtime process with bounded memory, fuel, and wall time. The host requires a normal return from the chosen test. A guest exit request or stdout message cannot grant credit.
+The app runs Rust and Go through a local Windows broker. The Rust compiler builds the learner library before the app stages the trusted tests. It then builds a static archive with the test harness. The broker starts the WebAssembly linker in a separate AppContainer job to turn that archive into the trial module. The linker calls LLVM's WebAssembly driver directly so its Windows startup does not require access to the executable's parent directories. The Go compiler builds a reactor with a fixed case export. Each case runs in a fresh Wasmtime process with bounded memory, fuel, and wall time. The host requires a normal return from the chosen test. A guest exit request or stdout message cannot grant credit.
 
 ## Windows isolation check
 
@@ -21,7 +21,9 @@ The broker first connects to the test listener itself. On Windows installations 
 
 The runner expects `native-runner.json`, `broker.exe`, `sandbox-probe.exe`, and `wasm-worker/wasm-worker.exe` in the bundle. The compiler directories are `rust/` with the Windows x64 Rust compiler and `wasm32-wasip1` target and `go/` with the Windows x64 Go toolchain. Publish the Wasmtime worker as a self-contained Windows x64 directory. The manifest identifies the available languages and SHA-256 hashes of their fixed executable paths.
 
-The staging script builds the broker, native probe, and self-contained worker, then copies the required toolchains into `desktop/runtime/standalone-runner`. Use Windows x64, PowerShell 7, Visual Studio C++ Build Tools with the Windows SDK, a .NET SDK, Rust 1.99.1 with the WASI target, and Go 1.25.1. Provide a local folder with the pinned Wasmtime and .NET NuGet packages and the Wasmtime license listed in the script. It verifies the file hashes before building. [Native staging script](../desktop/stage-native-runtime.ps1)
+Run the staging script in an x64 Visual Studio developer shell with MSVC 14.44 or newer, the Windows SDK, CMake, Ninja, PowerShell 7, a .NET SDK, Rust 1.99.1 with the WASI target, and Go 1.25.1. The script builds the broker, native probe, WebAssembly linker, and self-contained worker, then copies the required toolchains into `desktop/runtime/standalone-runner`. Place the pinned Wasmtime and .NET packages, LLVM developer archive, zlib and zstd sources, and license files in the artifact directory. Both staging scripts verify input hashes before building. [Native staging script](../desktop/stage-native-runtime.ps1) · [Linker build script](../desktop/build-wasm-linker.ps1)
+
+Use the Windows x64 developer archive `clang+llvm-23.1.1-x86_64-pc-windows-msvc.tar.zst` from the [LLVM 23.1.1 release](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.1). Save LLVM's [license from that tag](https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-23.1.1/llvm/LICENSE.TXT) as `LLVM-LICENSE.txt`. Get the matching source archives from [zlib](https://zlib.net/fossils/zlib-1.3.2.tar.gz) and [zstd](https://github.com/facebook/zstd/releases/tag/v1.5.7).
 
 ```powershell
 rustup target add --toolchain 1.99.1 wasm32-wasip1
@@ -42,5 +44,6 @@ The app enables the bundle only after its hashes and the live Windows probe pass
 $env:DUNGEONS_TEST_WASM_WORKER = 'C:\path\to\wasm-worker.exe'
 $env:DUNGEONS_TEST_GO_WASM = '1'
 $env:DUNGEONS_TEST_RUSTC_WASM = 'C:\path\to\rustc.exe'
+$env:DUNGEONS_TEST_RUST_WASM_LINKER = 'C:\path\to\wasm-linker.exe'
 node --test test/standalone-runner-wasm.test.mjs
 ```

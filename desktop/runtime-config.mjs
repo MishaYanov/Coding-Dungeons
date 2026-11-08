@@ -3,7 +3,10 @@ import { dirname, join, normalize, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const nativeWorkerFiles = ['broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe'];
-const nativeCompilerFiles = {rust: 'rust/bin/rustc.exe', go: 'go/bin/go.exe'};
+const nativeCompilerFiles = {
+  rust: ['rust/bin/rustc.exe', 'rust/wasm-linker.exe'],
+  go: ['go/bin/go.exe'],
+};
 
 function resolvePackagedFile(directory, name) {
   try {
@@ -27,7 +30,7 @@ function nativeRuntime(directory) {
     if (version !== 1 || !Array.isArray(languages) || languages.length === 0
       || new Set(languages).size !== languages.length
       || !languages.every((name) => typeof name === 'string' && Object.hasOwn(nativeCompilerFiles, name))) return undefined;
-    const required = [...nativeWorkerFiles, ...languages.map((name) => nativeCompilerFiles[name])];
+    const required = [...nativeWorkerFiles, ...languages.flatMap((name) => nativeCompilerFiles[name])];
     if (!executables || Object.keys(executables).length !== required.length) return undefined;
     if (!required.every((name) =>
       typeof executables[name] === 'string' && /^[a-f0-9]{64}$/i.test(executables[name])

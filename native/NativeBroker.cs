@@ -64,13 +64,29 @@ internal static class NativeBroker
         if (link)
         {
             string library = Path.Combine(directory, "libferrum_submission.rlib");
+            string archive = Path.Combine(directory, "libferrum_harness.a");
+            string linker = Path.Combine(toolchain, "wasm-linker.exe");
+            string wasi = Path.Combine(toolchain, "lib", "rustlib", "wasm32-wasip1", "lib", "self-contained");
             RequireFile(library);
-            arguments.AddRange(new[] { "--crate-type=cdylib", "--crate-name=ferrum_harness",
-                "--extern", "ferrum_submission=" + library, "-o", "trial.wasm", "harness.rs" });
+            RequireFile(linker);
+            RequireDirectory(wasi);
+            arguments.AddRange(new[] { "--crate-type=staticlib", "--crate-name=ferrum_harness",
+                "--extern", "ferrum_submission=" + library, "-o", archive, "harness.rs" });
+
+            // Keep both tools isolated. The broker starts LLD directly because
+            // rustc's own subprocess setup can fail inside an AppContainer.
+            int compiled = Compile(toolchain, executable, arguments.ToArray(), directory, null, processLimit: 1);
+            if (compiled != 0) return compiled;
+            RequireFile(archive);
+            return Compile(toolchain, linker, new[] {
+                "-flavor", "wasm", "--export=coding_dungeons_run_case", "-z", "stack-size=1048576",
+                "--stack-first", "--no-demangle", "--gc-sections", "--no-entry", "-O0",
+                archive, "-L", wasi, "-lc", "-o", "trial.wasm",
+            }, directory, null, processLimit: 1, logName: "lld");
         }
-        else arguments.AddRange(new[] { "--crate-type=rlib", "--crate-name=ferrum_submission",
+        arguments.AddRange(new[] { "--crate-type=rlib", "--crate-name=ferrum_submission",
             "-o", "libferrum_submission.rlib", "submission.rs" });
-        return Compile(toolchain, executable, arguments.ToArray(), directory, null);
+        return Compile(toolchain, executable, arguments.ToArray(), directory, null, processLimit: 1);
     }
 
     private static int Go(string assets, string directory)
@@ -93,7 +109,7 @@ internal static class NativeBroker
     }
 
     private static int Compile(string toolchain, string executable, string[] arguments, string directory,
-        SortedDictionary<string, string> environment)
+        SortedDictionary<string, string> environment, uint processLimit = 8, string logName = null)
     {
         RequireDirectory(toolchain);
         using (var profile = new WindowsSandbox.Profile())
@@ -102,7 +118,8 @@ internal static class NativeBroker
             profile.AllowDirectory(directory, FileSystemRights.Modify, true);
             profile.AllowDirectory(toolchain, FileSystemRights.ReadAndExecute, true);
             return WindowsSandbox.Run(profile, executable, arguments, directory, CompilerTimeoutMs,
-                8, 640, environment, Path.Combine(Path.GetDirectoryName(directory), Path.GetFileName(directory) + ".log"),
+                processLimit, 640, environment,
+                Path.Combine(Path.GetDirectoryName(directory), (logName ?? Path.GetFileName(directory)) + ".log"),
                 delegate { return canceled; });
         }
     }

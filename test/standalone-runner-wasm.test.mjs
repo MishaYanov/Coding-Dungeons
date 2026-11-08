@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import goExercises from '../data/workbench/go.mjs';
@@ -12,6 +12,7 @@ import { caseExport, goWasiHarness, rustWasiHarness } from '../lib/standalone-ru
 const exec = promisify(execFile);
 const worker = process.env.DUNGEONS_TEST_WASM_WORKER;
 const rustc = process.env.DUNGEONS_TEST_RUSTC_WASM;
+const rustLinker = process.env.DUNGEONS_TEST_RUST_WASM_LINKER;
 const scratch = process.env.DUNGEONS_TEST_NATIVE_SCRATCH ?? tmpdir();
 const section = (kind, body) => [kind, body.length, ...body];
 const bytes = value => [Buffer.byteLength(value), ...Buffer.from(value)];
@@ -104,13 +105,15 @@ test('all authored Go reference cases run in the real WASI worker', {
 });
 
 test('the Rust WASI harness runs every reference case using the pinned compiler', {
-  skip: !worker || !rustc,
+  skip: !worker || !rustc || !rustLinker,
 }, async t => {
   const exercises = JSON.parse(await readFile(new URL('../data/exercises.json', import.meta.url), 'utf8'));
   const directory = await mkdtemp(join(scratch, 'coding-dungeons-rust-wasm-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const library = join(directory, 'libferrum_submission.rlib');
+  const archive = join(directory, 'libferrum_harness.a');
   const artifact = join(directory, 'trial.wasm');
+  const wasi = join(dirname(dirname(rustc)), 'lib', 'rustlib', 'wasm32-wasip1', 'lib', 'self-contained');
   const flags = ['--target', 'wasm32-wasip1', '--edition=2024', '-Cpanic=abort', '-Cdebuginfo=0', '-Awarnings'];
   const options = { cwd: directory, env: { ...process.env, TEMP: directory, TMP: directory }, windowsHide: true, timeout: 20_000 };
   const goblin = diamondExercise('rust');
@@ -122,8 +125,10 @@ test('the Rust WASI harness runs every reference case using the pinned compiler'
     await writeFile(join(directory, 'submission.rs'), exercise.solution);
     await exec(rustc, [...flags, '--crate-type=rlib', '--crate-name=ferrum_submission', '-o', 'libferrum_submission.rlib', 'submission.rs'], options);
     await writeFile(join(directory, 'harness.rs'), harness.source);
-    await exec(rustc, [...flags, '--crate-type=cdylib', '--crate-name=ferrum_harness', '--extern', `ferrum_submission=${library}`,
-      '-o', artifact, 'harness.rs'], options);
+    await exec(rustc, [...flags, '--crate-type=staticlib', '--crate-name=ferrum_harness', '--extern', `ferrum_submission=${library}`,
+      '-o', archive, 'harness.rs'], options);
+    await exec(rustLinker, ['-flavor', 'wasm', `--export=${caseExport}`, '-z', 'stack-size=1048576', '--stack-first',
+      '--no-demangle', '--gc-sections', '--no-entry', '-O0', archive, '-L', wasi, '-lc', '-o', artifact], options);
     for (const [index, id] of harness.ids.entries()) {
       assert.equal(await verdict(artifact, index), exercise.expectedVerdicts?.[index] ?? 0, `${exercise.id}/${id}`);
     }
