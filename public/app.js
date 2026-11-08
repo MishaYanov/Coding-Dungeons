@@ -73,6 +73,11 @@ const state = {
   world: null,
   campaign: {},
   hero: null,
+  combat: null,
+  combatNotice: "",
+  combatVersion: 0,
+  combatRequest: null,
+  potionBusy: false,
   switchingHero: false,
   heroListRequest: 0,
   heroCount: null,
@@ -107,7 +112,7 @@ async function api(path, options = {}) {
     headers["X-Ferrum-Request"] = "1";
     headers["Content-Type"] = "application/json";
   }
-  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/)/.test(path)) {
+  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$))/.test(path)) {
     const hero = options.hero || state.hero;
     if (!hero) throw new Error("Choose a hero to save your expedition.");
     headers["X-Ferrum-Hero"] = hero.id;
@@ -200,6 +205,100 @@ function toast(copy) {
   toastTimer = setTimeout(() => { $("toast").hidden = true; }, 4500);
 }
 
+function renderCombat() {
+  const combat = state.combat;
+  const status = $("combat-status");
+  status.hidden = !combat?.oneLife;
+  $("trial-survival").hidden = status.hidden;
+  $("trial-rules").textContent = combat?.oneLife
+    ? "Answer every question correctly to earn a healing potion on your first clear."
+    : "Answer every question correctly to clear a trial.";
+  if (!status.hidden) {
+    const health = `${combat.hp} / ${combat.maxHp} HP`;
+    const potions = `${combat.potions} ${combat.potions === 1 ? "potion" : "potions"}`;
+    const fallen = "Your hero has fallen. Choose another hero to keep submitting.";
+    const meter = $("combat-meter");
+    status.dataset.fallen = String(combat.fallen);
+    $("combat-hp").textContent = health;
+    $("combat-potions").textContent = potions;
+    meter.max = combat.maxHp;
+    meter.value = combat.hp;
+    const feedback = $("combat-feedback");
+    feedback.textContent = [state.combatNotice, combat.fallen && fallen].filter(Boolean).join(" · ");
+    feedback.hidden = !feedback.textContent;
+    $("trial-health").textContent = [health, potions, feedback.textContent].filter(Boolean).join(" · ");
+    const cannotDrink = state.potionBusy || combat.fallen || !combat.potions || combat.hp === combat.maxHp;
+    $("drink-potion").disabled = cannotDrink;
+    $("trial-potion").disabled = cannotDrink;
+  }
+  if (combat?.fallen) {
+    for (const control of document.querySelectorAll("[data-expedition-submit]")) control.disabled = true;
+  }
+  for (const action of $("trial-content").querySelectorAll("[data-trial-id]")) {
+    if (combat?.completedTrials.includes(action.dataset.trialId)) {
+      action.textContent = "Trial cleared";
+      action.disabled = true;
+    }
+  }
+}
+
+function applyCombat(combat, event) {
+  if (!combat) return;
+  state.combat = combat;
+  if (event) {
+    state.combatNotice = [
+      event.damage && `−${event.damage} HP`,
+      event.healing && `+${event.healing} HP`,
+      event.potionsEarned && `+${event.potionsEarned} ${event.potionsEarned === 1 ? "potion" : "potions"}`,
+    ].filter(Boolean).join(" · ");
+  }
+  renderCombat();
+}
+
+async function submitExpedition(path, options) {
+  const hero = state.hero;
+  if (!hero || state.switchingHero) throw new Error("Choose a hero to submit.");
+  if (state.combat?.fallen) throw new Error("Your hero has fallen.");
+  if (state.combatRequest) throw new Error("Your previous submission is still being checked.");
+  const request = {};
+  state.combatRequest = request;
+  try {
+    const result = await api(path, {
+      ...options,
+      hero,
+      method: "POST",
+      body: { ...options.body, submissionId: crypto.randomUUID() },
+    });
+    if (hero === state.hero) {
+      state.combatVersion++;
+      applyCombat(result.combat, result.combatEvent);
+    }
+    return result;
+  } finally {
+    if (state.combatRequest === request) state.combatRequest = null;
+  }
+}
+
+async function drinkPotion() {
+  const hero = state.hero;
+  if (!hero || state.potionBusy || $("drink-potion").disabled) return;
+  state.potionBusy = true;
+  renderCombat();
+  try {
+    await submitExpedition("/api/combat/potion", {});
+  } catch (error) {
+    if (hero === state.hero) {
+      state.combatNotice = error.message;
+      renderCombat();
+    }
+  } finally {
+    if (hero === state.hero) {
+      state.potionBusy = false;
+      renderCombat();
+    }
+  }
+}
+
 function applyProgress(progress) {
   state.profile = {
     callsign: text(progress.profile?.callsign) || text(state.hero?.name) || "Explorer",
@@ -222,10 +321,13 @@ async function refreshProgress({ animateForgeLevel = null } = {}) {
   const hero = state.hero;
   if (!hero) return;
   const number = ++state.progressRequest;
+  const combatVersion = state.combatVersion;
   try {
     const progress = await api("/api/progress");
     if (hero !== state.hero || number !== state.progressRequest) return;
     applyProgress(progress);
+    // A progress request started before a submission completed can contain older HP.
+    if (combatVersion === state.combatVersion) applyCombat(progress.combat);
     state.progressError = "";
     updateForgeBadge();
     updateCreature(animateForgeLevel);
@@ -637,6 +739,8 @@ function renderPrompt(data, prompt, index) {
   const codePrompt = prompt.type === "code";
   const choicePrompt = prompt.type === "choice";
   const runnable = codePrompt && prompt.exerciseId != null;
+  const graded = runnable || choicePrompt || Boolean(prompt.assessment);
+  const runnerUnavailable = runnable && state.runner.toLowerCase() === "unavailable";
   const form = make("form", "field-card prompt-form");
   const heading = make("div", "prompt-heading");
   const title = make("h2", "", text(prompt.title) || "Encounter");
@@ -714,7 +818,9 @@ function renderPrompt(data, prompt, index) {
   const actions = make("div", "form-actions");
   const submit = button(runnable ? "Submit solution" : codePrompt ? "Save code notes" : choicePrompt ? "Check answer" : prompt.assessment ? "Ask the GM" : "Submit response", "button button-primary");
   submit.type = "submit";
-  submit.disabled = runnable && state.runner.toLowerCase() === "unavailable";
+  const submissionUnavailable = () => runnerUnavailable || (graded && state.combat?.fallen === true);
+  if (graded) submit.dataset.expeditionSubmit = "";
+  submit.disabled = submissionUnavailable();
   const status = make("span", "inline-status");
   status.setAttribute("aria-live", "polite");
   actions.append(submit);
@@ -725,7 +831,7 @@ function renderPrompt(data, prompt, index) {
   if (runnable) {
     examples = button("Run Examples", "button button-quiet");
     examples.type = "submit";
-    examples.disabled = submit.disabled;
+    examples.disabled = runnerUnavailable;
     cancel = button("Cancel run", "button button-quiet");
     cancel.hidden = true;
     cancel.addEventListener("click", () => activeRun?.abort());
@@ -734,7 +840,6 @@ function renderPrompt(data, prompt, index) {
     saveCode.addEventListener("click", async () => {
       if (hero !== state.hero || state.switchingHero) return;
       const value = valueOf();
-      const wasDisabled = submit.disabled;
       saveCode.disabled = true;
       submit.disabled = true;
       examples.disabled = true;
@@ -753,8 +858,8 @@ function renderPrompt(data, prompt, index) {
       } finally {
         if (hero === state.hero) {
           saveCode.disabled = false;
-          submit.disabled = wasDisabled;
-          examples.disabled = wasDisabled;
+          submit.disabled = submissionUnavailable();
+          examples.disabled = runnerUnavailable;
           input.disabled = false;
         }
       }
@@ -765,7 +870,7 @@ function renderPrompt(data, prompt, index) {
   form.append(actions);
   if (codePrompt && !runnable) {
     form.append(make("p", "fine-print", "This is a code notebook. Your notes are saved for this page."));
-  } else if (submit.disabled) {
+  } else if (runnerUnavailable) {
     form.append(make("p", "fine-print", `The local ${state.world.name} runner is unavailable. You can still save your code draft.`));
   }
   const feedback = make("div", "prompt-feedback");
@@ -793,7 +898,9 @@ function renderPrompt(data, prompt, index) {
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (submit.disabled || hero !== state.hero || state.switchingHero) return;
+    const purpose = examples && event.submitter === examples ? "examples" : "submit";
+    const control = purpose === "examples" ? examples : submit;
+    if (control.disabled || hero !== state.hero || state.switchingHero) return;
     const value = valueOf();
     if (!value.trim()) {
       setInlineStatus(status, choicePrompt ? "Choose an answer first." : "Enter a response first.", true);
@@ -804,13 +911,13 @@ function renderPrompt(data, prompt, index) {
     if (examples) examples.disabled = true;
     if (saveCode) saveCode.disabled = true;
     input.disabled = true;
-    const purpose = examples && event.submitter === examples ? "examples" : "submit";
     setInlineStatus(status, runnable ? "Compiling and testing…" : prompt.assessment ? "The GM is reviewing…" : "Saving response…");
     try {
       if (runnable) {
         activeRun = new AbortController();
         cancel.hidden = false;
-        const result = await api("/api/grade", {
+        const grade = purpose === "examples" ? api : submitExpedition;
+        const result = await grade("/api/grade", {
           method: "POST",
           body: { page: data.page, promptId: prompt.id, exerciseId: prompt.exerciseId, code: value, purpose },
           signal: activeRun.signal,
@@ -826,7 +933,8 @@ function renderPrompt(data, prompt, index) {
           if (recorded && hero === state.hero) setInlineStatus(status, "Test run recorded. Refresh the quest log to update your badges.");
         }
       } else {
-        const result = await api("/api/answers", { method: "POST", body: { page: data.page, promptId: prompt.id, value } });
+        const saveAnswer = graded ? submitExpedition : api;
+        const result = await saveAnswer("/api/answers", { method: "POST", body: { page: data.page, promptId: prompt.id, value } });
         if (hero !== state.hero) return;
         const response = { ...result, page: data.page, promptId: prompt.id, value };
         state.responses.set(key, response);
@@ -840,8 +948,8 @@ function renderPrompt(data, prompt, index) {
       activeRun = null;
       if (cancel) cancel.hidden = true;
       if (hero === state.hero) {
-        submit.disabled = runnable && state.runner.toLowerCase() === "unavailable";
-        if (examples) examples.disabled = submit.disabled;
+        submit.disabled = submissionUnavailable();
+        if (examples) examples.disabled = runnerUnavailable;
         if (saveCode) saveCode.disabled = false;
         input.disabled = false;
       }
@@ -1025,8 +1133,10 @@ function levelCheckpoint(data, quest) {
     const input = make("input");
     input.type = "checkbox";
     input.checked = enabled(record[field]);
+    input.dataset.expeditionSubmit = "";
+    input.disabled = state.combat?.fallen === true;
     input.addEventListener("change", async () => {
-      if (hero !== state.hero || state.switchingHero) return;
+      if (input.disabled || hero !== state.hero || state.switchingHero) return;
       const checked = input.checked;
       input.disabled = true;
       try {
@@ -1041,7 +1151,7 @@ function levelCheckpoint(data, quest) {
           toast(error.message);
         }
       } finally {
-        if (hero === state.hero) input.disabled = false;
+        if (hero === state.hero) input.disabled = state.combat?.fallen === true;
       }
     });
     item.append(input, make("span", "", label));
@@ -1105,7 +1215,8 @@ function renderGuide(data) {
     const endpoint = `/api/encounters/${encodeURIComponent(special.id)}`;
     state.specialEncounter = createSpecialEncounter(special, {
       load: () => api(endpoint, { hero }),
-      submit: (body) => api(endpoint, { hero, method: "POST", body }),
+      canSubmit: () => hero === state.hero && !state.combat?.fallen,
+      submit: (body) => submitExpedition(endpoint, { body }),
     });
     content.push(state.specialEncounter.card);
   }
@@ -1289,6 +1400,13 @@ function renderCharacterSheet() {
   hero.append(identity, xpDetail, progressMeter(xp, xpMax, "World experience"));
   const milestones = make("div", "sheet-milestones");
   milestones.append(make("p", "", `World: ${progress.completed} of ${progress.total} levels complete`));
+  if (state.combat) {
+    milestones.append(make("p", "", `Trials cleared · ${state.combat.completedTrials.length}`));
+    if (state.combat.oneLife) {
+      const { hp, maxHp, potions, fallen } = state.combat;
+      milestones.append(make("p", "", `One Life · ${hp} / ${maxHp} HP · ${potions} ${potions === 1 ? "potion" : "potions"}${fallen ? " · Fallen" : ""}`));
+    }
+  }
   if (route) milestones.append(make("p", "", `Active path: ${route.completed} of ${route.total} levels complete`));
   hero.append(milestones);
   log.replaceChildren(hero);
@@ -1399,6 +1517,85 @@ function rememberTabHero(id) {
   }
 }
 
+function renderTrial(trial, hero) {
+  const form = make("form", "field-card trial-form");
+  form.append(make("h3", "", trial.title), make("p", "muted", trial.description));
+  const questions = make("div", "trial-questions");
+  for (const question of trial.questions) {
+    const group = make("fieldset", "choice-group");
+    group.append(make("legend", "", question.text));
+    for (const option of question.options) {
+      const label = make("label", "choice-option trial-option");
+      const radio = make("input");
+      radio.type = "radio";
+      radio.name = question.id;
+      radio.value = option.id;
+      radio.required = true;
+      label.append(make("span", "", option.text), radio);
+      group.append(label);
+    }
+    questions.append(group);
+  }
+  const actions = make("div", "form-actions");
+  const submit = button("Submit trial", "button button-primary");
+  submit.type = "submit";
+  submit.dataset.expeditionSubmit = "";
+  submit.dataset.trialId = trial.id;
+  const result = make("p", "inline-status");
+  result.setAttribute("role", "status");
+  const feedback = make("ol", "trial-feedback");
+  feedback.hidden = true;
+  actions.append(submit, result);
+  form.append(questions, actions, feedback);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (submit.disabled || hero !== state.hero || state.switchingHero) return;
+    const answers = Object.fromEntries(new FormData(form));
+    const groups = questions.querySelectorAll("fieldset");
+    for (const group of groups) group.disabled = true;
+    submit.disabled = true;
+    feedback.hidden = true;
+    setInlineStatus(result, "The GM is checking your trial…");
+    try {
+      const report = await submitExpedition(`/api/trials/${encodeURIComponent(trial.id)}`, { body: { answers } });
+      if (hero !== state.hero || !form.isConnected) return;
+      setInlineStatus(result, `${report.passed} / ${report.total} correct`, !report.correct);
+      feedback.replaceChildren(...report.feedback.map((item) =>
+        make("li", "", `${item.correct ? "Correct" : "Review"} · ${item.explanation}`)));
+      feedback.hidden = false;
+    } catch (error) {
+      if (hero === state.hero) setInlineStatus(result, error.message, true);
+    } finally {
+      if (hero === state.hero) {
+        const cleared = state.combat?.completedTrials.includes(trial.id);
+        for (const group of groups) group.disabled = Boolean(cleared || state.combat?.fallen);
+        submit.disabled = Boolean(cleared || state.combat?.fallen);
+      }
+    }
+  });
+  return form;
+}
+
+async function openTrials() {
+  const hero = state.hero;
+  const dialog = $("trial-dialog");
+  if (!hero || state.switchingHero || dialog.open) return;
+  const content = $("trial-content");
+  const loading = make("p", "muted", "Opening the trial board…");
+  content.replaceChildren(loading);
+  dialog.showModal();
+  try {
+    const { trials } = await api("/api/trials", { hero });
+    if (hero !== state.hero || !dialog.open || !loading.isConnected) return;
+    content.replaceChildren(...trials.map((trial) => renderTrial(trial, hero)));
+    if (!trials.length) content.append(make("p", "muted", "This world has no trials yet."));
+    renderCombat();
+  } catch (error) {
+    if (hero === state.hero && dialog.open && loading.isConnected) loading.textContent = error.message;
+  }
+}
+
 async function activateHero(selected, preferredPage = null) {
   if (!text(selected?.id)) throw new Error("The server did not return a hero save slot.");
   clearTimeout(toastTimer);
@@ -1407,6 +1604,11 @@ async function activateHero(selected, preferredPage = null) {
   state.requestNumber++;
   state.progressRequest++;
   state.hero = { ...selected };
+  state.combat = selected.combat || null;
+  state.combatNotice = "";
+  state.combatVersion = 0;
+  state.combatRequest = null;
+  state.potionBusy = false;
   state.profile = {
     callsign: text(selected.name) || "Explorer",
     path: selected.path === "all" ? "" : text(selected.path),
@@ -1425,7 +1627,9 @@ async function activateHero(selected, preferredPage = null) {
   clearGuideEncounters();
   $("map-search").value = "";
   $("log-content").replaceChildren();
+  $("trial-content").replaceChildren();
   $("guide-content").replaceChildren(make("p", "muted", "Opening your expedition…"));
+  renderCombat();
   $("guide-title").textContent = state.profile.callsign;
   $("header-callsign").textContent = state.profile.callsign;
   readerMessage("Opening your expedition…", true);
@@ -1496,8 +1700,9 @@ async function refreshHeroList() {
       mark.setAttribute("aria-hidden", "true");
       const copy = make("span", "hero-slot-copy");
       const page = pageNumber(hero.lastPage) || 1;
+      const oneLife = hero.combat?.oneLife ? (hero.combat.fallen ? "One Life · Fallen" : "One Life") : "";
       copy.append(make("strong", "", name), make("span", "hero-slot-meta",
-        [`Page ${page}`, text(path?.name) || "Open expedition", active && "Current hero"].filter(Boolean).join(" · ")));
+        [`Page ${page}`, text(path?.name) || "Open expedition", oneLife, active && "Current hero"].filter(Boolean).join(" · ")));
       control.append(mark, copy);
       control.addEventListener("click", () => selectHero("/api/heroes/load", { id: hero.id }));
       container.append(control);
@@ -1565,6 +1770,9 @@ function bindControls() {
     $("log-dialog").showModal();
     refreshProgress().catch((error) => toast(error.message));
   });
+  $("open-trials").addEventListener("click", openTrials);
+  $("drink-potion").addEventListener("click", drinkPotion);
+  $("trial-potion").addEventListener("click", drinkPotion);
   $("open-profile").addEventListener("click", openProfile);
   $("open-heroes").addEventListener("click", openHeroPicker);
   $("edit-active-hero").addEventListener("click", () => {
@@ -1584,7 +1792,7 @@ function bindControls() {
     }
     const path = $("hero-path").value;
     const preferredPage = !state.hero && state.heroCount === 0 ? hashPage() : null;
-    selectHero("/api/heroes", { name, path }, preferredPage);
+    selectHero("/api/heroes", { name, path, oneLife: $("hero-one-life").checked }, preferredPage);
   });
   $("map-search").addEventListener("input", renderMap);
   $("map-path").addEventListener("change", renderMap);

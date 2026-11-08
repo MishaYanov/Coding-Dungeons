@@ -21,6 +21,7 @@ function CampaignHeader() {
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15" strokeLinejoin="round"/></svg>
           <span>World map</span>
         </button>
+        <button className="nav-button" id="open-trials" type="button" aria-haspopup="dialog">Trials</button>
         <button className="nav-button" id="open-log" type="button">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v16H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm-2 15a2 2 0 0 1 2-2h13M8 7h7m-7 4h7" strokeLinecap="round" strokeLinejoin="round"/></svg>
           <span>Character sheet</span>
@@ -93,6 +94,18 @@ function GameMaster() {
         </div>
     <span id="runner-status" className="status-pill" title="Practice status"><span className="status-light" aria-hidden="true"></span><span>Choose a world</span></span>
       </header>
+      <section className="combat-status" id="combat-status" aria-label="One Life status" hidden>
+        <div className="combat-health">
+          <p className="eyebrow">ONE LIFE</p>
+          <strong id="combat-hp"></strong>
+          <progress id="combat-meter" className="combat-meter" aria-label="Hero health"></progress>
+        </div>
+        <div className="combat-inventory">
+          <span id="combat-potions"></span>
+          <button type="button" id="drink-potion" className="button button-quiet" title="Restore up to 20 HP">Drink potion</button>
+        </div>
+        <p id="combat-feedback" className="fine-print" role="status" hidden></p>
+      </section>
       <div className="guide-scroll" id="guide-scroll">
         <div id="guide-content" className="guide-content" aria-busy="true">
           <p className="muted">The field guide will follow your book page.</p>
@@ -120,6 +133,25 @@ function WorldMap() {
         </div>
         <div id="map-description"></div>
         <div id="map-levels" className="map-levels"></div>
+      </div>
+    </dialog>
+  );
+}
+
+function TrialBoard() {
+  return (
+    <dialog className="drawer" id="trial-dialog" aria-labelledby="trial-title">
+      <div className="dialog-header">
+        <div><p className="eyebrow">FERRUM CHALLENGES</p><h2 id="trial-title">Trials</h2></div>
+        <button type="button" className="icon-button close-button" data-close-dialog aria-label="Close trials">×</button>
+      </div>
+      <div className="dialog-content">
+        <div className="trial-survival" id="trial-survival" hidden>
+          <p id="trial-health" role="status"></p>
+          <button type="button" id="trial-potion" className="button button-quiet" title="Restore up to 20 HP">Drink potion</button>
+        </div>
+        <p className="trial-rules muted" id="trial-rules"></p>
+        <div className="trial-content" id="trial-content"></div>
       </div>
     </dialog>
   );
@@ -194,6 +226,8 @@ function HeroPicker() {
             <label className="control-label" htmlFor="hero-name">Hero name<input id="hero-name" type="text" required maxLength="40" placeholder="Name your hero" autoComplete="off" /></label>
             <label className="control-label" htmlFor="hero-path">Expedition path<select id="hero-path" aria-describedby="hero-path-description"><option value="">Explore freely</option></select></label>
             <div id="hero-path-description" className="path-summary" aria-live="polite" aria-atomic="true"></div>
+            <label className="one-life-option"><input id="hero-one-life" type="checkbox" aria-describedby="one-life-rules" /> <span>One Life</span></label>
+            <p id="one-life-rules" className="fine-print">Start with 100 HP and one potion. A wrong graded submission costs 5 HP. At 0 HP your hero falls.</p>
             <button type="submit" className="button button-primary" id="create-hero">Create hero</button>
           </form>
         </div>
@@ -217,6 +251,7 @@ export function CampaignReader() {
         <GameMaster />
       </main>
       <WorldMap />
+      <TrialBoard />
       <CharacterSheet />
       <HeroProfile />
       <WorldPicker />

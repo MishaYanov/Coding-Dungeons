@@ -6,6 +6,8 @@ Open **Code Workbench** on a graded challenge. Run Examples to practice, then Su
 
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
+Choose **One Life** when creating a hero to start with 100 HP and one healing potion. A wrong scored answer, failed trial, or failed full code submission costs 5 HP. Practice runs, saved drafts, and runner outages are safe. Open **Trials** to attempt your world's two-question challenge. The first trial clear, Forge clear, or special encounter win earns a potion. Each potion restores up to 20 HP. A hero who reaches zero HP can still read and save drafts. Create or load another hero to submit again.
+
 | World | Levels | What you practice |
 | --- | ---: | --- |
 | 1 · JavaScript | 14 | Language foundations, data validation, state, and asynchronous work |

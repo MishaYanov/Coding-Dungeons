@@ -507,3 +507,83 @@ test('the Ironbound Scarab falls after its three locks without awarding regular 
   await openBookPage(page, encounter.page);
   await boss.getByText('Elite defeated', { exact: true }).waitFor();
 });
+
+test('a One Life hero takes damage from an answer and uses a saved potion', async (t) => {
+  const checkpoint = pages.find((page) => page.prompts.some((prompt) => prompt.id === 'checkpoint-1'));
+  const choice = checkpoint.prompts.find((prompt) => prompt.id === 'checkpoint-1');
+  const wrongAnswer = choice.options.find((option) => option.id !== choice.correctOption);
+  const page = await newPage(t, '');
+  await page.getByRole('checkbox', { name: 'One Life' }).check();
+  await createHero(page, 'Potion Keeper', 1);
+  const health = page.locator('#combat-status');
+  await health.getByText('100 / 100 HP', { exact: true }).waitFor();
+  assert.equal(await health.getByRole('button', { name: 'Drink potion' }).isDisabled(), true);
+
+  await jumpTo(page, checkpoint.page);
+  await page.getByRole('radio', { name: wrongAnswer.text, exact: true }).check();
+  await page.getByRole('button', { name: 'Check answer' }).click();
+  await health.getByText('95 / 100 HP', { exact: true }).waitFor();
+  await health.getByText('−5 HP', { exact: true }).waitFor();
+
+  await page.reload();
+  await openBookPage(page, checkpoint.page);
+  await health.getByText('95 / 100 HP', { exact: true }).waitFor();
+  await health.getByRole('button', { name: 'Drink potion' }).click();
+  await health.getByText('100 / 100 HP', { exact: true }).waitFor();
+  await health.getByText('0 potions', { exact: true }).waitFor();
+});
+
+test('the trial board records a failed attempt and saves its first clear reward', async (t) => {
+  const page = await newPage(t, '');
+  await page.getByRole('checkbox', { name: 'One Life' }).check();
+  await createHero(page, 'Foundry Challenger', 1);
+  await page.getByRole('button', { name: 'Trials', exact: true }).click();
+  const trial = page.getByRole('dialog', { name: 'Trials', exact: true });
+  await trial.getByRole('heading', { name: 'Borrowing Foundry Trial' }).waitFor();
+  await trial.getByRole('radio', { name: 'Only scroll.', exact: true }).check();
+  await trial.getByRole('radio', { name: '&mut String', exact: true }).check();
+  await trial.getByRole('button', { name: 'Submit trial' }).click();
+  await trial.getByText('1 / 2 correct', { exact: true }).waitFor();
+  await trial.getByText(/95 \/ 100 HP.*−5 HP/).waitFor();
+
+  await trial.getByRole('radio', { name: 'Only pack.', exact: true }).check();
+  await trial.getByRole('button', { name: 'Submit trial' }).click();
+  await trial.getByText('2 / 2 correct', { exact: true }).waitFor();
+  await trial.getByText(/95 \/ 100 HP.*2 potions.*\+1 potion/).waitFor();
+  assert.equal(await trial.getByRole('button', { name: 'Trial cleared' }).isDisabled(), true);
+
+  await page.reload();
+  await openBookPage(page, 1);
+  await page.getByRole('button', { name: 'Trials', exact: true }).click();
+  await trial.getByText(/95 \/ 100 HP.*2 potions/).waitFor();
+  assert.equal(await trial.getByRole('button', { name: 'Trial cleared' }).isDisabled(), true);
+});
+
+test('a fallen hero keeps the book and cannot submit or drink a potion', async (t) => {
+  const checkpoint = pages.find((page) => page.prompts.some((prompt) => prompt.id === 'checkpoint-1'));
+  const choice = checkpoint.prompts.find((prompt) => prompt.id === 'checkpoint-1');
+  const wrongAnswer = choice.options.find((option) => option.id !== choice.correctOption);
+  const page = await newPage(t, '');
+  await page.getByRole('checkbox', { name: 'One Life' }).check();
+  await createHero(page, 'Last Stand', 1);
+  await jumpTo(page, checkpoint.page);
+  const health = page.locator('#combat-status');
+  const answer = page.getByRole('button', { name: 'Check answer' });
+  await page.getByRole('radio', { name: wrongAnswer.text, exact: true }).check();
+  for (let hp = 95; hp >= 0; hp -= 5) {
+    await answer.click();
+    await health.getByText(`${hp} / 100 HP`, { exact: true }).waitFor();
+  }
+  await health.getByText(/Your hero has fallen/).waitFor();
+  await health.getByText('1 potion', { exact: true }).waitFor();
+  assert.equal(await health.getByRole('button', { name: 'Drink potion' }).isDisabled(), true);
+  assert.equal(await answer.isDisabled(), true);
+
+  await page.reload();
+  await openBookPage(page, checkpoint.page);
+  await health.getByText('0 / 100 HP', { exact: true }).waitFor();
+  assert.equal(await answer.isDisabled(), true);
+  await page.locator('#reader-viewport').focus();
+  await page.keyboard.press('d');
+  await openBookPage(page, checkpoint.page + 1);
+});

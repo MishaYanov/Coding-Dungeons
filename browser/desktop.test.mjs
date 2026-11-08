@@ -129,13 +129,17 @@ test('Windows package protects its engine, runs the required Workbenches, and re
 
     await worlds.getByRole('link', {name: /^World 1 JavaScript\b/}).click();
     await page.getByLabel('Hero name').fill('Desktop smoke hero');
+    await page.getByRole('checkbox', {name:'One Life', exact:true}).check();
     await page.getByRole('button', {name: 'Create hero'}).click();
     await page.locator('#page-frame:not([hidden]) img').waitFor();
+    const health = page.locator('#combat-status');
+    await health.getByText('100 / 100 HP', {exact:true}).waitFor();
     await page.waitForFunction(() => document.querySelector('#book-page')?.naturalWidth > 0);
     await page.keyboard.press('d');
     await page.waitForFunction(() => location.hash === '#page=2');
     await access(join(userData, 'state', 'ferrum.javascript.sqlite'));
     await winFirstWorkbench(page, 'javascript', 'JavaScript', javascript[0].reference);
+    await health.getByText('2 potions', {exact:true}).waitFor();
 
     await page.getByRole('button', {name: 'Worlds', exact: true}).click();
     await (await worldPicker(page)).getByRole('link', {name: /^World 2 TypeScript\b/}).click();

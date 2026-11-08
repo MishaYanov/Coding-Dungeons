@@ -17,7 +17,7 @@ export function encounterKind(encounter) {
   return encounter.kind === "elite" ? "Elite boss" : "Bug Hunt";
 }
 
-export function createSpecialEncounter(encounter, { load, submit }) {
+export function createSpecialEncounter(encounter, { load, submit, canSubmit = () => true }) {
   const elite = encounter.kind === "elite";
   const stages = encounter.stages;
   const card = element("section", "field-card special-encounter");
@@ -133,14 +133,17 @@ export function createSpecialEncounter(encounter, { load, submit }) {
     } else {
       controls.append(element("p", "", stage.prompt));
     }
-    controls.append(button(stage.actionLabel, "submit"));
+    const action = button(stage.actionLabel, "submit");
+    action.dataset.expeditionSubmit = "";
+    action.disabled = !canSubmit();
+    controls.append(action);
     form.append(controls);
     body.replaceChildren(form);
     if (focus) stageHeading.focus({ preventScroll: true });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (disposed || controls.disabled) return;
+      if (disposed || controls.disabled || !canSubmit()) return;
       const optionId = new FormData(form).get("optionId");
       const input = { stageId: stage.id };
       if (optionId) input.optionId = optionId;

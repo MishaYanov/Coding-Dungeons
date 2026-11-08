@@ -223,6 +223,22 @@ svg { display: block; flex-shrink: 0; }
   border-radius: 13px;
 }
 #guide-title { font-size: clamp(.94rem, 1.42vw, 1.18rem); line-height: 1.28; margin-top: 3px; overflow-wrap: anywhere; }
+.combat-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 12px;
+  padding: 9px clamp(13px, 1.8vw, 27px);
+  background: #261e27;
+  border-bottom: 1px solid #644853;
+}
+.combat-health { display: grid; gap: 3px; }
+.combat-health strong, .trial-survival { font-variant-numeric: tabular-nums; }
+.combat-meter { width: 100%; height: 9px; accent-color: var(--red); }
+.combat-inventory { display: flex; align-items: center; justify-content: flex-end; gap: 5px 9px; flex-wrap: wrap; font-size: .78rem; }
+.combat-inventory .button { min-height: 32px; padding: 4px 8px; font-size: .78rem; }
+#combat-feedback { grid-column: 1 / -1; }
+.combat-status[data-fallen="true"] #combat-feedback { color: var(--red); }
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -480,6 +496,16 @@ dialog::backdrop { background: #050a10b8; }
 .dialog-header h2 { margin-top: 4px; font-size: 1.29rem; }
 .close-button { font-size: 1.4rem; }
 .dialog-content { min-height: 0; overflow: auto; padding: 17px 18px 24px; }
+.trial-content, .trial-questions { display: grid; gap: 14px; }
+.trial-form { display: grid; gap: 12px; }
+.trial-form h3 + p { margin-top: 0; }
+.trial-survival { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 14px; }
+.trial-survival p { flex: 1 0 160px; font-size: .84rem; }
+.trial-rules { margin-bottom: 14px; font-size: .84rem; }
+.trial-form .choice-group legend { margin-bottom: 6px; font-size: .87rem; }
+.trial-form .trial-option { grid-template-columns: minmax(0, 1fr) auto; }
+.trial-feedback { margin: 0; padding-left: 1.25rem; font-size: .84rem; }
+.trial-feedback li + li { margin-top: 4px; }
 .map-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .84fr); gap: 10px; margin-bottom: 12px; }
 .control-label { display: grid; align-content: start; gap: 5px; font-size: .78rem; font-weight: 640; }
 .control-label input, .control-label select { min-width: 0; width: 100%; font-size: .85rem; }
@@ -545,6 +571,8 @@ dialog::backdrop { background: #050a10b8; }
 .hero-section { min-width: 0; display: grid; align-content: start; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #182632; }
 .hero-section h3 { font-size: .95rem; }
 .hero-section > .button { justify-self: start; }
+.one-life-option { display: flex; align-items: center; gap: 7px; font-size: .86rem; font-weight: 650; }
+.one-life-option input { width: 1rem; height: 1rem; min-height: 0; accent-color: var(--copper); }
 .hero-list { display: grid; gap: 7px; max-height: min(290px, 43dvh); overflow: auto; }
 .hero-list > p { font-size: .83rem; }
 .hero-slot { display: flex; align-items: center; gap: 8px; text-align: left; justify-content: flex-start; width: 100%; padding: 7px 9px; }
