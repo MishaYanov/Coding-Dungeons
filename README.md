@@ -6,6 +6,8 @@ Open **Code Workbench** on a graded challenge. Run Examples to practice, then Su
 
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
+Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world.
+
 Choose **One Life** when creating a hero to start with 100 HP and one healing potion. A wrong scored answer, failed trial, or failed full code submission costs 5 HP. Practice runs, saved drafts, and runner outages are safe. Open **Trials** to attempt your world's two-question challenge. The first trial clear, Forge clear, or special encounter win earns a potion. Each potion restores up to 20 HP. A hero who reaches zero HP can still read and save drafts. Create or load another hero to submit again.
 
 | World | Levels | What you practice |
@@ -18,6 +20,8 @@ Choose **One Life** when creating a hero to start with 100 HP and one healing po
 ## Windows desktop
 
 Run `CodingDungeonsSetup.exe` and open **Coding Dungeons** from Start. The packaged app opens its own window and keeps SQLite saves in per-user app data. The Help menu provides runtime diagnostics and save import and export. The desktop build includes the local GM model and can grade written questions with reviewed rubrics. The Go and Rust runners become available after the Windows isolation probe passes.
+
+**Rust runner offline** means the app cannot use its local Rust compiler and sandbox to grade code. You can still read, save drafts, and answer multiple-choice questions. Runner outages cost no HP. The status is independent of your internet connection; check **Help → Runtime Diagnostics** in the desktop app.
 
 ## Browser development
 

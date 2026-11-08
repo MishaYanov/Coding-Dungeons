@@ -56,7 +56,7 @@ module.exports = {
       /^\/\.(?:env|env\.[^/]+)$/,
       /^\/\.npmrc$/,
       /^\/debug\.log$/,
-      /^\/(?:browser|docs|native|out|public|src|state|test|work)(?:\/|$)/,
+      /^\/(?:browser|docs|native|out|outputs|public|src|state|test|work)(?:\/|$)/,
       /^\/desktop\/runtime(?:\/|$)/,
     ],
   },
