@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 
 const desktopHeader = 'x-ferrum-desktop-token';
-const childEnvironmentKeys = new Set(['SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'TEMP', 'TMP']);
+const childEnvironmentKeys = new Set(['SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'LOCALAPPDATA', 'TEMP', 'TMP']);
 
 export function engineOrigin(message) {
   const port = message?.port;

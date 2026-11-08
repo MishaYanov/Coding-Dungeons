@@ -191,8 +191,17 @@ internal static class WindowsSandbox
             }
             var command = new StringBuilder(Quote(executable));
             foreach (string argument in args) command.Append(' ').Append(Quote(argument));
+            string localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (String.IsNullOrWhiteSpace(localAppData))
+            {
+                localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                if (String.IsNullOrWhiteSpace(localAppData))
+                    throw new Win32Exception(203, "CreateProcessW LPAC failed (Windows error 203). LOCALAPPDATA is unavailable.");
+                Environment.SetEnvironmentVariable("LOCALAPPDATA", localAppData);
+            }
             var variables = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
                 { "PATH", "" }, { "SystemRoot", Environment.GetFolderPath(Environment.SpecialFolder.Windows) },
+                { "LOCALAPPDATA", localAppData },
                 { "TEMP", workingDirectory }, { "TMP", workingDirectory },
             };
             if (extraEnvironment != null)
