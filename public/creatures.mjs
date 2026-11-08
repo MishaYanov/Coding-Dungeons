@@ -9,6 +9,8 @@ const CREATURES = {
   go: { name: "Relay Wyrm", light: "#d0fff3", accent: "#6ce4cc", shade: "#288984", dark: "#254c55", draw: drawWyrm },
 };
 
+const GOBLIN = { light: "#d9fff0", accent: "#8be4ba", shade: "#478e79", dark: "#244438", draw: drawGoblin };
+
 const creature = (world) => Object.hasOwn(CREATURES, world) ? CREATURES[world] : CREATURES.javascript;
 export const creatureName = (world) => creature(world).name;
 
@@ -155,6 +157,39 @@ function drawWyrm(ctx, colors, variant) {
   for (let i = 0; i < variant; i++) diamond(ctx, -20 + i * 8, 16, 2.3, 3.3, accent, null);
 }
 
+function drawGoblin(ctx, colors) {
+  const { light, accent, shade, dark } = colors;
+  // Pointed ears and a crooked grin sit above the goblin's patchwork tunic.
+  polygon(ctx, [[-22,9],[-34,26],[-26,36],[-4,22],[10,33],[28,37],[30,24],[20,6]], "#573842");
+  polygon(ctx, [[-27,26],[-40,34],[-37,42],[-19,42],[-15,33]], dark);
+  polygon(ctx, [[15,26],[11,40],[31,43],[38,37],[31,29]], dark);
+  polygon(ctx, [[-30,-14],[-16,-21],[16,-18],[27,-1],[25,19],[12,29],[-24,24],[-30,6]], "#775443");
+  line(ctx, [[-28,15],[-6,20],[23,15]], "#392e33", 7);
+  polygon(ctx, [[-10,15],[1,15],[2,23],[-10,23]], "#e1a970");
+  polygon(ctx, [[-19,-22],[-46,-38],[-42,-18],[-32,-11],[-20,-13]], shade);
+  polygon(ctx, [[16,-23],[44,-40],[37,-16],[27,-11],[16,-15]], shade);
+  line(ctx, [[-38,-29],[-32,-20],[-24,-18]], accent, 2);
+  line(ctx, [[37,-31],[30,-20],[22,-17]], accent, 2);
+  polygon(ctx, [[-27,-26],[-18,-41],[8,-44],[22,-34],[28,-19],[20,-7],[9,1],[-14,0],[-24,-9]], shade);
+  polygon(ctx, [[-24,-27],[-17,-37],[8,-40],[20,-32],[24,-23],[12,-16],[6,-7],[-15,-10],[-22,-17]], accent);
+  line(ctx, [[-17,-27],[-11,-29],[-4,-25]], dark, 3);
+  line(ctx, [[8,-26],[15,-31],[20,-28]], dark, 3);
+  oval(ctx, -10, -23, 3.3, 2.5, "#fff3a4");
+  oval(ctx, 14, -24, 3.3, 2.5, "#fff3a4");
+  polygon(ctx, [[1,-22],[6,-15],[0,-13],[-3,-15]], shade);
+  line(ctx, [[-12,-12],[-5,-8],[7,-8],[14,-13]], dark, 2.5);
+  polygon(ctx, [[6,-10],[10,-16],[12,-10]], light);
+  // The gem-studded sack is tucked under one arm.
+  polygon(ctx, [[36,-5],[46,-2],[61,5],[65,19],[60,34],[44,39],[24,35],[17,24],[24,9]], "#785746");
+  polygon(ctx, [[38,-7],[34,-16],[40,-21],[54,-18],[51,-5]], "#a57955");
+  line(ctx, [[35,-6],[50,-4],[55,-7]], "#ecc48c", 2.5);
+  line(ctx, [[27,12],[23,22],[27,31],[43,34]], "#bd9367", 2);
+  diamond(ctx, 46, 16, 9, 11, "#6af3ff");
+  diamond(ctx, 53, 26, 5, 6, "#529ce3");
+  diamond(ctx, 43, 12, 2.2, 3, "#f2ffff", null);
+  polygon(ctx, [[14,0],[25,2],[29,12],[27,18],[19,17],[13,10]], shade);
+}
+
 function fraction(value) {
   return value - Math.floor(value);
 }
@@ -233,9 +268,9 @@ function drawSparks(ctx, colors, level, progress) {
   ctx.globalAlpha = 1;
 }
 
-export function mountCreature(canvas, { world, level, defeated = false, elite = false, onStateChange = () => {} }) {
+export function mountCreature(canvas, { world, level, defeated = false, elite = false, goblin = false, onStateChange = () => {} }) {
   const ctx = canvas.getContext("2d");
-  const colors = elite && world === "rust"
+  const colors = goblin ? GOBLIN : elite && world === "rust"
     ? { ...creature(world), elite: true, light: "#fff0ca", accent: "#e6b9ff", shade: "#7d4b9f", dark: "#382b51" }
     : creature(world);
   const rank = Number.isSafeInteger(level) ? level : 1;

@@ -1,5 +1,6 @@
 import { characterProgress, SKILL_LEVEL_CAP } from "./progression.mjs";
 import { creatureName, mountCreature } from "./creatures.mjs";
+import { createDiamondButton, createDiamondEncounter, diamondPosition } from "./diamond-encounter.mjs";
 import { createSpecialEncounter, encounterKind } from "./special-encounters.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -35,6 +36,7 @@ const pathTopics = new Map([
 const draftsKey = "ferrum-prompt-drafts-v2";
 const lastPageKey = "ferrum-last-page-v2";
 const selectedHeroKey = "ferrum-selected-hero-v1";
+const diamondDraftKey = "diamond-goblin:code";
 
 function readLocal(key) {
   try {
@@ -89,6 +91,9 @@ const state = {
   hardClears: new Set(),
   exerciseClears: null,
   creature: null,
+  diamond: null,
+  diamonds: 0,
+  diamondStarting: false,
   specialEncounter: null,
   drafts: new Map(),
   runner: "",
@@ -112,7 +117,7 @@ async function api(path, options = {}) {
     headers["X-Ferrum-Request"] = "1";
     headers["Content-Type"] = "application/json";
   }
-  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$))/.test(path)) {
+  if (/^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$))/.test(path)) {
     const hero = options.hero || state.hero;
     if (!hero) throw new Error("Choose a hero to save your expedition.");
     headers["X-Ferrum-Hero"] = hero.id;
@@ -233,7 +238,9 @@ function renderCombat() {
   }
   if (combat?.fallen) {
     for (const control of document.querySelectorAll("[data-expedition-submit]")) control.disabled = true;
+    $("page-hotspots").querySelector(".page-diamond")?.remove();
   }
+  state.diamond?.updateAvailability();
   for (const action of $("trial-content").querySelectorAll("[data-trial-id]")) {
     if (combat?.completedTrials.includes(action.dataset.trialId)) {
       action.textContent = "Trial cleared";
@@ -486,6 +493,74 @@ function renderHotspots(data) {
   }
 }
 
+function updateDiamondInventory(diamonds) {
+  if (!Number.isSafeInteger(diamonds) || diamonds === state.diamonds) return;
+  state.diamonds = diamonds;
+  if ($("log-dialog").open) renderCharacterSheet();
+}
+
+function showDiamondEncounter(view, hero, focus = false) {
+  updateDiamondInventory(view.diamonds);
+  if (!view.encounter) return;
+  $("page-hotspots").querySelector(".page-diamond")?.remove();
+  state.diamond ??= createDiamondEncounter(view, {
+    canSubmit: () => hero === state.hero && !state.switchingHero && !state.combat?.fallen,
+    runnerUnavailable: state.runner.toLowerCase() === "unavailable"
+      ? `The local ${state.world.name} runner is unavailable. You can keep editing your draft.` : "",
+    readDraft: () => state.drafts.get(diamondDraftKey),
+    saveDraft: (value) => hero === state.hero && persistDraft(diamondDraftKey, value),
+    clearDraft: (value) => hero === state.hero && clearDraft(diamondDraftKey, value),
+    renderReport: (container, result) => testFeedback(container, result),
+    submit: async (body) => {
+      const view = body.purpose === "examples"
+        ? await api("/api/diamond/submit", { method: "POST", body, hero })
+        : await submitExpedition("/api/diamond/submit", { body });
+      if (hero === state.hero) updateDiamondInventory(view.diamonds);
+      return view;
+    },
+  });
+  if (!state.diamond.card.isConnected) $("diamond-encounter").append(state.diamond.card);
+  if (focus) state.diamond.focus();
+}
+
+async function loadDiamond(data, request) {
+  const hero = state.hero;
+  if (!hero || state.diamond) return;
+  let view;
+  try {
+    view = await api(`/api/diamond?page=${data.page}`, { hero });
+  } catch {
+    return;
+  }
+  if (hero !== state.hero || request !== state.requestNumber || state.diamondStarting) return;
+  if (view.encounter) {
+    showDiamondEncounter(view, hero);
+    return;
+  }
+  if (state.diamond || state.combat?.fallen || !view.sparkle) return;
+  const { x, y } = view.sparkle;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const gem = createDiamondButton(diamondPosition({ x, y }, list(data.links)));
+  $("page-hotspots").append(gem);
+  gem.addEventListener("click", async () => {
+    if (hero !== state.hero || state.diamondStarting || state.switchingHero || state.combat?.fallen) return;
+    state.diamondStarting = true;
+    gem.disabled = true;
+    try {
+      const started = await api("/api/diamond/start", { hero, method: "POST", body: { page: data.page } });
+      if (hero === state.hero) showDiamondEncounter(started, hero, true);
+    } catch (error) {
+      if (hero === state.hero) toast(error.message);
+    } finally {
+      if (hero === state.hero) {
+        state.diamondStarting = false;
+        gem.disabled = false;
+        if (!state.diamond && !state.loading && request !== state.requestNumber) loadDiamond(state.page, state.requestNumber);
+      }
+    }
+  });
+}
+
 async function loadPage(number) {
   const request = ++state.requestNumber;
   state.loading = true;
@@ -527,6 +602,7 @@ async function loadPage(number) {
     $("reader-viewport").scrollTo(0, 0);
     $("guide-scroll").scrollTo(0, 0);
     if (matchMedia("(max-width: 800px)").matches) window.scrollTo(0, 0);
+    loadDiamond(state.page, request);
   } catch (error) {
     if (request !== state.requestNumber) return;
     state.loading = false;
@@ -682,7 +758,7 @@ function testFeedback(container, result, data) {
       container.append(details);
     }
   }
-  if (passed && result.purpose !== "examples" && !hardMode(data.level)) {
+  if (data && passed && result.purpose !== "examples" && !hardMode(data.level)) {
     const route = routeSuggestion(data, true);
     if (route) container.append(route);
   }
@@ -1400,6 +1476,9 @@ function renderCharacterSheet() {
   hero.append(identity, xpDetail, progressMeter(xp, xpMax, "World experience"));
   const milestones = make("div", "sheet-milestones");
   milestones.append(make("p", "", `World: ${progress.completed} of ${progress.total} levels complete`));
+  const diamonds = make("p", "", `Diamonds collected · ${state.diamonds}`);
+  diamonds.id = "diamond-total";
+  milestones.append(diamonds);
   if (state.combat) {
     milestones.append(make("p", "", `Trials cleared · ${state.combat.completedTrials.length}`));
     if (state.combat.oneLife) {
@@ -1609,6 +1688,10 @@ async function activateHero(selected, preferredPage = null) {
   state.combatVersion = 0;
   state.combatRequest = null;
   state.potionBusy = false;
+  state.diamond?.destroy();
+  state.diamond = null;
+  state.diamonds = 0;
+  state.diamondStarting = false;
   state.profile = {
     callsign: text(selected.name) || "Explorer",
     path: selected.path === "all" ? "" : text(selected.path),

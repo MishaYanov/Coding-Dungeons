@@ -72,7 +72,7 @@ function BookReader() {
         </div>
         <div className="page-frame" id="page-frame" hidden>
           <img id="book-page" alt="" decoding="async" />
-          <div className="page-hotspots" id="page-hotspots" aria-label="Links on this book page"></div>
+          <div className="page-hotspots" id="page-hotspots" aria-label="Interactions on this book page"></div>
         </div>
       </div>
     </section>
@@ -107,6 +107,7 @@ function GameMaster() {
         <p id="combat-feedback" className="fine-print" role="status" hidden></p>
       </section>
       <div className="guide-scroll" id="guide-scroll">
+        <div id="diamond-encounter" className="guide-content diamond-slot"></div>
         <div id="guide-content" className="guide-content" aria-busy="true">
           <p className="muted">The field guide will follow your book page.</p>
         </div>

@@ -7,6 +7,7 @@ import { _electron as electron } from 'playwright-core';
 import javascript from '../data/workbench/javascript.mjs';
 import typescript from '../data/workbench/typescript.mjs';
 import go from '../data/workbench/go.mjs';
+import { diamondName, diamondPages, diamondSolution, goblinName } from './diamond-fixture.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const executablePath = process.env.FERRUM_DESKTOP_EXECUTABLE
@@ -91,6 +92,26 @@ async function chooseWorldHero(page, world, hero) {
   await page.locator('#page-frame:not([hidden]) img').waitFor();
 }
 
+async function winGoblinAmbush(page) {
+  const pages = await diamondPages(page, 8);
+  const discovery = pages.find(({ sparkle }) => sparkle);
+  assert.ok(discovery, 'A diamond should be hidden on one of the first eight pages');
+  const pageNumber = page.locator('#page-number');
+  await pageNumber.fill(String(discovery.number));
+  await pageNumber.press('Enter');
+  await page.getByRole('img', {
+    name: new RegExp(`campaign book, page ${discovery.number}(?: ·|$)`),
+  }).waitFor();
+  await page.getByRole('button', { name: diamondName }).click();
+  const fight = page.locator('.diamond-encounter');
+  await fight.getByRole('heading', { name: goblinName, exact: true }).waitFor();
+  await fight.getByRole('textbox', { name: 'Goblin code' }).fill(diamondSolution);
+  await fight.getByRole('button', { name: 'Submit code', exact: true }).click();
+  await fight.getByRole('radio', { name: 'values.slice()', exact: true }).check();
+  await fight.getByRole('button', { name: 'Submit answer', exact: true }).click();
+  await fight.getByText('Goblin defeated', { exact: true }).waitFor();
+}
+
 test('Windows package protects its engine, runs the required Workbenches, and retains saves',
   {timeout: 240_000}, async (t) => {
     await access(executablePath).catch((error) => {
@@ -136,10 +157,13 @@ test('Windows package protects its engine, runs the required Workbenches, and re
     await health.getByText('100 / 100 HP', {exact:true}).waitFor();
     await page.waitForFunction(() => document.querySelector('#book-page')?.naturalWidth > 0);
     await page.keyboard.press('d');
-    await page.waitForFunction(() => location.hash === '#page=2');
+    await page.getByRole('img', {name: /campaign book, page 2(?: ·|$)/}).waitFor();
+    assert.equal(new URL(page.url()).hash, '#page=2');
     await access(join(userData, 'state', 'ferrum.javascript.sqlite'));
     await winFirstWorkbench(page, 'javascript', 'JavaScript', javascript[0].reference);
     await health.getByText('2 potions', {exact:true}).waitFor();
+    await winGoblinAmbush(page);
+    await health.getByText('3 potions', {exact:true}).waitFor();
 
     await page.getByRole('button', {name: 'Worlds', exact: true}).click();
     await (await worldPicker(page)).getByRole('link', {name: /^World 2 TypeScript\b/}).click();
@@ -184,5 +208,8 @@ test('Windows package protects its engine, runs the required Workbenches, and re
     const reopened = await application.firstWindow();
     const reopenedWorlds = await worldPicker(reopened);
     await reopenedWorlds.getByRole('link', {name: /^World 1 JavaScript\b/}).click();
-    await reopened.getByRole('button', {name: /Desktop smoke hero/}).waitFor();
+    await reopened.getByRole('button', {name: /Desktop smoke hero/}).click();
+    await reopened.getByRole('button', {name: 'Character sheet'}).click();
+    await reopened.getByRole('dialog', {name: 'Character sheet'})
+      .getByText('Diamonds collected · 3', {exact: true}).waitFor();
   });

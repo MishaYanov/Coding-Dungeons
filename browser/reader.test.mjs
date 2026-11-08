@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright-core';
+import { assertDiamondWithinPage, diamondName, diamondPages, diamondSolution, goblinName } from './diamond-fixture.mjs';
 
 const project = new URL('../', import.meta.url);
 const pages = JSON.parse(await readFile(new URL('data/pages.json', project), 'utf8'));
@@ -557,6 +558,90 @@ test('the trial board records a failed attempt and saves its first clear reward'
   await page.getByRole('button', { name: 'Trials', exact: true }).click();
   await trial.getByText(/95 \/ 100 HP.*2 potions/).waitFor();
   assert.equal(await trial.getByRole('button', { name: 'Trial cleared' }).isDisabled(), true);
+});
+
+test('a hidden diamond starts a saved goblin fight with two graded stages and one loot award', { timeout: 30_000 }, async (t) => {
+  const page = await newPage(t, '', 'javascript');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('checkbox', { name: 'One Life' }).check();
+  await createHero(page, 'Diamond Delver', 1);
+  const diamond = page.getByRole('button', { name: diamondName });
+  const fight = page.locator('.diamond-encounter');
+  const health = page.locator('#combat-status');
+  const views = await diamondPages(page, 16);
+  const visible = views.filter(({ sparkle }) => sparkle);
+  assert.equal(visible.length, 2);
+
+  const offPage = views.find(({ sparkle, number }) => !sparkle && number !== 1);
+  await jumpTo(page, offPage.number);
+  await diamond.waitFor({ state: 'hidden' });
+  await fight.waitFor({ state: 'hidden' });
+  await jumpTo(page, visible[0].number);
+  await assertDiamondWithinPage(page, diamond);
+  await jumpTo(page, visible[1].number);
+  await assertDiamondWithinPage(page, diamond);
+
+  await diamond.click();
+  await fight.getByRole('heading', { name: goblinName, exact: true }).waitFor();
+  const editor = fight.getByRole('textbox', { name: 'Goblin code' });
+  const submitCode = fight.getByRole('button', { name: 'Submit code', exact: true });
+  await editor.fill('function sumDiamonds(values) { return 0; }');
+  const examplesReply = page.waitForResponse('**/api/diamond/submit');
+  await fight.getByRole('button', { name: 'Run Examples', exact: true }).click();
+  assert.ok((await examplesReply).ok());
+  await health.getByText('100 / 100 HP', { exact: true }).waitFor();
+  await editor.waitFor();
+
+  await submitCode.click();
+  await health.getByText('95 / 100 HP', { exact: true }).waitFor();
+  await editor.fill(diamondSolution);
+  await submitCode.click();
+  const submitAnswer = fight.getByRole('button', { name: 'Submit answer', exact: true });
+  await submitAnswer.waitFor();
+
+  await page.reload();
+  await openBookPage(page, visible[1].number);
+  await submitAnswer.waitFor();
+  await editor.waitFor({ state: 'hidden' });
+  await fight.getByRole('radio', { name: 'values.sort()', exact: true }).check();
+  await submitAnswer.click();
+  await health.getByText('90 / 100 HP', { exact: true }).waitFor();
+  await fight.getByRole('radio', { name: 'values.slice()', exact: true }).check();
+  await submitAnswer.click();
+  await fight.getByText('Goblin defeated', { exact: true }).waitFor();
+  await health.getByText('2 potions', { exact: true }).waitFor();
+
+  await page.reload();
+  await openBookPage(page, visible[1].number);
+  await page.getByRole('button', { name: 'Character sheet' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Character sheet' });
+  await sheet.getByText('Diamonds collected · 3', { exact: true }).waitFor();
+  await sheet.getByRole('button', { name: 'Close character sheet' }).click();
+  await jumpTo(page, visible[0].number);
+  await diamond.waitFor({ state: 'hidden' });
+  const saved = await diamondPages(page, 16);
+  assert.ok(saved.every(({ sparkle, diamonds }) => !sparkle && diamonds === 3));
+});
+
+test('an offline Rust runner leaves the goblin editor available and preserves its draft', async (t) => {
+  const page = await newPage(t, '', 'rust');
+  await createHero(page, 'Goblin Scribe', 1);
+  const discovery = (await diamondPages(page, 8, 'rust')).find(({ sparkle }) => sparkle);
+  assert.ok(discovery);
+  if (discovery.number !== 1) await jumpTo(page, discovery.number);
+  await page.getByRole('button', { name: diamondName }).click();
+  const fight = page.locator('.diamond-encounter');
+  await fight.getByText(/The local Rust runner is unavailable/).waitFor();
+  assert.equal(await fight.getByRole('button', { name: 'Run Examples', exact: true }).isDisabled(), true);
+  assert.equal(await fight.getByRole('button', { name: 'Submit code', exact: true }).isDisabled(), true);
+
+  const editor = fight.getByRole('textbox', { name: 'Goblin code' });
+  const draft = 'pub fn sum_diamonds(values: &[i32]) -> i32 { todo!() }';
+  await editor.fill(draft);
+  await page.reload();
+  await openBookPage(page, discovery.number);
+  await editor.waitFor();
+  assert.equal(await editor.inputValue(), draft);
 });
 
 test('a fallen hero keeps the book and cannot submit or drink a potion', async (t) => {
