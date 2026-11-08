@@ -121,6 +121,75 @@ async function createOneLifeHero(name, headers) {
   return hero;
 }
 
+test('the hidden diamond opens a private two-stage ambush and awards the bag once', async () => {
+  const headers = javascriptWorld;
+  const hero = await createOneLifeHero('Gem Hunter', headers);
+  await request('/api/diamond?page=1', {headers, status:401});
+  await request('/api/diamond?page=0', {hero, headers, status:404});
+  const submit = (body, status = 200) => request('/api/diamond/submit', {
+    method:'POST', hero, headers, body:{submissionId:randomUUID(), ...body}, status,
+  }).then(({payload}) => payload);
+  await submit({stageId:'code', code:'function sumDiamonds(counts) { return 0; }'}, 404);
+  const sightings = await Promise.all(Array.from({length:8}, async (_, index) => ({
+    page:index + 1, ...(await request(`/api/diamond?page=${index + 1}`, {hero, headers})).payload,
+  })));
+  const found = sightings.filter(({sparkle}) => sparkle);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].encounter, null);
+  assert.equal(found[0].diamonds, 0);
+  const start = (page, status = 200) => request('/api/diamond/start', {
+    method:'POST', hero, headers, body:{page}, status,
+  }).then(({payload}) => payload);
+  await start(sightings.find(({sparkle}) => !sparkle).page, 404);
+  const ambush = await start(found[0].page);
+  assert.equal(ambush.sparkle, null);
+  assert.deepEqual(ambush.encounter.stages.map(({id}) => id), ['code','choice']);
+  const [codeStage, choiceStage] = ambush.encounter.stages;
+  for (const field of ['tests','testNamesSealed','solution','answer','correctOption','explanation']) {
+    assert.equal(Object.hasOwn(codeStage, field), false);
+    assert.equal(Object.hasOwn(choiceStage, field), false);
+  }
+  await submit({stageId:'choice', optionId:'slice'}, 409);
+
+  const wrongCode = 'function sumDiamonds(counts) { return 0; }';
+  const practice = await submit({stageId:'code', code:wrongCode, purpose:'examples'});
+  assert.equal(practice.combat.hp, 100);
+  assert.deepEqual(practice.completed, []);
+  const wrong = {stageId:'code', code:wrongCode, submissionId:randomUUID()};
+  const miss = await submit(wrong);
+  assert.equal(miss.result.verdict, 'fail');
+  assert.equal(miss.combat.hp, 95);
+  assert.equal(miss.combatEvent.damage, 5);
+  const retry = await submit(wrong);
+  assert.equal(retry.combat.hp, 95);
+  assert.equal(retry.combatEvent.damage, 0);
+  await submit({...wrong, code:wrongCode + '\n// different submission'}, 409);
+  const loaded = (await request('/api/diamond?page=8', {hero, headers})).payload;
+  assert.equal(loaded.draft, wrongCode);
+  assert.equal(loaded.sparkle, null);
+
+  const solvedCode = await submit({stageId:'code',
+    code:'function sumDiamonds(counts) { return counts.reduce((sum, count) => sum + Math.max(0, count), 0); }'});
+  assert.equal(solvedCode.result.verdict, 'pass');
+  assert.deepEqual(solvedCode.completed, ['code']);
+  assert.equal(solvedCode.diamonds, 0);
+  const wrongChoice = await submit({stageId:'choice', optionId:'sort'});
+  assert.equal(wrongChoice.combat.hp, 90);
+  assert.equal(wrongChoice.result.correct, false);
+  const rightChoice = {stageId:'choice', optionId:'slice', submissionId:randomUUID()};
+  const win = await submit(rightChoice);
+  assert.deepEqual(win.completed, ['code','choice']);
+  assert.equal(win.diamonds, 3);
+  assert.equal(win.combat.potions, 2);
+  const winReplay = await submit(rightChoice);
+  assert.equal(winReplay.combatEvent.potionsEarned, 0);
+  assert.equal((await submit({stageId:'choice', optionId:'slice'})).diamonds, 3);
+  const reloaded = (await request(`/api/diamond?page=${found[0].page}`, {hero, headers})).payload;
+  assert.equal(reloaded.sparkle, null);
+  assert.equal(reloaded.diamonds, 3);
+  assert.deepEqual((await request('/api/progress', {hero, headers})).payload.workbench.clears, []);
+});
+
 test('One Life charges one wrong answer once and a potion heals only missing HP', async () => {
   await request('/api/heroes', {method:'POST', body:{name:'Invalid mode',oneLife:'true'}, status:400});
   const hero = await createOneLifeHero('Potion Keeper');

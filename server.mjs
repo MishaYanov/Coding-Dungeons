@@ -16,6 +16,8 @@ import goSuites from './data/workbench/go.mjs';
 import rustSuites, { rustBossCoverage } from './data/workbench/rust.mjs';
 import { suggestions } from './data/workbench/suggestions.mjs';
 import { evaluateTrial, trialsFor } from './lib/trials.mjs';
+import { diamondExercise, diamondStage, diamondView, evaluateDiamondChoice, evaluateDiamondCode,
+  refreshDiamondOutcome, settleDiamond, startDiamond } from './lib/diamond-encounter.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const desktopToken = process.env.FERRUM_DESKTOP_TOKEN;
@@ -454,27 +456,17 @@ async function submitEncounterStage(request, response, store, heroId, encounter)
   json(response, submissionResult(outcome));
 }
 
-async function submitCode(request, response, world, heroId) {
-  const {exerciseMap, store} = world;
-  if (!exerciseMap.size) throw new HttpError(409, 'Save a draft and use the guided Forge review for this world.');
-  const data = await readJson(request);
-  const page = pageAt(world, data.page);
-  const prompt = promptAt(page, data.promptId);
-  const exercise = exerciseMap.get(data.exerciseId);
-  if (!exercise || prompt.exerciseId !== exercise.id || page.level !== exercise.level) {
-    throw new HttpError(400, 'The exercise does not belong to this page and prompt.');
-  }
+function codeSubmission(data) {
   const purpose = data.purpose ?? 'submit';
   if (!['examples','submit'].includes(purpose)) throw new HttpError(400, 'Choose Run Examples or Submit.');
   const code = string(data.code, codeLimit, 'Code');
   if (!code.trim()) throw new HttpError(400, 'Enter code before running tests.');
-  const submission = purpose === 'submit' ? prepareSubmission(store, heroId, data, ['workbench', exercise.id, code]) : null;
-  if (submission?.prior) return json(response, submissionResult(submission.prior));
-  const {mode} = store.workbenchMode(heroId, page.level);
-  store.saveResponse(heroId, page.page, prompt.id, code, 'Your submission is saved.');
-  const signal = disconnectSignal(response);
+  return {purpose, code};
+}
+
+function runWorldExercise(world, exercise, code, purpose, signal) {
   const noRun = (verdict, output) => ({verdict, output, passed:0, failed:0, passedTests:[], failedTests:[], cases:[], groups:[]});
-  const result = await runLocalJob(async () => {
+  return runLocalJob(async () => {
     const language = world.info.id;
     if (language === 'javascript' || language === 'typescript') {
       return runCourseExercise(language, code, exercise, purpose, signal);
@@ -488,6 +480,25 @@ async function submitCode(request, response, world, heroId) {
     if (world.rust && !desktopToken) return runLegacyRust(grade, code, exercise, purpose, signal);
     return noRun('unavailable', `The local ${world.info.name} sandbox is unavailable. Your draft is saved.`);
   }, noRun('busy', 'The local evaluation queue is full. Try again in a moment.'), signal);
+}
+
+async function submitCode(request, response, world, heroId) {
+  const {exerciseMap, store} = world;
+  if (!exerciseMap.size) throw new HttpError(409, 'Save a draft and use the guided Forge review for this world.');
+  const data = await readJson(request);
+  const page = pageAt(world, data.page);
+  const prompt = promptAt(page, data.promptId);
+  const exercise = exerciseMap.get(data.exerciseId);
+  if (!exercise || prompt.exerciseId !== exercise.id || page.level !== exercise.level) {
+    throw new HttpError(400, 'The exercise does not belong to this page and prompt.');
+  }
+  const {purpose, code} = codeSubmission(data);
+  const submission = purpose === 'submit' ? prepareSubmission(store, heroId, data, ['workbench', exercise.id, code]) : null;
+  if (submission?.prior) return json(response, submissionResult(submission.prior));
+  const {mode} = store.workbenchMode(heroId, page.level);
+  store.saveResponse(heroId, page.page, prompt.id, code, 'Your submission is saved.');
+  const signal = disconnectSignal(response);
+  const result = await runWorldExercise(world, exercise, code, purpose, signal);
   if (signal.aborted) return;
   const runId = submission?.ticket.id ?? randomUUID();
   const {suiteRevision} = exercise;
@@ -503,6 +514,42 @@ async function submitCode(request, response, world, heroId) {
     return json(response, submissionResult(outcome));
   }
   json(response, report);
+}
+
+async function submitDiamond(request, response, world, heroId) {
+  const {store, info:{id:worldId}} = world;
+  const data = await readJson(request);
+  const {stageId} = data;
+  const view = result => ({...diamondView(store, heroId, worldId), result});
+  const combatView = result => ({...view(result), combat:publicCombat(store.combatState(heroId))});
+  const respond = outcome => json(response, submissionResult(refreshDiamondOutcome(store, heroId, worldId, outcome), true));
+  if (stageId !== 'code' && stageId !== 'choice') throw new HttpError(400, 'Choose a goblin challenge.');
+  const allowedKeys = stageId === 'code' ? ['stageId','submissionId','code','purpose'] : ['stageId','submissionId','optionId'];
+  if (Object.keys(data).some(key => !allowedKeys.includes(key))) throw new HttpError(400, 'Send an answer for this challenge.');
+  if (stageId === 'choice') {
+    const attempt = evaluateDiamondChoice(worldId, data.optionId);
+    if (!attempt) throw new HttpError(400, 'Choose one of the listed answers.');
+    const {ticket, prior} = prepareSubmission(store, heroId, data, ['diamond', stageId, data.optionId], true);
+    if (prior) return respond(prior);
+    const completed = diamondStage(store, heroId, worldId, stageId);
+    if (completed) return json(response, combatView(completed));
+    return respond(settleDiamond(store, heroId, worldId, stageId, ticket, attempt));
+  }
+  const {purpose, code} = codeSubmission(data);
+  const submission = purpose === 'submit' ? prepareSubmission(store, heroId, data, ['diamond', stageId, code], true) : null;
+  if (submission?.prior) return respond(submission.prior);
+  const completed = diamondStage(store, heroId, worldId, stageId);
+  if (completed) return json(response, combatView(completed));
+  if (store.combatState(heroId).fallen) throw new HttpError(409, 'This hero has fallen. Choose another hero to keep submitting.');
+  store.saveDiamondDraft(heroId, code);
+  const signal = disconnectSignal(response);
+  const run = await runWorldExercise(world, diamondExercise(worldId), code, purpose, signal);
+  if (signal.aborted) return;
+  const attempt = evaluateDiamondCode({...run, purpose});
+  if (purpose === 'examples' || !['pass','fail','compile_error'].includes(run.verdict)) {
+    return json(response, combatView(attempt));
+  }
+  return respond(settleDiamond(store, heroId, worldId, stageId, submission.ticket, attempt));
 }
 
 async function submitTrial(request, response, world, heroId, trialId) {
@@ -544,7 +591,7 @@ const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf
   '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
   '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip'};
 const publicFiles = new Set(['/index.html', '/styles.css', '/app.js', '/progression.mjs', '/creatures.mjs',
-  '/special-encounters.mjs',
+  '/special-encounters.mjs', '/diamond-encounter.mjs',
   ...worlds.flatMap(({info}) => [info.bookUrl, info.kitUrl].filter(Boolean))]);
 const pageAsset = /^\/book\/(?:(?:javascript|typescript|go)\/)?pages\/[1-9]\d{0,2}\.webp$/;
 
@@ -574,7 +621,7 @@ const server = createServer(async (request,response) => {
     if (desktopToken && request.headers['x-ferrum-desktop-token'] !== desktopToken) {
       throw new HttpError(403, 'Open Coding Dungeons from its desktop window.');
     }
-    const {pathname:path} = new URL(request.url, `http://${host}`);
+    const {pathname:path, searchParams} = new URL(request.url, `http://${host}`);
     const method = request.method;
     if (method === 'GET' && path === '/api/worlds') return json(response, {worlds:worlds.map(({info}) => info)});
     if (!path.startsWith('/api/')) {
@@ -603,6 +650,11 @@ const server = createServer(async (request,response) => {
     if (method === 'GET') {
       if (path === '/api/campaign') return json(response, world.publicCampaign);
       if (path === '/api/trials') return json(response, {trials:trialsFor(world.info.id)});
+      if (path === '/api/diamond') {
+        const heroId = await requireHero(request, world);
+        const page = pageAt(world, Number(searchParams.get('page'))).page;
+        return json(response, diamondView(store, heroId, world.info.id, page, world.pages.length));
+      }
       if (path === '/api/heroes') return json(response, {heroes:await store.heroes()});
       if (path === '/api/progress') return json(response, currentProgress(world, await requireHero(request, world)));
       if (path === '/api/status') {
@@ -645,6 +697,13 @@ const server = createServer(async (request,response) => {
     if (method === 'POST') {
       const trialRoute = path.match(/^\/api\/trials\/([a-z0-9-]{1,64})$/);
       if (trialRoute) return await submitTrial(request, response, world, await requireHero(request, world), trialRoute[1]);
+      if (path === '/api/diamond/start') {
+        const heroId = await requireHero(request, world);
+        const data = await readJson(request);
+        const page = pageAt(world, data.page).page;
+        return json(response, startDiamond(store, heroId, world.info.id, page, world.pages.length));
+      }
+      if (path === '/api/diamond/submit') return await submitDiamond(request, response, world, await requireHero(request, world));
       if (path === '/api/combat/potion') return await drinkPotion(request, response, store, await requireHero(request, world));
       if (path === '/api/heroes') return await createHero(request, response, world);
       if (path === '/api/heroes/load') return await loadHero(request, response, world);
@@ -657,6 +716,9 @@ const server = createServer(async (request,response) => {
   } catch (error) {
     if (response.headersSent) return response.destroy();
     if (error.code === 'HERO_EXISTS') return json(response, {error:'A hero with that name already exists. Load it or choose another name.'}, 409);
+    if (error.code === 'DIAMOND_NOT_FOUND') return json(response, {error:error.message}, 404);
+    if (error.code === 'DIAMOND_STAGE_INVALID') return json(response, {error:error.message}, 400);
+    if (error.code === 'DIAMOND_STAGE_LOCKED') return json(response, {error:error.message}, 409);
     if (['HERO_FALLEN','COMBAT_SUBMISSION_CONFLICT','POTION_UNAVAILABLE','HEALTH_FULL'].includes(error.code)) {
       return json(response, {error:error.message}, 409);
     }

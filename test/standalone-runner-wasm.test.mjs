@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import goExercises from '../data/workbench/go.mjs';
+import { diamondExercise } from '../lib/diamond-encounter.mjs';
 import { caseExport, goWasiHarness, rustWasiHarness } from '../lib/standalone-runner-harness.mjs';
 
 const exec = promisify(execFile);
@@ -86,14 +87,19 @@ test('all authored Go reference cases run in the real WASI worker', {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const environment = { ...process.env, GOTOOLCHAIN: 'local', GOENV: 'off', GOPROXY: 'off', GOSUMDB: 'off',
     GO111MODULE: 'off', GOWORK: 'off', GOCACHE: join(directory, 'cache'), GOOS: 'wasip1', GOARCH: 'wasm', CGO_ENABLED: '0' };
-  for (const exercise of goExercises) {
+  const goblin = diamondExercise('go');
+  const wrongGoblin = {...goblin, id:'go-diamond-example-only', reference:goblin.starter.replace('return 0', 'return 9'),
+    expectedVerdicts:[0, 10, 10]};
+  for (const exercise of [...goExercises, goblin, wrongGoblin]) {
     const harness = goWasiHarness(exercise.tests);
     const output = join(directory, 'trial.wasm');
     await writeFile(join(directory, 'submission.go'), exercise.reference);
     await writeFile(join(directory, 'harness.go'), harness.source);
     await exec('go', ['build', '-buildmode=c-shared', '-p=1', '-ldflags=-s -w', '-o', output, 'submission.go', 'harness.go'],
       { cwd: directory, env: environment, windowsHide: true, timeout: 120_000 });
-    for (const [index, id] of harness.ids.entries()) assert.equal(await verdict(output, index), 0, `${exercise.id}/${id}`);
+    for (const [index, id] of harness.ids.entries()) {
+      assert.equal(await verdict(output, index), exercise.expectedVerdicts?.[index] ?? 0, `${exercise.id}/${id}`);
+    }
   }
 });
 
@@ -107,13 +113,19 @@ test('the Rust WASI harness runs every reference case using the pinned compiler'
   const artifact = join(directory, 'trial.wasm');
   const flags = ['--target', 'wasm32-wasip1', '--edition=2024', '-Cpanic=abort', '-Cdebuginfo=0', '-Awarnings'];
   const options = { cwd: directory, env: { ...process.env, TEMP: directory, TMP: directory }, windowsHide: true, timeout: 20_000 };
-  for (const exercise of exercises) {
+  const goblin = diamondExercise('rust');
+  const correctGoblin = {...goblin, solution:goblin.reference};
+  const wrongGoblin = {...goblin, id:'rust-diamond-example-only', solution:goblin.starter.replace('todo!()', '9'),
+    expectedVerdicts:[0, 10, 10]};
+  for (const exercise of [...exercises, correctGoblin, wrongGoblin]) {
     const harness = rustWasiHarness(exercise);
     await writeFile(join(directory, 'submission.rs'), exercise.solution);
     await exec(rustc, [...flags, '--crate-type=rlib', '--crate-name=ferrum_submission', '-o', 'libferrum_submission.rlib', 'submission.rs'], options);
     await writeFile(join(directory, 'harness.rs'), harness.source);
     await exec(rustc, [...flags, '--crate-type=cdylib', '--crate-name=ferrum_harness', '--extern', `ferrum_submission=${library}`,
       '-o', artifact, 'harness.rs'], options);
-    for (const [index, id] of harness.ids.entries()) assert.equal(await verdict(artifact, index), 0, `${exercise.id}/${id}`);
+    for (const [index, id] of harness.ids.entries()) {
+      assert.equal(await verdict(artifact, index), exercise.expectedVerdicts?.[index] ?? 0, `${exercise.id}/${id}`);
+    }
   }
 });
