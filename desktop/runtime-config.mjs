@@ -2,7 +2,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, normalize, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const nativeWorkerFiles = ['broker.exe', 'wasm-worker/wasm-worker.exe'];
+const nativeWorkerFiles = ['broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe'];
 const nativeCompilerFiles = {rust: 'rust/bin/rustc.exe', go: 'go/bin/go.exe'};
 
 function resolvePackagedFile(directory, name) {

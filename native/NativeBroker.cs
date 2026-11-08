@@ -15,7 +15,7 @@ internal static class NativeBroker
     private static int Main(string[] args)
     {
         if (args.Length == 0) return BrokerFault;
-        if (args[0] == "probe" || args[0] == "guest" || args[0] == "hang" || args[0] == "noop") return SandboxProbe.Run(args);
+        if (args[0] == "probe") return SandboxProbe.Run(args);
         var pipe = new Thread(delegate() {
             try { Console.OpenStandardInput().ReadByte(); }
             catch (IOException) { }

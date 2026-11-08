@@ -12,7 +12,8 @@ async function bundle(t, language) {
   const directory = await mkdtemp(join(tmpdir(), 'coding-dungeons-bundle-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const compiler = language === 'go' ? 'go/bin/go.exe' : 'rust/bin/rustc.exe';
-  const files = { 'broker.exe': 'broker', 'wasm-worker/wasm-worker.exe': 'worker', [compiler]: 'compiler' };
+  const files = { 'broker.exe': 'broker', 'sandbox-probe.exe': 'probe',
+    'wasm-worker/wasm-worker.exe': 'worker', [compiler]: 'compiler' };
   for (const [path, content] of Object.entries(files)) {
     const parts = path.split('/');
     await mkdir(join(directory, ...parts.slice(0, -1)), { recursive: true });
@@ -36,7 +37,7 @@ test('native execution stays unavailable after a failed probe or an asset hash m
   assert.equal(await runner.status('go'), false);
   assert.equal(called, 1);
   assert.equal((await runner.grade({ language: 'go', source: 'package main', tests: [] })).status, 'unavailable');
-  await writeFile(join(directory, 'broker.exe'), 'tampered');
+  await writeFile(join(directory, 'sandbox-probe.exe'), 'tampered');
   const tampered = createStandaloneRunner({ directory, platform: 'win32', architecture: 'x64',
     command: async () => { called++; return { code: 0, stdout: probePass }; },
   });
@@ -53,7 +54,13 @@ test('offline diagnostics distinguish broker startup failures without revealing 
     [{stderr: 'The isolation probe requires a Windows desktop process outside an existing AppContainer.\nprivate path'}, 'app-container'],
     [{stderr: 'CreateProcessW LPAC failed: private path'}, 'process-launch'],
     [{stderr: 'CreateProcessW LPAC failed (Windows error 5).\nprivate path'}, 'process-launch'],
+    [{stderr: 'Verify sandbox token failed (Windows error 87).\nprivate path'}, 'probe-token'],
+    [{stderr: 'Verify sandbox token failed.\nprivate path'}, 'probe-token'],
+    [{stderr: 'Verify sandbox loopback policy failed (Windows error 5).\nprivate path'}, 'probe-network-policy'],
     [{stderr: 'The restricted process did not pass the isolation probe (exit 17).'}, 'probe-process'],
+    [{stderr: 'The restricted process did not pass the isolation probe (exit 12).\nprivate path'}, 'probe-process'],
+    [{stderr: 'The restricted process did not pass the isolation probe (exit 210106).'}, 'probe-process'],
+    [{stderr: 'The restricted process did not pass the isolation probe (exit -1073741502).'}, 'probe-process'],
     [{stderr: 'private path'}, 'probe-failed'],
   ]) {
     const runner = createStandaloneRunner({ directory, platform: 'win32', architecture: 'x64',
@@ -65,6 +72,10 @@ test('offline diagnostics distinguish broker startup failures without revealing 
     assert.ok(diagnostic.detail);
     assert.doesNotMatch(diagnostic.detail, /private path/);
     if (probe.stderr?.includes('Windows error 5')) assert.match(diagnostic.detail, /Windows error 5\./);
+    if (probe.stderr?.includes('Windows error 87')) assert.match(diagnostic.detail, /Windows error 87\./);
+    if (probe.stderr?.includes('exit 12')) assert.match(diagnostic.detail, /loopback/);
+    if (probe.stderr?.includes('exit 210106')) assert.match(diagnostic.detail, /create a TCP socket \(Winsock error 10106\)/);
+    if (probe.stderr?.includes('exit -1073741502')) assert.match(diagnostic.detail, /0xC0000142/);
   }
 });
 
@@ -156,15 +167,16 @@ test('abort reaches an active broker, removes scratch, and leaves the backend av
   assert.equal((await runner.grade({ language: 'go', signal: controller.signal })).status, 'canceled');
 });
 
-test('the packaged broker compiles and runs a suite from a Windows desktop session', {
+test('the packaged broker compiles and runs suites from a Windows desktop session', {
   skip: !process.env.DUNGEONS_TEST_NATIVE_BUNDLE,
-}, async () => {
+}, async t => {
   const directory = process.env.DUNGEONS_TEST_NATIVE_BUNDLE;
   const manifest = JSON.parse(await readFile(join(directory, 'native-runner.json'), 'utf8'));
   assert.ok(manifest.languages.length > 0);
   const runner = createStandaloneRunner({ directory });
-  for (const language of manifest.languages) {
-    assert.equal(await runner.status(language), true, `${language} isolation gate`);
+  for (const language of manifest.languages) await t.test(language, async () => {
+    const diagnostic = await runner.diagnostics(language);
+    assert.equal(diagnostic.available, true, `${language} isolation gate: ${diagnostic.detail}`);
     const rust = language === 'rust';
     const suite = rust ? {
       language,
@@ -180,5 +192,5 @@ test('the packaged broker compiles and runs a suite from a Windows desktop sessi
     const outcome = await runner.grade(suite);
     assert.equal(outcome.status, 'failed', JSON.stringify(outcome));
     assert.deepEqual(outcome.tests.map(({ id, status }) => [id, status]), [['right', 'passed'], ['wrong', 'failed']]);
-  }
+  });
 });

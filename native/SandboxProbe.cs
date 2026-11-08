@@ -1,12 +1,9 @@
 using System;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Security.AccessControl;
-using System.Threading;
 
 internal static class SandboxProbe
 {
@@ -18,9 +15,6 @@ internal static class SandboxProbe
         {
             if ((args.Length == 1 || args.Length == 2) && args[0] == "probe")
                 return Probe(args.Length == 2 ? args[1] : null);
-            if (args.Length == 5 && args[0] == "guest") return CheckIsolation(args[1], args[2], args[3], int.Parse(args[4]));
-            if (args.Length == 1 && args[0] == "hang") Thread.Sleep(Timeout.Infinite);
-            if (args.Length == 1 && args[0] == "noop") return 0;
             return 1;
         }
         catch (Exception error)
@@ -32,8 +26,10 @@ internal static class SandboxProbe
 
     private static int Probe(string scratch)
     {
-        string executable = Assembly.GetExecutingAssembly().Location;
-        string assemblyDirectory = Path.GetDirectoryName(executable);
+        string assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        string executable = Path.Combine(assemblyDirectory, "sandbox-probe.exe");
+        if (!File.Exists(executable) || (File.GetAttributes(executable) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("The native isolation test child is missing.");
         string directory = scratch ?? assemblyDirectory;
         string input = Path.Combine(directory, "input.txt");
         string secret = Path.Combine(directory, "private.txt");
@@ -55,14 +51,25 @@ internal static class SandboxProbe
             try
             {
                 var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                // Verify the listener works from outside the sandbox first.
+                using (var client = new TcpClient())
+                {
+                    client.Connect(IPAddress.Loopback, port);
+                    listener.AcceptTcpClient().Dispose();
+                }
                 string log = Path.Combine(directory, "probe.log");
-                int verdict = WindowsSandbox.Run(profile, executable, new[] { "guest", input, secret, writable, port.ToString() },
+                string output = Path.Combine(writable, "written.txt");
+                int verdict = WindowsSandbox.Run(profile, executable,
+                    new[] { "guest", input, secret, Path.Combine(writable, "temporary.txt"), output, port.ToString() },
                     directory, 8000, logPath: log);
                 if (verdict != 0) throw new InvalidOperationException("The restricted process did not pass the isolation probe (exit " + verdict + ").");
                 if (listener.Pending()) throw new InvalidOperationException("The restricted process reached loopback.");
-                if (File.ReadAllText(Path.Combine(writable, "written.txt")) != "trial output")
+                if (File.ReadAllText(output) != "trial output")
                     throw new InvalidOperationException("The restricted compiler scratch was not writable.");
-                if (File.ReadAllText(log).Trim() != "probe output")
+                string observed = File.ReadAllText(log).Trim();
+                if (observed == "probe output; Winsock initialization failed (10107)")
+                    WindowsSandbox.VerifyNoLoopbackExemption(profile.Sid);
+                else if (observed != "probe output")
                     throw new InvalidOperationException("The restricted compiler output handle was not available.");
             }
             finally { listener.Stop(); }
@@ -81,31 +88,4 @@ internal static class SandboxProbe
         using (var writer = new StreamWriter(stream)) writer.Write(text);
     }
 
-    private static int CheckIsolation(string input, string secret, string writable, int port)
-    {
-        if (File.ReadAllText(input) != "trial input") return 10;
-        try { File.ReadAllText(secret); return 11; }
-        catch (UnauthorizedAccessException) { }
-
-        string intermediate = Path.Combine(writable, "temporary.txt");
-        WriteNew(intermediate, "trial output");
-        File.Move(intermediate, Path.Combine(writable, "written.txt"));
-
-        try
-        {
-            using (var client = new TcpClient()) client.Connect(IPAddress.Loopback, port);
-            return 12;
-        }
-        catch (SocketException) { }
-
-        try
-        {
-            var launch = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location, "noop") { UseShellExecute = false };
-            using (Process child = Process.Start(launch)) { if (child != null) child.WaitForExit(); }
-            return 13;
-        }
-        catch (Win32Exception) { }
-        Console.WriteLine("probe output");
-        return 0;
-    }
 }

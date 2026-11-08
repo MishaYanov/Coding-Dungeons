@@ -17,7 +17,10 @@ test('Windows broker proves the LPAC and Job Object boundary', {
 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'coding-dungeons-sandbox-'));
   try {
-    const executable = join(directory, 'probe.exe');
+    const executable = join(directory, 'broker.exe');
+    const buildProbe = fileURLToPath(new URL('../desktop/build-sandbox-probe.ps1', import.meta.url));
+    await exec('powershell.exe', ['-NoProfile', '-File', buildProbe, '-OutputPath', join(directory, 'sandbox-probe.exe')],
+      { windowsHide: true, timeout: 20_000 });
     await exec(compiler, ['/nologo', '/target:exe', '/platform:x64', `/out:${executable}`,
       source('WindowsSandbox.cs'), source('SandboxProbe.cs')], { windowsHide: true, timeout: 10_000 });
     const result = await exec(executable, ['probe'], {

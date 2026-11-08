@@ -38,7 +38,7 @@ test('the preview capability inventory distinguishes packages from optional file
 test('desktop exposes the bundled native directory only with its fixed manifest and executables', async (t) => {
   const directory = await makeRuntime(t);
   const native = join(directory, 'standalone-runner');
-  const names = ['broker.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe', 'go/bin/go.exe'];
+  const names = ['broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe', 'go/bin/go.exe'];
   const manifest = {
     version: 1,
     languages: ['rust', 'go'],

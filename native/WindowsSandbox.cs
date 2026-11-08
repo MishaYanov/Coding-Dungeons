@@ -13,9 +13,9 @@ using System.Threading;
 internal static class WindowsSandbox
 {
     private const uint CreateSuspended = 0x00000004;
+    private const uint DetachedProcess = 0x00000008;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint ExtendedStartupInfo = 0x00080000;
-    private const uint CreateNoWindow = 0x08000000;
     private const uint LimitActiveProcess = 0x00000008;
     private const uint LimitJobMemory = 0x00000200;
     private const uint KillOnJobClose = 0x00002000;
@@ -23,11 +23,15 @@ internal static class WindowsSandbox
     private const int JobBasicAndIoAccounting = 8;
     private const int JobCpuRateControl = 15;
     private const uint CpuEnableHardCap = 0x5;
+    private const uint TokenDuplicate = 0x0002;
     private const uint TokenQuery = 0x0008;
+    private const int SecurityImpersonation = 2;
+    private const uint MaximumAllowed = 0x02000000;
+    private const uint RestrictedPackagesAccess = 0x2;
+    private const int ErrorInsufficientBuffer = 122;
     private const int TokenIsAppContainer = 29;
     private const int TokenCapabilities = 30;
     private const int TokenAppContainerSid = 31;
-    private const int TokenIsLessPrivilegedAppContainer = 46;
     private const int SecurityCapabilitiesAttribute = 0x00020009;
     private const int JobListAttribute = 0x0002000d;
     private const int HandleListAttribute = 0x00020002;
@@ -124,6 +128,39 @@ internal static class WindowsSandbox
         finally { LocalFree(descriptor); }
     }
 
+    internal static void VerifyNoLoopbackExemption(IntPtr profileSid)
+    {
+        // A Winsock startup error does not prove the firewall policy. In that
+        // case independently verify that the exact capability-free profile
+        // used by the probe has no Windows loopback exemption.
+        uint count;
+        IntPtr exemptions;
+        uint error = NetworkIsolationGetAppContainerConfig(out count, out exemptions);
+        if (error != 0) throw new Win32Exception((int)error,
+            "Verify sandbox loopback policy failed (Windows error " + error + ").");
+        IntPtr heap = GetProcessHeap();
+        int stride = Marshal.SizeOf(typeof(SidAndAttributes));
+        bool allowed = false;
+        try
+        {
+            for (uint i = 0; i < count; i++)
+            {
+                IntPtr sid = Marshal.ReadIntPtr(exemptions, checked((int)i * stride));
+                if (sid != IntPtr.Zero && EqualSid(profileSid, sid)) allowed = true;
+            }
+        }
+        finally
+        {
+            for (uint i = 0; i < count; i++)
+            {
+                IntPtr sid = Marshal.ReadIntPtr(exemptions, checked((int)i * stride));
+                if (sid != IntPtr.Zero) HeapFree(heap, 0, sid);
+            }
+            if (exemptions != IntPtr.Zero) HeapFree(heap, 0, exemptions);
+        }
+        if (allowed) throw new InvalidOperationException("Verify sandbox loopback policy failed. Windows exempted the probe profile.");
+    }
+
     internal static int Run(Profile profile, string executable, string[] args, string workingDirectory, uint timeoutMs,
         uint processLimit = 1, uint memoryMiB = 256, SortedDictionary<string, string> extraEnvironment = null, string logPath = null,
         Func<bool> canceled = null)
@@ -211,11 +248,20 @@ internal static class WindowsSandbox
             environment = Marshal.StringToHGlobalUni(block.Append('\0').ToString());
 
             Require(CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, logPath != null,
-                CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfo | CreateNoWindow,
+                CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfo | DetachedProcess,
                 environment, workingDirectory, ref startup, out child), "CreateProcessW LPAC");
             Require(IsProcessInJob(child.Process, job, out inJob), "IsProcessInJob");
             if (!inJob) throw new InvalidOperationException("The suspended process was outside its job.");
-            VerifyToken(child.Process, profile.Sid);
+            try { VerifyToken(child.Process, profile.Sid); }
+            catch (Win32Exception error)
+            {
+                throw new Win32Exception(error.NativeErrorCode,
+                    "Verify sandbox token failed (Windows error " + error.NativeErrorCode + "). " + error.Message);
+            }
+            catch (InvalidOperationException error)
+            {
+                throw new InvalidOperationException("Verify sandbox token failed. " + error.Message, error);
+            }
             if (canceled != null && canceled()) return StopJob(job, child.Process, 127);
             if (ResumeThread(child.Thread) != 1) throw Failure("ResumeThread");
 
@@ -324,21 +370,53 @@ internal static class WindowsSandbox
     private static void VerifyToken(IntPtr process, IntPtr expectedSid)
     {
         IntPtr token;
-        Require(OpenProcessToken(process, TokenQuery, out token), "OpenProcessToken");
+        Require(OpenProcessToken(process, TokenQuery | TokenDuplicate, out token), "OpenProcessToken");
         try
         {
-            if (ReadTokenNumber(token, TokenIsAppContainer) != 1 || ReadTokenNumber(token, TokenIsLessPrivilegedAppContainer) != 1
-                || ReadTokenNumber(token, TokenCapabilities) != 0)
-                throw new InvalidOperationException("Windows did not apply the capability-free LPAC token.");
+            if (ReadTokenNumber(token, TokenIsAppContainer) == 0 || ReadTokenNumber(token, TokenCapabilities) != 0)
+                throw new InvalidOperationException("Windows did not apply a capability-free AppContainer token.");
             IntPtr info = ReadToken(token, TokenAppContainerSid);
             try
             {
-                if (!EqualSid(expectedSid, Marshal.ReadIntPtr(info)))
+                IntPtr actualSid = Marshal.ReadIntPtr(info);
+                if (actualSid == IntPtr.Zero || !EqualSid(expectedSid, actualSid))
                     throw new InvalidOperationException("Windows assigned an unexpected AppContainer SID.");
             }
             finally { Marshal.FreeHGlobal(info); }
+            if (!HasLpacAccess(token))
+                throw new InvalidOperationException("The AppContainer token did not enforce the LPAC package restriction.");
         }
         finally { CloseHandle(token); }
+    }
+
+    private static bool HasLpacAccess(IntPtr token)
+    {
+        // Test Windows' package authorization directly. An ordinary AppContainer
+        // gets both bits; LPAC gets only the restricted-packages bit. The descriptor
+        // exists only in memory and the broker never impersonates the child.
+        IntPtr descriptor;
+        int size;
+        Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            "O:SYG:SYD:(A;;0x3;;;WD)(A;;0x1;;;AC)(A;;0x2;;;S-1-15-2-2)",
+            1, out descriptor, out size), "Build LPAC verification descriptor");
+        try
+        {
+            IntPtr impersonationToken;
+            Require(DuplicateToken(token, SecurityImpersonation, out impersonationToken), "DuplicateToken");
+            try
+            {
+                var mapping = new GenericMapping();
+                var privileges = new PrivilegeSet();
+                int privilegeSize = Marshal.SizeOf(privileges);
+                uint granted;
+                bool allowed;
+                Require(AccessCheck(descriptor, impersonationToken, MaximumAllowed, ref mapping,
+                    ref privileges, ref privilegeSize, out granted, out allowed), "AccessCheck for LPAC");
+                return allowed && granted == RestrictedPackagesAccess;
+            }
+            finally { CloseHandle(impersonationToken); }
+        }
+        finally { LocalFree(descriptor); }
     }
 
     private static int ReadTokenNumber(IntPtr token, int kind)
@@ -351,11 +429,12 @@ internal static class WindowsSandbox
     private static IntPtr ReadToken(IntPtr token, int kind)
     {
         int length;
-        GetTokenInformation(token, kind, IntPtr.Zero, 0, out length);
-        if (length <= 0) throw Failure("GetTokenInformation size");
+        if (GetTokenInformation(token, kind, IntPtr.Zero, 0, out length)
+            || Marshal.GetLastWin32Error() != ErrorInsufficientBuffer || length < sizeof(int))
+            throw Failure("GetTokenInformation size for class " + kind);
         IntPtr info = Marshal.AllocHGlobal(length);
         if (GetTokenInformation(token, kind, info, length, out length)) return info;
-        var failure = Failure("GetTokenInformation");
+        var failure = Failure("GetTokenInformation for class " + kind);
         Marshal.FreeHGlobal(info);
         throw failure;
     }
@@ -452,6 +531,16 @@ internal static class WindowsSandbox
     [StructLayout(LayoutKind.Sequential)]
     private struct CpuRate { public uint ControlFlags, CpuRateUnits; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GenericMapping { public uint Read, Write, Execute, All; }
+
+    // PRIVILEGE_SET with space for the first LUID_AND_ATTRIBUTES entry.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PrivilegeSet { public uint Count, Control, LuidLow, LuidHigh, Attributes; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SidAndAttributes { public IntPtr Sid; public uint Attributes; }
+
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     private static extern int CreateAppContainerProfile(string name, string displayName, string description, IntPtr capabilities, int count, out IntPtr sid);
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
@@ -460,6 +549,12 @@ internal static class WindowsSandbox
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool EqualSid(IntPtr first, IntPtr second);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr data, int size, out int length);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool DuplicateToken(IntPtr token, int level, out IntPtr duplicate);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool AccessCheck(IntPtr descriptor, IntPtr token, uint requested, ref GenericMapping mapping,
+        ref PrivilegeSet privileges, ref int privilegeSize, out uint granted, out bool allowed);
+    [DllImport("FirewallApi.dll", ExactSpelling = true)]
+    private static extern uint NetworkIsolationGetAppContainerConfig(out uint count, out IntPtr exemptions);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, int revision, out IntPtr descriptor, out int size);
     [DllImport("advapi32.dll", SetLastError = true)]
@@ -485,6 +580,8 @@ internal static class WindowsSandbox
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(IntPtr process, uint exitCode);
     [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")] private static extern IntPtr GetProcessHeap();
+    [DllImport("kernel32.dll")] private static extern bool HeapFree(IntPtr heap, uint flags, IntPtr memory);
     [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr memory);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr handle);
 }

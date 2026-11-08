@@ -14,7 +14,7 @@ and Microsoft.NETCore.App.Host.win-x64 packages at 8.0.33, and wasmtime-dotnet-L
 from Wasmtime .NET commit 4aac1a5958f4da2dadca4ae84e16004516372dd6.
 
 .NOTES
-Use a .NET SDK that can publish net8.0 for win-x64. The script verifies the input package
+Use Visual Studio C++ Build Tools and a .NET SDK that can publish net8.0 for win-x64. The script verifies the input package
 hashes and publishes from the supplied offline source. Stage these assets before packaging.
 The installed engine still requires the broker's Windows isolation probe to succeed.
 #>
@@ -152,6 +152,7 @@ try {
     )
     & $compiler @brokerArgs
     if ($LASTEXITCODE -ne 0) { throw "Windows broker build failed with exit code $LASTEXITCODE." }
+    & (Join-Path $desktopRoot 'build-sandbox-probe.ps1') -OutputPath (Join-Path $payload 'sandbox-probe.exe')
 
     $rust = Join-Path $payload 'rust'
     Copy-IntoFolder @((Join-Path $rustRoot 'bin/rustc.exe'), $rustDrivers[0].FullName) (Join-Path $rust 'bin')
@@ -203,7 +204,7 @@ try {
     }
 
     $executables = [ordered]@{}
-    foreach ($name in @('broker.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe', 'go/bin/go.exe')) {
+    foreach ($name in @('broker.exe', 'sandbox-probe.exe', 'wasm-worker/wasm-worker.exe', 'rust/bin/rustc.exe', 'go/bin/go.exe')) {
         $executables[$name] = (Get-FileHash -LiteralPath (Join-Path $payload $name) -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     [ordered]@{
