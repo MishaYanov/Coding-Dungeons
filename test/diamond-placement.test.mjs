@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { diamondPosition } from '../public/diamond-encounter.mjs';
+import { diamondPosition } from '../src/renderer/diamond-placement.mjs';
 
 test('a hidden diamond finds free page space when all nearby positions cover a book link', () => {
   const roll = { x: 50, y: 50 };

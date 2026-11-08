@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,16 +79,6 @@ test('utility configuration selects private saves and omits ambient application 
   assert.equal(child.FERRUM_LLM_CLI, model.cli);
   assert.equal(child.FERRUM_LLM_MODEL, model.weights);
   assert.equal(child.DUNGEONS_NATIVE_RUNNER_DIR, nativeRunner);
-});
-
-test('the React reader exposes every campaign controller mount point once', async () => {
-  const root = new URL('../', import.meta.url);
-  const [browser, desktop] = await Promise.all([
-    readFile(new URL('public/index.html', root), 'utf8'),
-    readFile(new URL('src/renderer/reader.jsx', root), 'utf8'),
-  ]);
-  const ids = (markup) => Array.from(markup.matchAll(/\bid="([a-z][a-z0-9-]*)"/g), ([, id]) => id).sort();
-  assert.deepEqual(ids(desktop), ids(browser));
 });
 
 test('only exact HTTPS documentation links from the installed books are approved', async () => {

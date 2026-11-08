@@ -25,7 +25,7 @@ Run `CodingDungeonsSetup.exe` and open **Coding Dungeons** from Start. The packa
 
 ## Browser development
 
-Install Node.js 24 or newer, then run these commands from the project folder.
+The browser and desktop builds share the React reader in `src/renderer`. Install Node.js 24 or newer, then run these commands from the project folder.
 
 ```sh
 npm ci
@@ -49,9 +49,9 @@ npm run test:book
 
 The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go reference checks use Go 1.25.1. See the [standalone app PRD](docs/CODING-DUNGEONS-PRD.md) for the release test matrix.
 
-On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1`. Stage the native toolchains using [the native runner build instructions](native/README.md). Then run `npm run desktop:make`. The setup is under `out/make/squirrel.windows/x64/`. Runtime files and generated installers stay outside Git.
+On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1` and follow the [native runner build instructions](native/README.md) if `desktop/runtime` is missing. Keep those staged files for later builds. Install dependencies with `npm.cmd ci` on a fresh checkout.
 
-If the Squirrel maker reports `PathTooLongException`, point `TEMP`, `TMP`, and `SQUIRREL_TEMP` at a short writable folder in the build shell. To make the installer from an existing app package, run the maker with `--skip-package`.
+To build a new update from an already released version, bump the version and make a Windows installer. Run the following in PowerShell from the project folder.
 
 ```powershell
 $installerTemp = Join-Path $env:USERPROFILE 'cdtmp'
@@ -59,7 +59,10 @@ New-Item -ItemType Directory -Path $installerTemp -Force | Out-Null
 $env:TEMP = $installerTemp
 $env:TMP = $installerTemp
 $env:SQUIRREL_TEMP = $installerTemp
-.\node_modules\.bin\electron-forge.cmd make --skip-package --platform=win32 --arch=x64
+npm.cmd version patch --no-git-tag-version
+npm.cmd run desktop:make
 ```
+
+Close the installed app and run `out\make\squirrel.windows\x64\CodingDungeonsSetup.exe`. Use a version higher than the installed one and keep the same app identity. The installer replaces the application files and uses the existing saves in `%APPDATA%\Coding Dungeons\state`. Build outputs and staged runtimes stay outside Git.
 
 See [book sources and rebuild instructions](docs/BOOK-BUILD.md), [the four-world audit](docs/BOOK-AUDIT.md), and [findings from the follow-up review](docs/REVIEW-FINDINGS.md).

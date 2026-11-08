@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-node --env-file-if-exists=.env server.mjs
+call npm.cmd start
 if errorlevel 1 pause

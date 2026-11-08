@@ -1,6 +1,6 @@
 {
   "name": "coding-dungeons",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "productName": "Coding Dungeons",
   "description": "Four offline programming worlds with books, challenges, and hero progression.",
   "author": "Coding Dungeons contributors",
@@ -15,9 +15,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.mjs",
-    "test": "node --test \"test/*.test.mjs\"",
-    "test:browser": "node --test browser/reader.test.mjs",
+    "start": "npm run desktop:bundle && node --env-file-if-exists=.env server.mjs",
+    "test": "npm run desktop:bundle && node --test \"test/*.test.mjs\"",
+    "test:browser": "npm run desktop:bundle && node --test browser/reader.test.mjs",
     "test:desktop": "node --test browser/desktop.test.mjs",
     "test:book": "python work/scripts/check_examples.py && python work/scripts/run_case_studies.py",
     "desktop:bundle": "vite build",

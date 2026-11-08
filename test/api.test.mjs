@@ -314,8 +314,10 @@ test('reader serves the book and blocks access to private project files', async 
   assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
   assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
   assert.match(response.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
-  const {response: progressionModule} = await request('/progression.mjs', {method: 'HEAD'});
-  assert.equal(progressionModule.headers.get('Content-Type'), 'text/javascript; charset=utf-8');
+  const asset = home.toString().match(/<script type="module"[^>]+src="(\/assets\/[\w-]+\.js)"/)?.[1];
+  assert.ok(asset, 'The browser and desktop use the built React entry.');
+  const {response: rendererModule} = await request(asset, {method: 'HEAD'});
+  assert.equal(rendererModule.headers.get('Content-Type'), 'text/javascript; charset=utf-8');
 
   const { payload: image, response: imageResponse } = await request('/book/pages/559.webp');
   assert.equal(imageResponse.headers.get('Content-Type'), 'image/webp');
@@ -327,13 +329,12 @@ test('reader serves the book and blocks access to private project files', async 
   assert.ok(Number(pdfResponse.headers.get('Content-Length')) > 0);
   assert.equal(pdfHead.length, 0);
 
-  assert.match(home.toString(), /href="\/book\/ferrum-field-kit\.zip"/);
   const { payload: fieldKit, response: fieldKitResponse } = await request('/book/ferrum-field-kit.zip');
   assert.equal(fieldKitResponse.headers.get('Content-Type'), 'application/zip');
   assert.equal(fieldKit.subarray(0, 4).toString('hex'), '504b0304');
   assert.ok(fieldKit.includes('campaign/Quest_Journal.txt'));
 
-  for (const path of ['/data/exercises.json', '/state/ferrum.sqlite', '/book/pages/560.webp',
+  for (const path of ['/data/exercises.json', '/state/ferrum.sqlite', '/book/pages/560.webp', '/app.js',
     '/book/%2E%2E/server.mjs', '/book/pages/%2F..%2Findex.html', '/api/not-a-route']) {
     await request(path, { status: 404 });
   }
@@ -722,8 +723,7 @@ test('special encounters grade each stage in order and persist separately from F
     }
   }
   await request('/lib/encounters.mjs', { status: 404 });
-  const { response: module } = await request('/special-encounters.mjs', { method: 'HEAD' });
-  assert.equal(module.headers.get('Content-Type'), 'text/javascript; charset=utf-8');
+  await request('/special-encounters.mjs', { status: 404 });
 
   const huntPath = `/api/encounters/${hunt.id}`;
   const elitePath = `/api/encounters/${elite.id}`;
