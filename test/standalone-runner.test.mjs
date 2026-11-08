@@ -52,6 +52,7 @@ test('offline diagnostics distinguish broker startup failures without revealing 
     [{reason: 'timeout'}, 'probe-timeout'],
     [{stderr: 'The isolation probe requires a Windows desktop process outside an existing AppContainer.\nprivate path'}, 'app-container'],
     [{stderr: 'CreateProcessW LPAC failed: private path'}, 'process-launch'],
+    [{stderr: 'CreateProcessW LPAC failed (Windows error 5).\nprivate path'}, 'process-launch'],
     [{stderr: 'The restricted process did not pass the isolation probe (exit 17).'}, 'probe-process'],
     [{stderr: 'private path'}, 'probe-failed'],
   ]) {
@@ -63,6 +64,7 @@ test('offline diagnostics distinguish broker startup failures without revealing 
     assert.equal(diagnostic.reason, reason);
     assert.ok(diagnostic.detail);
     assert.doesNotMatch(diagnostic.detail, /private path/);
+    if (probe.stderr?.includes('Windows error 5')) assert.match(diagnostic.detail, /Windows error 5\./);
   }
 });
 

@@ -29,6 +29,6 @@ test('the Go WASI harness uses named test bodies and separates imports from code
   assert.deepEqual(harness.ids, ['valid-value', 'empty-value']);
   assert.match(harness.source, /\/\/go:wasmexport coding_dungeons_run_case/);
   assert.equal(harness.source.match(/"strings"/g).length, 1);
-  assert.match(harness.source, /cases\[index\]\(trial\)/);
-  assert.match(harness.source, /if trial\.failed \{ return 0 \}/);
+  assert.match(harness.source, /switch index \{[\s\S]+case 0:[\s\S]+case 1:[\s\S]+default:/);
+  assert.match(harness.source, /if trial\.failures != 0 \{ return 0 \}/);
 });

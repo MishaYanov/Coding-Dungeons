@@ -352,7 +352,8 @@ function Prompt({ data, prompt, index, game, actions }) {
       <span className="inline-status" aria-live="polite" data-error={status.error}>{status.copy}</span>
     </div>
     {code && !runnable && <p className="fine-print">This is a code notebook. Your notes are saved for this page.</p>}
-    {runnerUnavailable && <p className="fine-print">The local {game.world.name} runner is unavailable. You can still save your code draft.</p>}
+    {runnerUnavailable && <p className="fine-print">{game.runnerDetail
+      || `The local ${game.world.name} runner is unavailable.`} You can still save your code draft.</p>}
     {result ? <WorkbenchReport result={result} data={data} game={game} />
       : <AnswerFeedback key={hard ? 'hard' : 'guided'} {...{ data, prompt, game, actions }} response={saved} />}
   </form>;
@@ -373,7 +374,7 @@ function Hints({ data, game, actions }) {
     if (!next) return;
     setCopy('Opening the guide kit…');
     try {
-      const result = await actions.api(`/api/levels/${data.level}/reveal/${kind}`, { hero: game.hero });
+      const result = await actions.api(`/api/levels/${data.level}/reveal/${kind}`, { method: 'POST', hero: game.hero, body: {} });
       if (mounted.current && request.current === id) setCopy(text(result.text) || 'No guide note is available here.');
     } catch (error) {
       if (mounted.current && request.current === id) setCopy(error.message);

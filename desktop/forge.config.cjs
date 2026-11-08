@@ -1,14 +1,55 @@
 const { existsSync } = require('node:fs');
-const { copyFile, cp, readFile, stat, writeFile } = require('node:fs/promises');
-const { basename, dirname, join, resolve } = require('node:path');
+const { copyFile, cp, readFile, readdir, realpath, stat, writeFile } = require('node:fs/promises');
+const { basename, dirname, isAbsolute, join, relative, resolve, sep } = require('node:path');
 
 const runtime = join(__dirname, 'runtime');
 const squirrelVendor = join(__dirname, '..', 'out', '.squirrel-vendor');
 const setupExe = 'CodingDungeonsSetup.exe';
+const packagedPaths = [
+  /^\/(?:LICENSE|package\.json|server\.mjs)$/,
+  /^\/node_modules(?:\/|$)/,
+  /^\/desktop(?:\/(?:book-links|engine-lifecycle|main|reader-storage|runtime-config|save-transfer|window-policy)\.mjs|\/preload\.cjs)?$/,
+  /^\/infra(?:\/run-suite\.sh)?$/,
+  /^\/lib(?:\/[\w-]+\.mjs)?$/,
+  /^\/data(?:\/(?:campaign|exercises|gm-rubrics|pages)\.json|\/workbench(?:\/[\w-]+\.mjs)?|\/worlds(?:\/(?:go|javascript|typescript)(?:\/(?:campaign|exercises|pages)\.json)?)?)?$/,
+  /^\/dist(?:\/renderer(?:\/(?:index\.html|styles\.css|assets(?:\/[\w-]+\.(?:css|js))?|book(?:\/(?:go|javascript|typescript))?(?:\/pages(?:\/\d+\.webp)?|\/[\w-]+\.(?:pdf|zip))?))?)?$/,
+];
+
+function ignorePackagePath(path) {
+  if (!path) return false;
+  const privateFile = /(?:^|\/)(?:\.git|\.bin|\.npmrc|\.env(?:\.[^/]+)?)(?:\/|$)|\.(?:pfx|p12|pem|key|db|sqlite3?)(?:-wal|-shm)?$/i;
+  return privateFile.test(path) || !packagedPaths.some(pattern => pattern.test(path));
+}
+
 const certificate = process.env.FERRUM_WINDOWS_CERTIFICATE_FILE;
 const signing = certificate
   ? {certificateFile: resolve(certificate), certificatePassword: process.env.FERRUM_WINDOWS_CERTIFICATE_PASSWORD}
   : undefined;
+
+async function checkRuntimeResources() {
+  if (!existsSync(runtime)) return;
+  const root = await realpath(runtime);
+  if (signing) {
+    const location = relative(root, await realpath(signing.certificateFile));
+    if (!isAbsolute(location) && location !== '..' && !location.startsWith(`..${sep}`)) {
+      throw new Error('Keep the Windows signing certificate outside the bundled runtime folder.');
+    }
+  }
+  const modelAssets = /^(?:gm-model\.gguf|llama-completion\.exe|llama(?:-common|-completion-impl)?\.dll|ggml(?:-base|-cpu-[\w-]+)?\.dll|libomp\.dll|mtmd\.dll|LICENSE-(?:LLVM-OpenMP|llama\.cpp\.txt|Qwen3\.txt))$/;
+  for (const entry of await readdir(root, {withFileTypes: true})) {
+    if (entry.name === 'standalone-runner' ? entry.isDirectory() : entry.isFile() && modelAssets.test(entry.name)) continue;
+    throw new Error(`Unexpected bundled runtime entry: ${entry.name}`);
+  }
+  for (const entry of await readdir(root, {withFileTypes: true, recursive: true})) {
+    const file = join(entry.parentPath, entry.name);
+    const path = relative(root, file).split(sep).join('/');
+    const goSource = path.startsWith('standalone-runner/go/src/');
+    if (entry.isSymbolicLink() || /^(?:\.git$|\.env(?:\.|$))|\.(?:pfx|p12|db|sqlite3?)(?:-wal|-shm)?$/i.test(entry.name)
+        || (!goSource && /\.(?:pem|key)$/i.test(entry.name))) {
+      throw new Error(`Remove the private or linked entry from the bundled runtime: ${path}`);
+    }
+  }
+}
 
 async function allowLargeAddresses(filename) {
   const binary = await readFile(filename);
@@ -23,6 +64,7 @@ async function allowLargeAddresses(filename) {
 
 module.exports = {
   hooks: {
+    prePackage: checkRuntimeResources,
     async preMake() {
       const vendor = join(dirname(require.resolve('electron-winstaller/package.json')), 'vendor');
       const archiver = join(dirname(require.resolve('7zip-bin/package.json')), 'win', 'x64', '7za.exe');
@@ -51,14 +93,7 @@ module.exports = {
     download: {cacheRoot: join(__dirname, '..', 'out', '.electron-cache')},
     extraResource: existsSync(runtime) ? [runtime] : [],
     ...(signing && {windowsSign: signing}),
-    ignore: [
-      /^\/\.(?:git|github|idea|npm-cache|vscode)(?:\/|$)/,
-      /^\/\.(?:env|env\.[^/]+)$/,
-      /^\/\.npmrc$/,
-      /^\/debug\.log$/,
-      /^\/(?:browser|docs|native|out|outputs|public|src|state|test|work)(?:\/|$)/,
-      /^\/desktop\/runtime(?:\/|$)/,
-    ],
+    ignore: ignorePackagePath,
   },
   makers: [
     {

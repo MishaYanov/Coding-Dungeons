@@ -313,6 +313,7 @@ test('reader serves the book and blocks access to private project files', async 
   assert.match(home.toString(), /<title>Coding Dungeons \| Choose a world<\/title>/);
   assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
   assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
+  assert.equal(response.headers.get('Cross-Origin-Resource-Policy'), 'same-origin');
   assert.match(response.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
   const asset = home.toString().match(/<script type="module"[^>]+src="(\/assets\/[\w-]+\.js)"/)?.[1];
   assert.ok(asset, 'The browser and desktop use the built React entry.');
@@ -367,9 +368,14 @@ test('public campaign data reveals instructions and questions but excludes answe
       }
     }
   }
-  await request('/api/levels/1/reveal/hint1', { status: 401 });
+  const hintPath = '/api/levels/1/reveal/hint1';
+  await request(hintPath, { method: 'POST', body: {}, status: 401 });
   const { hero } = await createHero('Guide Reader');
-  const { payload: hint } = await request('/api/levels/1/reveal/hint1', { hero });
+  await request(hintPath, { hero, status: 404 });
+  await request(hintPath, { method: 'POST', hero, body: {}, headers: { Origin: 'http://127.0.0.1:1' }, status: 403 });
+  const { payload: before } = await request('/api/progress', { hero });
+  assert.deepEqual(before.workbench.modes, []);
+  const { payload: hint } = await request(hintPath, { method: 'POST', hero, body: {} });
   assert.match(hint.text, /owner/);
   for (const path of ['/api/pages/0', '/api/pages/560', '/api/levels/43/reveal/hint1',
     '/api/levels/1/reveal/solution']) await request(path, { status: 404 });
@@ -384,7 +390,7 @@ test('Hard Mode survives reload and denies guide and authored answer access thro
   assert.ok(page.prompts.find(prompt => prompt.id === question.promptId).assessment.version);
   const { payload: mode } = await request('/api/workbench/1/mode', { method: 'PATCH', hero, body: { mode: 'hard' } });
   assert.deepEqual(mode, { mode: 'hard', assisted: false });
-  await request('/api/levels/1/reveal/hint1', { hero, status: 403 });
+  await request('/api/levels/1/reveal/hint1', { method: 'POST', body: {}, hero, status: 403 });
   await request('/api/answers/reveal', { method: 'POST', hero, body: question, status: 403 });
   const { payload: graded } = await request('/api/answers', { method: 'POST', hero, body: answer });
   assert.equal(graded.assessment.score, null);
@@ -467,7 +473,7 @@ test('a prior Guided victory does not unlock hints in an uncleared Hard encounte
   const body = {page:page.page, promptId:prompt.id, exerciseId:prompt.exerciseId, code};
   assert.equal((await request('/api/grade', {headers, hero, method:'POST', body})).payload.verdict, 'pass');
   await request('/api/workbench/1/mode', {headers, hero, method:'PATCH', body:{mode:'hard'}});
-  await request('/api/levels/1/reveal/debrief', {headers, hero, status:403});
+  await request('/api/levels/1/reveal/debrief', {method:'POST', body:{}, headers, hero, status:403});
 });
 
 test('unscored training submissions reveal the authored answer only on an explicit aid request', async () => {

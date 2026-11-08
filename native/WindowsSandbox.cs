@@ -373,7 +373,8 @@ internal static class WindowsSandbox
 
     private static Exception Failure(string operation)
     {
-        return new Win32Exception(Marshal.GetLastWin32Error(), operation + " failed.");
+        int code = Marshal.GetLastWin32Error();
+        return new Win32Exception(code, operation + " failed (Windows error " + code + ").");
     }
 
     private static void Require(bool success, string operation)

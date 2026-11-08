@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, parse, resolve } from 'node:path';
@@ -22,6 +22,7 @@ import { diamondExercise, diamondStage, diamondView, evaluateDiamondChoice, eval
 const root = dirname(fileURLToPath(import.meta.url));
 const desktopToken = process.env.FERRUM_DESKTOP_TOKEN;
 if (desktopToken !== undefined && !/^[a-f0-9]{64}$/.test(desktopToken)) throw new Error('Invalid desktop token.');
+const desktopSecret = desktopToken ? Buffer.from(desktopToken, 'hex') : null;
 const desktopPublicDir = process.env.FERRUM_PUBLIC_DIR;
 const rendererDir = desktopPublicDir ? resolve(root, desktopPublicDir) : join(root, 'dist', 'renderer');
 const publicDir = desktopPublicDir ? rendererDir : join(root, 'public');
@@ -472,14 +473,16 @@ function runWorldExercise(world, exercise, code, purpose, signal) {
     if (language === 'javascript' || language === 'typescript') {
       return runCourseExercise(language, code, exercise, purpose, signal);
     }
-    if (await standalone.status(language)) {
+    const diagnostics = await standalone.diagnostics(language);
+    if (diagnostics.available) {
       const fixtures = fixtureMetadata(exercise).filter(fixture => purpose === 'submit' || fixture.visibility === 'public');
       const raw = await standalone.grade({language, source:code, exercise, tests:exercise.tests,
         caseIds:fixtures.map(({id}) => id), signal});
       return presentWorkbenchRun(raw, fixtures);
     }
     if (world.rust && !desktopToken) return runLegacyRust(grade, code, exercise, purpose, signal);
-    return noRun('unavailable', `The local ${world.info.name} sandbox is unavailable. Your draft is saved.`);
+    return noRun('unavailable', desktopToken ? diagnostics.detail
+      : `The local ${world.info.name} sandbox is unavailable. Your draft is saved.`);
   }, noRun('busy', 'The local evaluation queue is full. Try again in a moment.'), signal);
 }
 
@@ -612,14 +615,19 @@ async function staticFile(request, response, path) {
 const server = createServer(async (request,response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
-  response.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  response.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
   try {
     const activePort = server.address().port;
     const host = request.headers.host;
     const allowedHosts = [`127.0.0.1:${activePort}`, `localhost:${activePort}`];
     if (!allowedHosts.includes(host)) throw new HttpError(403, 'Use the local Ferrum URL.');
-    if (desktopToken && request.headers['x-ferrum-desktop-token'] !== desktopToken) {
-      throw new HttpError(403, 'Open Coding Dungeons from its desktop window.');
+    if (desktopSecret) {
+      const token = request.headers['x-ferrum-desktop-token'];
+      if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)
+          || !timingSafeEqual(Buffer.from(token, 'hex'), desktopSecret)) {
+        throw new HttpError(403, 'Open Coding Dungeons from its desktop window.');
+      }
     }
     const {pathname:path, searchParams} = new URL(request.url, `http://${host}`);
     const method = request.method;
@@ -668,20 +676,23 @@ const server = createServer(async (request,response) => {
           ...(desktopToken && diagnostics?.detail ? {runnerDetail:diagnostics.detail} : {}),
         });
       }
-      let match = path.match(/^\/api\/pages\/(\d+)$/);
+      const match = path.match(/^\/api\/pages\/(\d+)$/);
       if (match) return json(response, world.publicPages[pageAt(world, Number(match[1])).page-1]);
-      match = path.match(/^\/api\/levels\/(\d+)\/reveal\/(hint1|hint2|debrief)$/);
-      if (match) {
-        const quest = world.questMap.get(Number(match[1]));
+    }
+    if (method === 'POST') {
+      const hintRoute = path.match(/^\/api\/levels\/(\d+)\/reveal\/(hint1|hint2|debrief)$/);
+      if (hintRoute) {
+        const quest = world.questMap.get(Number(hintRoute[1]));
         if (!quest) throw new HttpError(404, 'Level not found.');
         const heroId = await requireHero(request, world);
+        await readJson(request);
         if (!store.revealWorkbenchAid(heroId, quest.level)) {
           if (!store.workbenchState(heroId).hardClears.includes(quest.level)) {
             throw new HttpError(403, 'Hard Mode locks the guide kit.');
           }
           store.revealWorkbenchAid(heroId, quest.level, true);
         }
-        return json(response, {text:quest[match[2]]});
+        return json(response, {text:quest[hintRoute[2]]});
       }
     }
     if (method === 'PATCH') {

@@ -251,7 +251,7 @@ function DiamondBattle({ game, actions }) {
   const focusAfterStage = useRef(false);
   const summary = useRef(null);
   const unavailable = current?.kind === 'code' && game.runner?.toLowerCase() === 'unavailable'
-    ? `The local ${game.world.name} runner is unavailable. You can keep editing your draft.` : '';
+    ? `${game.runnerDetail || `The local ${game.world.name} runner is unavailable.`} You can keep editing your draft.` : '';
   const disabled = busy || !hero || game.switchingHero || game.combat?.fallen || Boolean(unavailable);
 
   useLayoutEffect(() => {

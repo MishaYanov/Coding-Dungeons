@@ -29,6 +29,15 @@ async function directories(t) {
   return {source, destination, seed};
 }
 
+function execute(path, sql) {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(sql);
+  } finally {
+    db.close();
+  }
+}
+
 function names(path) {
   const db = new DatabaseSync(path, {readOnly: true});
   try {
@@ -73,4 +82,54 @@ test('desktop validates the selected source databases before changing destinatio
   await assert.rejects(importSaves(source, destination), /ferrum\.javascript\.sqlite/);
   assert.deepEqual(names(join(destination, rustName)), []);
   await assert.rejects(importSaves(source, source), /different folder/i);
+});
+
+test('desktop rejects a structurally valid SQLite file that installs a trigger on future saves', async (t) => {
+  const {source, destination, seed} = await directories(t);
+  await seed(rustName, 'Imported Rust');
+  execute(join(source, rustName), `
+    CREATE TRIGGER wipe_heroes AFTER INSERT ON heroes BEGIN
+      DELETE FROM heroes WHERE id <> NEW.id;
+    END;
+  `);
+  const target = join(destination, rustName);
+  const empty = await openStore({file: target});
+  empty.close();
+
+  await assert.rejects(importSaves(source, destination), /unsupported save schema/i);
+  assert.deepEqual(names(target), []);
+});
+
+test('desktop rejects malformed hero tables before importing any world', async (t) => {
+  const {source, destination, seed} = await directories(t);
+  await seed(rustName, 'Imported Rust');
+  execute(join(source, jsName), 'CREATE TABLE heroes (payload TEXT); INSERT INTO heroes VALUES (\'not a hero\');');
+  const target = join(destination, rustName);
+  const empty = await openStore({file: target});
+  empty.close();
+
+  await assert.rejects(importSaves(source, destination), /ferrum\.javascript\.sqlite.*unsupported save schema/i);
+  assert.deepEqual(names(target), []);
+});
+
+test('desktop imports legacy single-hero progress through the store migration', async (t) => {
+  const {source, destination} = await directories(t);
+  execute(join(source, rustName), `
+    CREATE TABLE profile (id INTEGER PRIMARY KEY, callsign TEXT, path TEXT, last_page INTEGER);
+    CREATE TABLE progress (level INTEGER PRIMARY KEY, scout INTEGER, forge INTEGER,
+      explained INTEGER, side INTEGER, answer TEXT, code TEXT);
+    INSERT INTO profile VALUES (1, 'Legacy Scout', 'warden', 31);
+    INSERT INTO progress VALUES (1, 1, 0, 0, 0, 'Earlier answer', 'Earlier draft');
+  `);
+
+  assert.deepEqual(await importSaves(source, destination), {imported: [rustName], skipped: []});
+  const migrated = await openStore({file: join(destination, rustName)});
+  try {
+    const [hero] = migrated.heroes();
+    assert.equal(hero.name, 'Legacy Scout');
+    assert.equal(hero.lastPage, 31);
+    assert.equal(migrated.progress(hero.id).levels[0].code, 'Earlier draft');
+  } finally {
+    migrated.close();
+  }
 });
