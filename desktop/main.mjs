@@ -78,6 +78,20 @@ async function showRuntimeDiagnostics(origin, token, runtime) {
   });
 }
 
+function showSecurityNotice() {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  void dialog.showMessageBox(window, {
+    title: 'Coding Dungeons',
+    message: 'Security and offline use',
+    detail: [
+      'The full Windows installer bundles the programming tools and the 639 MB local Game Master model. Installation, reading, and grading work offline after you have the installer. External book links open in your browser.',
+      'The game keeps saves and drafts in your user AppData. Rust and Go create temporary Windows sandbox profiles and access rules for their own tools and scratch files. The runner removes them after normal completion.',
+      'Running code carries risk. The sandbox limits access, but bugs in Windows, a compiler, or the runner can still affect isolation.',
+    ].join('\n\n'),
+  });
+}
+
 async function start() {
   const appPath = app.getAppPath();
   const userData = app.getPath('userData');
@@ -144,10 +158,10 @@ async function start() {
     },
     {
       label: 'Help',
-      submenu: [{
-        label: 'Runtime diagnostics',
-        click: () => void showRuntimeDiagnostics(origin, token, runtime),
-      }],
+      submenu: [
+        {label: 'Runtime diagnostics', click: () => void showRuntimeDiagnostics(origin, token, runtime)},
+        {label: 'Security and offline use', click: showSecurityNotice},
+      ],
     },
   ]));
 }

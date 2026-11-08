@@ -25,6 +25,14 @@ Run `CodingDungeonsSetup.exe` and open **Coding Dungeons** from Start. The packa
 
 **Rust runner offline** means the app cannot use its local Rust compiler and sandbox to grade code. You can still read, save drafts, and answer multiple-choice questions. Runner outages cost no HP. In the desktop app, **Help → Runtime diagnostics** shows whether the compiler files are included and why the runner could not start.
 
+### Security and offline use
+
+The full Windows installer contains the game, books, programming tools, and Game Master model. Once you have the installer, installation, reading, and grading work offline. The installer copies the Qwen3-0.6B Q8_0 model into the game’s runtime folder. The model file is about 639 MB (610 MiB). The local GM opens it with llama.cpp when it evaluates a written answer. External book links open in your browser when selected. Building a release requires obtaining the pinned runtime files and development packages.
+
+Setup writes the program to your local AppData and registers its shortcuts and uninstall entry for your Windows account. The game stores progress and drafts in per-user AppData. The Rust and Go runners create temporary AppContainer profiles and temporary access rules for their own tools and scratch folders. The runner cleans up on normal completion. An abrupt termination can leave temporary entries or files behind.
+
+Running code carries risk. The Windows sandbox and WebAssembly limits reduce what submitted code can access. Bugs in the OS, toolchain, or runner can still affect isolation. The app includes this notice under **Help → Security and offline use**. See the [security review](docs/SECURITY-REVIEW.md) for details about the controls and their limits.
+
 ## Browser development
 
 The browser and desktop builds share the React reader in `src/renderer`. Install Node.js 24 or newer, then run these commands from the project folder.
