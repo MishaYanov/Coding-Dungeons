@@ -2,8 +2,19 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-const maxBytes = 2 * 1024 * 1024;
-const readerKey = /^ferrum-(prompt-drafts-v2|last-page-v2):([\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12})$/i;
+export const maxReaderValueBytes = 2 * 1024 * 1024;
+const heroIdPattern = '[\\da-f]{8}(?:-[\\da-f]{4}){3}-[\\da-f]{12}';
+const heroId = new RegExp(`^${heroIdPattern}$`, 'i');
+const readerKey = new RegExp(`^ferrum-(?:prompt-drafts-v2|last-page-v2):${heroIdPattern}$`, 'i');
+
+export function isReaderHeroId(value) {
+  return typeof value === 'string' && heroId.test(value);
+}
+
+function validValue(key, value) {
+  return typeof key === 'string' && readerKey.test(key)
+    && typeof value === 'string' && Buffer.byteLength(value) <= maxReaderValueBytes;
+}
 
 export function openReaderStorage(directory) {
   mkdirSync(directory, {recursive: true});
@@ -18,6 +29,7 @@ export function openReaderStorage(directory) {
     INSERT INTO reader_values (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `);
+  const restore = db.prepare('INSERT INTO reader_values (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING');
   return {
     get(key) {
       if (typeof key !== 'string' || !readerKey.test(key)) return null;
@@ -28,13 +40,25 @@ export function openReaderStorage(directory) {
       }
     },
     set(key, value) {
-      if (typeof key !== 'string' || !readerKey.test(key)
-        || typeof value !== 'string' || Buffer.byteLength(value) > maxBytes) return false;
+      if (!validValue(key, value)) return false;
       try {
         write.run(key, value);
         return true;
       } catch {
         return false;
+      }
+    },
+    restore(values) {
+      if (!values.every(([key, value]) => validValue(key, value))) throw new Error('Invalid reader data.');
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        let restored = 0;
+        for (const [key, value] of values) restored += restore.run(key, value).changes;
+        db.exec('COMMIT');
+        return restored;
+      } catch (error) {
+        if (db.isTransaction) db.exec('ROLLBACK');
+        throw error;
       }
     },
     close() { db.close(); },

@@ -216,7 +216,7 @@ async function transferSaves(action) {
       const {response} = await dialog.showMessageBox(window, {
         type: 'question',
         message: 'Import saves into empty worlds?',
-        detail: 'Worlds with heroes already saved will be skipped. The app will reopen after the import.',
+        detail: 'Worlds with heroes already saved will be skipped. Backups can also restore unsent drafts and reading positions for imported heroes. The app will reopen after the import.',
         buttons: ['Import and reopen', 'Cancel'],
         defaultId: 1,
         cancelId: 1,
@@ -224,12 +224,12 @@ async function transferSaves(action) {
       if (response !== 0) return;
       restart = true;
       await stopEngine();
-      const {imported, skipped} = await importSaves(selected, statePath);
+      const {imported, skipped} = await importSaves(selected, statePath, {readerStorage});
       await dialog.showMessageBox(window, {
         message: `Imported ${imported.length} world saves. Skipped ${skipped.length} occupied worlds.`,
       });
     } else {
-      const backup = await exportSaves(statePath, selected);
+      const backup = await exportSaves(statePath, selected, {readerStorage});
       await dialog.showMessageBox(window, {message: 'Save backup created.', detail: backup.directory});
     }
   } catch (error) {
