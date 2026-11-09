@@ -107,7 +107,9 @@ async function loadWorld(spec, number) {
     cookie:rust ? 'ferrum_hero' : `ferrum_hero_${id}`,
     database:rust ? rustDatabase : join(database.dir, `${database.name}.${id}${database.ext}`),
     pathIds:new Set(['all', '', ...campaign.paths.map(path => path.id)]),
-    questMap:new Map(campaign.quests.map(quest => [quest.level, quest])),
+    questMap:new Map(campaign.quests.map(quest => [quest.level, {
+      ...quest, bossExerciseId:pages[quest.bossPage - 1]?.prompts.find(prompt => prompt.id === `boss-${quest.level}`)?.exerciseId,
+    }])),
     exerciseMap:new Map(exercises.map(exercise => [exercise.id, exercise])),
     encounterMap:new Map(worldEncounters.map(encounter => [encounter.id, encounter])),
     gradedLevels:new Set(exercises.map(exercise => exercise.level)),
@@ -338,7 +340,8 @@ async function saveAnswer(request, response, world, heroId) {
       criteria:[], rubricVersion:rubric.version,
     }, signal);
     if (signal.aborted) return;
-    const outcome = store.settleCombat(heroId, {...ticket, wrong:result.status === 'scored' && result.score < 100}, () => {
+    // Model feedback is advisory. Keep the receipt for retries, but never deal damage.
+    const outcome = store.settleCombat(heroId, ticket, () => {
       if (!store.completeAssessment(heroId, page.page, prompt.id, revision, result)) {
         throw new HttpError(409, 'A newer version of this answer was saved.');
       }
@@ -687,7 +690,7 @@ const server = createServer(async (request,response) => {
         const heroId = await requireHero(request, world);
         await readJson(request);
         if (!store.revealWorkbenchAid(heroId, quest.level)) {
-          if (!store.workbenchState(heroId).hardClears.includes(quest.level)) {
+          if (!quest.bossExerciseId || !store.workbenchState(heroId).hardExerciseClears.includes(quest.bossExerciseId)) {
             throw new HttpError(403, 'Hard Mode locks the guide kit.');
           }
           store.revealWorkbenchAid(heroId, quest.level, true);

@@ -103,8 +103,8 @@ function AnswerFeedback({ response, data, prompt, game, actions }) {
         if (mounted.current) setBusy(false);
       }
     }
-    return <div className="prompt-feedback" aria-live="polite" data-verdict={scored ? 'correct' : 'saved'}>
-      <strong className="feedback-heading">{scored ? `${assessment.score}% of rubric points verified` : 'Response saved'}</strong>
+    return <div className="prompt-feedback" aria-live="polite" data-verdict="saved">
+      <strong className="feedback-heading">{scored ? `GM estimate · ${assessment.score}% of rubric points` : 'Response saved'}</strong>
       {text(feedback) && <p>{feedback}</p>}
       {canReveal && (example === null
         ? <button type="button" className="button button-quiet" disabled={busy} onClick={reveal}>Show example answer</button>
@@ -314,6 +314,7 @@ function Prompt({ data, prompt, index, game, actions }) {
     }}>
     <div className="prompt-heading"><h2 id={titleId}>{title}</h2><span className="prompt-type">{promptLabels[prompt.type]}</span></div>
     {text(prompt.body) && <p className="prompt-copy">{prompt.body}</p>}
+    {prompt.assessment && game.combat?.oneLife && <p className="fine-print">Written feedback does not affect HP.</p>}
     {text(exercise?.description) && exercise.description !== prompt.body && <p className="prompt-copy">{exercise.description}</p>}
     {text(exercise?.signature) && <pre className="signature">{exercise.signature}</pre>}
     {choice ? <fieldset className="choice-group" disabled={busy}>
@@ -520,7 +521,8 @@ export function Guide({ game, actions, SpecialEncounter, DiamondEncounter }) {
   const drill = quest && levelExercises(game, quest.level)[0];
   const exerciseId = active?.exerciseId ?? drill?.id;
   const hasCreature = quest && exerciseId && (active || data.page === Number(quest.bossPage));
-  const hintsAvailable = level && (!hardMode(game, level) || game.hardClears?.has(level));
+  const bossExercise = quest && levelExercises(game, level).find(exercise => Number(exercise.page) === Number(quest.bossPage));
+  const hintsAvailable = level && (!hardMode(game, level) || (bossExercise && game.hardExerciseClears?.has(bossExercise.id)));
   return <div className="guide-scroll" id="guide-scroll" ref={scroll}>
     {game.hero && DiamondEncounter && <DiamondEncounter key={key} game={game} actions={actions} />}
     <div id="guide-content" className="guide-content" aria-busy={game.loading || undefined}>

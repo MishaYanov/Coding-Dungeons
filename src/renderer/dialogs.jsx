@@ -203,7 +203,7 @@ function HeroPicker({ game, actions }) {
             </div>
             <label className="one-life-option"><input id="hero-one-life" type="checkbox" aria-describedby="one-life-rules"
               checked={oneLife} disabled={busy} onChange={(event) => setOneLife(event.target.checked)} /> <span>One Life</span></label>
-            <p id="one-life-rules" className="fine-print">Start with 100 HP and one potion. A wrong graded submission costs 5 HP. At 0 HP your hero falls.</p>
+            <p id="one-life-rules" className="fine-print">Start with 100 HP and one potion. Failed combat submissions cost 5 HP. Written GM reviews are safe. At 0 HP your hero falls.</p>
             <button type="submit" className="button button-primary" id="create-hero" disabled={busy || (!heroes && !loadError)}>Create hero</button>
           </form>
         </div>

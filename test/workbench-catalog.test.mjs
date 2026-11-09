@@ -98,6 +98,14 @@ function heavyIds(items: readonly Cargo[]): string[] {
 }`,
   },
   {
+    id: 'ts-heavy-ids', language: 'typescript', caseId: 'readonly-manifest', variant: 'input typed as any',
+    source: "function heavyIds(items: any): string[] { return items.filter((item: any) => item.weightKg >= 10).map((item: any) => item.id); }",
+  },
+  {
+    id: 'ts-heavy-ids', language: 'typescript', caseId: 'readonly-manifest', variant: 'output typed as any',
+    source: "function heavyIds(items: readonly Readonly<{ id: string; weightKg: number }>[]): any { return items.filter(item => item.weightKg >= 10).map(item => item.id); }",
+  },
+  {
     id: 'ts-probe-all', language: 'typescript', caseId: 'open-and-closed-docks',
     source: `type Probe = { dock: string; ok: true; open: boolean } | { dock: string; ok: false; reason: string };
 async function probeAll(docks: readonly string[], query: (dock: string) => Promise<boolean>): Promise<Probe[]> {
@@ -111,8 +119,8 @@ async function probeAll(docks: readonly string[], query: (dock: string) => Promi
   },
 ];
 
-for (const { id, language, caseId, source } of mutants) {
-  test(`${id} catches a plausible regression in ${caseId}`, async () => {
+for (const { id, language, caseId, variant = caseId, source } of mutants) {
+  test(`${id} catches a plausible regression in ${variant}`, async () => {
     const { tests, typeTests } = catalogs[language].find(challenge => challenge.id === id);
     const result = await runWorkbench({ language, source, tests, typeTests, limits: { totalMs: 15_000 } });
     assert.equal(result.status, 'failed', JSON.stringify(result));

@@ -186,7 +186,7 @@ test('Windows package protects its engine, runs the required Workbenches, and re
       const prompt = page.locator('.prompt-form').filter({has:page.getByRole('heading', {name:'Training encounter 3', exact:true})});
       await prompt.getByRole('textbox').fill('The shared borrow may end after the last use of the entry. Using the entry after refresh would make that borrow overlap the mutable one.');
       await prompt.getByRole('button', {name:'Ask the GM', exact:true}).click();
-      await prompt.getByText('60% of rubric points verified', {exact:true}).waitFor({timeout:30_000});
+      await prompt.getByText('GM estimate · 60% of rubric points', {exact:true}).waitFor({timeout:30_000});
       assert.equal(await prompt.getByRole('button', {name:'Show example answer'}).count(), 0);
     }
     if (process.env.FERRUM_DESKTOP_REQUIRE_NATIVE === '1') {

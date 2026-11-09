@@ -47,8 +47,18 @@ const first = heavyIds([]);
 assert(Array.isArray(first) && first.length === 0 && first !== heavyIds([]));`),
     ],
     typeTests: [{ id: 'readonly-manifest', code: `const readonlyManifest: readonly Readonly<{id: string; weightKg: number}>[] = [{ id: 'N', weightKg: 10 }];
-const selectedCargoIds: string[] = heavyIds(readonlyManifest);
-selectedCargoIds.push('X');` }],
+const selectedCargoIds = heavyIds(readonlyManifest);
+selectedCargoIds.push('X');
+// @ts-expect-error Cargo weight must be numeric.
+heavyIds([{ id: 'X', weightKg: '10' }]);
+// @ts-expect-error A cargo record requires an ID.
+heavyIds([{ weightKg: 10 }]);
+type HeavyIdsRequire<T extends true> = T;
+type HeavyIdsIsAny<T> = 0 extends (1 & T) ? true : false;
+type HeavyIdsResult = typeof selectedCargoIds;
+type HeavyIdsCheckResult = HeavyIdsRequire<HeavyIdsIsAny<HeavyIdsResult> extends true ? false :
+  HeavyIdsIsAny<HeavyIdsResult[number]> extends true ? false :
+  [HeavyIdsResult] extends [string[]] ? [string[]] extends [HeavyIdsResult] ? true : false : false>;` }],
   },
   {
     id: 'ts-can-unload', level: 3,

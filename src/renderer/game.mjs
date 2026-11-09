@@ -4,7 +4,7 @@ const selectedHeroKey = 'ferrum-selected-hero-v1';
 const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$))/;
 const emptyProgress = () => ({
   levels: new Map(), responses: new Map(), attempts: [], workbenchModes: new Map(),
-  hardClears: new Set(), exerciseClears: null, progressError: '', forgeAnimation: null,
+  hardClears: new Set(), hardExerciseClears: new Set(), exerciseClears: null, progressError: '', forgeAnimation: null,
 });
 
 export function pageNumber(value) {
@@ -76,6 +76,7 @@ export function createGame() {
   };
   const listeners = new Set();
   let booted = false;
+  let manualHeroSelection = false;
   let pageRequest = 0;
   let progressRequest = 0;
   let combatVersion = 0;
@@ -195,6 +196,7 @@ export function createGame() {
         attempts: progress.attempts ?? [],
         workbenchModes: new Map((progress.workbench?.modes ?? []).map((mode) => [Number(mode.level), mode])),
         hardClears: new Set(progress.workbench?.hardClears ?? []),
+        hardExerciseClears: new Set(progress.workbench?.hardExerciseClears ?? []),
         exerciseClears: Array.isArray(progress.workbench?.clears) ? new Set(progress.workbench.clears) : null,
         ...(healthVersion === combatVersion && progress.combat ? { combat: progress.combat } : {}),
         progressError: '',
@@ -304,8 +306,14 @@ export function createGame() {
 
   function readHash() {
     const page = hashPage();
-    if (game.ready && !game.switchingHero && page && (game.loading || page !== game.page?.page)) {
-      void loadPage(game.total ? Math.min(page, game.total) : page);
+    if (!game.ready || game.switchingHero || !page) return;
+    const target = game.total ? Math.min(page, game.total) : page;
+    if (target !== game.page?.page) {
+      void loadPage(target);
+    } else if (game.loading || game.pageError) {
+      const request = ++pageRequest;
+      update({ loading: false, pageError: null });
+      void loadDiamond(target, request, game.hero);
     }
   }
 
@@ -347,6 +355,7 @@ export function createGame() {
     });
     rememberHero(game.world, hero.id);
     await refreshProgress().catch(() => {});
+    if (!isCurrentHero(hero)) return;
     const rememberedPage = pageNumber(readLocal(`${lastPageKey}:${hero.id}`));
     const requested = preferredPage || rememberedPage || game.profile.lastPage || 1;
     const page = game.total ? Math.min(requested, game.total) : requested;
@@ -357,6 +366,7 @@ export function createGame() {
 
   async function selectHero(path, body, preferredPage = null) {
     if (game.switchingHero) return false;
+    manualHeroSelection = true;
     update({ switchingHero: true });
     try {
       const { hero } = await api(path, { method: 'POST', body });
@@ -397,13 +407,15 @@ export function createGame() {
         total: pageNumber(campaign.value?.total), runner: status.value?.runner ?? '',
         runnerDetail: status.value?.runnerDetail ?? '', storage: status.value?.storage ?? '',
       });
+      if (manualHeroSelection) return;
       const saved = savedHero(world);
       if (saved) {
         try {
           const { hero } = await api('/api/heroes/load', { method: 'POST', body: { id: saved } });
-          await activateHero(hero, hashPage());
+          if (!manualHeroSelection) await activateHero(hero, hashPage());
           return;
         } catch {
+          if (manualHeroSelection) return;
           rememberHero(world, null);
         }
       }

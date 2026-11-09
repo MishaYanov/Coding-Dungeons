@@ -10,7 +10,7 @@ The World Map also links to special encounters. Break the Ironbound Scarab's thr
 
 Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world.
 
-Choose **One Life** when creating a hero to start with 100 HP and one healing potion. A wrong scored answer, failed trial, or failed full code submission costs 5 HP. Practice runs, saved drafts, and runner outages are safe. Open **Trials** to attempt your world's two-question challenge. The first trial clear, Forge clear, or special encounter win earns a potion. Each potion restores up to 20 HP. A hero who reaches zero HP can still read and save drafts. Create or load another hero to submit again.
+Choose **One Life** when creating a hero to start with 100 HP and one healing potion. A wrong multiple-choice answer, failed trial, or rejected full code submission costs 5 HP. Written GM reviews, practice runs, saved drafts, and runner outages are safe. Open **Trials** to attempt your world's two-question challenge. The first trial clear, Forge clear, or special encounter win earns a potion. Each potion restores up to 20 HP. A hero who reaches zero HP can still read and save drafts. Create or load another hero to submit again.
 
 | World | Levels | What you practice |
 | --- | ---: | --- |
