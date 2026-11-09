@@ -1,10 +1,16 @@
-const { existsSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+const { createReadStream, existsSync } = require('node:fs');
 const { copyFile, cp, readFile, readdir, realpath, stat, writeFile } = require('node:fs/promises');
 const { basename, dirname, isAbsolute, join, relative, resolve, sep } = require('node:path');
 
 const runtime = join(__dirname, 'runtime');
 const squirrelVendor = join(__dirname, '..', 'out', '.squirrel-vendor');
 const setupExe = 'CodingDungeonsSetup.exe';
+// Match the pinned model checked by stage-gm-runtime.ps1.
+const offlineModelSha256 = '9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031';
+const offlineModelAssets = ['gm-model.gguf', 'llama-completion.exe', 'llama-completion-impl.dll', 'llama-common.dll',
+  'llama.dll', 'ggml.dll', 'ggml-base.dll', 'ggml-cpu-x64.dll', 'libomp.dll', 'mtmd.dll',
+  'LICENSE-LLVM-OpenMP', 'LICENSE-llama.cpp.txt', 'LICENSE-Qwen3.txt'];
 const packagedPaths = [
   /^\/(?:LICENSE|package\.json|server\.mjs)$/,
   /^\/node_modules(?:\/|$)/,
@@ -43,11 +49,29 @@ async function checkRuntimeResources() {
   for (const entry of await readdir(root, {withFileTypes: true, recursive: true})) {
     const file = join(entry.parentPath, entry.name);
     const path = relative(root, file).split(sep).join('/');
-    const goSource = path.startsWith('standalone-runner/go/src/');
-    if (entry.isSymbolicLink() || /^(?:\.git$|\.env(?:\.|$))|\.(?:pfx|p12|db|sqlite3?)(?:-wal|-shm)?$/i.test(entry.name)
-        || (!goSource && /\.(?:pem|key)$/i.test(entry.name))) {
+    if (entry.isSymbolicLink() || /^(?:\.git$|\.env(?:\.|$))|\.(?:pfx|p12|db|sqlite3?)(?:-wal|-shm)?$|\.(?:pem|key)$/i.test(entry.name)) {
       throw new Error(`Remove the private or linked entry from the bundled runtime: ${path}`);
     }
+  }
+}
+
+async function requireOfflineRuntime() {
+  await checkRuntimeResources();
+  for (const name of offlineModelAssets) {
+    const asset = await stat(join(runtime, name)).catch(() => null);
+    if (!asset?.isFile() || asset.size === 0) {
+      throw new Error(`The offline runtime is missing ${name}. Run desktop/stage-gm-runtime.ps1 before making the installer.`);
+    }
+  }
+  const {inspectNativeRunnerAssets} = await import('../lib/standalone-runner.mjs');
+  const native = await inspectNativeRunnerAssets(join(runtime, 'standalone-runner'));
+  if (!native?.languages?.includes('rust') || !native.languages.includes('go')) {
+    throw new Error('The offline runtime needs complete Rust and Go assets. Run desktop/stage-native-runtime.ps1 before making the installer.');
+  }
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(join(runtime, 'gm-model.gguf'))) hash.update(chunk);
+  if (hash.digest('hex') !== offlineModelSha256) {
+    throw new Error('The bundled GM model did not match its pinned checksum. Run desktop/stage-gm-runtime.ps1 again.');
   }
 }
 
@@ -66,6 +90,7 @@ module.exports = {
   hooks: {
     prePackage: checkRuntimeResources,
     async preMake() {
+      await requireOfflineRuntime();
       const vendor = join(dirname(require.resolve('electron-winstaller/package.json')), 'vendor');
       const archiver = join(dirname(require.resolve('7zip-bin/package.json')), 'win', 'x64', '7za.exe');
       // Squirrel's vendored 7-Zip 16.04 fails to start on some Windows hosts.

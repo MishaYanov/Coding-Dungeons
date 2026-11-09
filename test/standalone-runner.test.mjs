@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createStandaloneRunner } from '../lib/standalone-runner.mjs';
-import { diamondExercise } from '../lib/diamond-encounter.mjs';
+import { diamondExercise, evaluateDiamondCode, settleDiamond, startDiamond } from '../lib/diamond-encounter.mjs';
+import { openStore } from '../lib/store.mjs';
+import { fixtureMetadata, presentWorkbenchRun } from '../lib/workbench-service.mjs';
 
 const digest = content => createHash('sha256').update(content).digest('hex');
 
@@ -15,8 +17,22 @@ async function bundle(t, language) {
   const files = { 'broker.exe': 'broker', 'sandbox-probe.exe': 'probe', 'wasm-worker/wasm-worker.exe': 'worker' };
   if (language === 'rust') Object.assign(files, {'rust/bin/rustc.exe': 'compiler', 'rust/wasm-linker.exe': 'linker'});
   else Object.assign(files, {'go/pkg/tool/windows_amd64/compile.exe': 'compiler',
-    'go/pkg/tool/windows_amd64/link.exe': 'linker', 'go/stdlib/packages.txt': 'index'});
-  for (const [path, content] of Object.entries(files)) {
+    'go/pkg/tool/windows_amd64/link.exe': 'linker', 'go/stdlib/packages.txt': 'runtime 0001.a\nfmt 0002.a\n'});
+  const companions = Object.fromEntries(['hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll', 'clrjit.dll', 'wasmtime.dll',
+    'Wasmtime.Dotnet.dll', 'wasm-worker.dll', 'wasm-worker.deps.json', 'wasm-worker.runtimeconfig.json',
+    'System.Private.CoreLib.dll'].map(name => [`wasm-worker/${name}`, 'worker dependency']));
+  if (language === 'rust') {
+    companions['rust/bin/rustc_driver-fixture.dll'] = 'driver';
+    const libraries = 'rust/lib/rustlib/wasm32-wasip1/lib';
+    companions[`${libraries}/self-contained/libc.a`] = 'libc';
+    for (const name of ['alloc', 'compiler_builtins', 'core', 'panic_abort', 'std', 'wasip1']) {
+      companions[`${libraries}/lib${name}-1234.rlib`] = 'Rust library';
+    }
+  } else {
+    companions['go/stdlib/0001.a'] = 'runtime archive';
+    companions['go/stdlib/0002.a'] = 'fmt archive';
+  }
+  for (const [path, content] of Object.entries({...files, ...companions})) {
     const parts = path.split('/');
     await mkdir(join(directory, ...parts.slice(0, -1)), { recursive: true });
     await writeFile(join(directory, ...parts), content);
@@ -28,6 +44,20 @@ async function bundle(t, language) {
 }
 
 const probePass = 'LPAC, file isolation, loopback denial, and job cleanup verified.';
+
+test('missing compiler or worker companions fail readiness before the isolation probe', async t => {
+  for (const [language, missing] of [['go', 'go/stdlib/0002.a'], ['rust', 'rust/bin/rustc_driver-fixture.dll'],
+    ['rust', 'wasm-worker/wasmtime.dll']]) {
+    const directory = await bundle(t, language);
+    await rm(join(directory, missing));
+    let probes = 0;
+    const runner = createStandaloneRunner({ directory, platform: 'win32', architecture: 'x64',
+      command: async () => { probes++; return {code: 0, stdout: probePass}; },
+    });
+    assert.equal((await runner.diagnostics(language)).reason, 'files', missing);
+    assert.equal(probes, 0);
+  }
+});
 
 test('native execution stays unavailable after a failed probe or an asset hash mismatch', async t => {
   const directory = await bundle(t, 'go');
@@ -128,6 +158,61 @@ test('Rust reports suite signature errors without exposing fixture text', async 
   assert.equal(result.status, 'compile_error');
   assert.match(result.diagnostics[0].message, /public Rust function signature/);
   assert.doesNotMatch(result.diagnostics[0].message, /private fixture text/);
+});
+
+test('native tool failures are HP-neutral while source and challenge signature errors remain actionable', async t => {
+  const cases = [
+    {language: 'go', code: 2, logs: {'compile': 'submission.go:2:1: syntax error: unexpected }'},
+      status: 'compile_error', message: /submission\.go:2:1: syntax error/},
+    {language: 'go', code: 2, logs: {'compile': 'harness.go:15:8: undefined: sumDiamonds\nprivate fixture'},
+      status: 'compile_error', message: /public Go function signature/},
+    {language: 'go', code: 2, logs: {'compile': 'submission.go:3:1: internal compiler error: private details'},
+      status: 'runner_error'},
+    {language: 'go', code: 2, logs: {'compile': "submission.go:2:10: could not import fmt (can't find export data (EOF))"},
+      status: 'runner_error'},
+    {language: 'go', code: 2, logs: {'compile': 'submission.go:2:10: could not import nope/local (open : missing)'},
+      status: 'compile_error', message: /could not import nope\/local/},
+    {language: 'go', code: 2, logs: {'compile': '', 'go-link': 'private path: unrecognized file format'},
+      status: 'runner_error'},
+    {language: 'go', code: 2, logs: {'compile': '', 'go-link': 'runtime.main_main·f: function main is undeclared in the main package\r\n'},
+      status: 'compile_error', message: /func main\(\)/},
+    {language: 'go', code: 2, logs: {}, status: 'runner_error'},
+    {language: 'rust', code: 1, logs: {'compile': 'submission.rs:1:7: error: expected item'},
+      status: 'compile_error', message: /submission\.rs:1:7: error: expected item/},
+    {language: 'rust', code: 101, logs: {'compile': 'submission.rs:1:2: error: internal compiler error: private details'},
+      status: 'runner_error'},
+    {language: 'rust', code: 1, logs: {'link': '', lld: 'wasm-linker: error: private path'}, status: 'runner_error'},
+  ];
+  for (const {language, code, logs, status, message} of cases) {
+    const directory = await bundle(t, language);
+    const runner = createStandaloneRunner({ directory, platform: 'win32', architecture: 'x64',
+      command: async (_executable, [operation, scratch]) => {
+        if (operation === 'probe') return { code: 0, stdout: probePass };
+        if (operation === 'rust-compile' && Object.hasOwn(logs, 'link')) {
+          await writeFile(join(scratch, 'libferrum_submission.rlib'), 'object');
+          return { code: 0 };
+        }
+        for (const [name, text] of Object.entries(logs)) await writeFile(join(scratch, '..', `${name}.log`), text);
+        return { code };
+      },
+    });
+    const exercise = diamondExercise(language);
+    const raw = await runner.grade({language, source: exercise.reference, exercise, tests: exercise.tests});
+    assert.equal(raw.status, status, JSON.stringify(logs));
+    assert.doesNotMatch(raw.diagnostics[0].message, /private/);
+    if (message) assert.match(raw.diagnostics[0].message, message);
+    const store = await openStore({file: join(directory, 'save.sqlite')});
+    try {
+      store.createHero({id: 'Scout', name: 'Scout', oneLife: true});
+      startDiamond(store, 'Scout', language, 1, 1);
+      const report = presentWorkbenchRun(raw, fixtureMetadata(exercise));
+      const outcome = settleDiamond(store, 'Scout', language, 'code', {id: 'fault', fingerprint: 'fault'},
+        evaluateDiamondCode({...report, purpose: 'submit'}));
+      assert.equal(outcome.combat.hp, status === 'runner_error' ? 100 : 95, JSON.stringify(logs));
+    } finally {
+      store.close();
+    }
+  }
 });
 
 test('Go compiler directives cannot reach the broker, while ordinary strings and comments can', async t => {
