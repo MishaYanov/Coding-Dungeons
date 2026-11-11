@@ -284,6 +284,7 @@ function WorldMap({ game, actions }) {
   const quests = campaign.quests ?? [];
   const path = paths.find(({ id }) => id === pathId);
   const specials = campaign.specialEncounters ?? [];
+  const refactoring = campaign.refactoring;
   const pathLevels = new Set(path?.levels.map(Number));
   const filter = query.trim().toLowerCase();
   const groups = zonesFor(campaign).map((zone, index) => ({ zone, index, candidates: quests.filter((quest) => {
@@ -323,6 +324,13 @@ function WorldMap({ game, actions }) {
             <button type="button" className="button" disabled={equipping || profile.path === pathId} onClick={equip}>
               {profile.path === pathId ? 'Current path' : 'Choose this path'}
             </button></div>}
+          {refactoring && <section className="special-map">
+            <h3 className="zone-title">Side quests</h3>
+            <div className="special-map-entry">
+              <BookLink page={refactoring.page} actions={actions}>{refactoring.title}</BookLink>
+              <p className="fine-print">{refactoring.description}</p>
+            </div>
+          </section>}
           {specials.length > 0 && <section className="special-map">
             <h3 className="zone-title">Special encounters</h3>
             {specials.map((special) => <div className="special-map-entry" key={special.id}>

@@ -130,6 +130,45 @@ async function indentWithTab(editor, start, end, expected) {
   assert.deepEqual(state, { focused: true, value: expected, selection: [start + 4, start + 4] });
 }
 
+test('the written GM explains its mushroom-juice reviews in an accessible tooltip', async (t) => {
+  const page = await newPage(t, '#page=25');
+  await createHero(page, 'Mushroom Cup Witness', 25);
+  const prompt = page.locator('.prompt-form').filter({ has: page.getByRole('heading', { name: 'Training encounter 3', exact: true }) });
+  await prompt.getByText(/The GM drank too much mushroom juice/).waitFor();
+  const help = prompt.getByRole('button', { name: 'Why the GM can make mistakes' });
+  const tooltip = prompt.getByRole('tooltip');
+  assert.equal(await help.getAttribute('type'), 'button');
+  await help.hover();
+  await tooltip.waitFor({ state: 'visible' });
+  assert.match(await tooltip.innerText(), /offline language model/);
+  await tooltip.hover();
+  await page.keyboard.press('Escape');
+  await tooltip.waitFor({ state: 'hidden' });
+
+  await help.focus();
+  await tooltip.waitFor({ state: 'visible' });
+  await help.press('Escape');
+  await tooltip.waitFor({ state: 'hidden' });
+  await help.press('Enter');
+  await tooltip.waitFor({ state: 'visible' });
+  assert.equal(await prompt.getByText('Response saved', { exact: true }).count(), 0);
+  assert.equal(new URL(page.url()).hash, '#page=25');
+});
+
+test('the JavaScript world map opens the Relay Ledger refactoring path', async (t) => {
+  const page = await newPage(t, '#page=1', 'javascript');
+  await createHero(page, 'Ledger Apprentice', 1);
+  await page.getByRole('button', {name:'World map', exact:true}).click();
+  const map = page.getByRole('dialog', {name:'World map', exact:true});
+  await map.getByRole('link', {name:'Refactoring Quest · The Relay Ledger', exact:true}).click();
+  await openBookPage(page, 47);
+  const quest = page.getByRole('region', {name:'Refactoring Quest · The Relay Ledger'});
+  await quest.getByText('0 / 4 steps complete').waitFor();
+  await quest.getByText('Original ledger code', {exact:true}).click();
+  await quest.locator('pre').waitFor({state:'visible'});
+  assert.equal(await quest.getByRole('list', {name:'Refactoring quest steps'}).getByRole('listitem').count(), 4);
+});
+
 test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs', async (t) => {
   const page = await newPage(t, '#page=15', null);
   await page.getByText('Your saved heroes will appear here.').waitFor();

@@ -1,7 +1,7 @@
 const draftKey = 'ferrum-prompt-drafts-v2';
 const lastPageKey = 'ferrum-last-page-v2';
 const selectedHeroKey = 'ferrum-selected-hero-v1';
-const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$))/;
+const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|refactoring$)/;
 const emptyProgress = () => ({
   levels: new Map(), responses: new Map(), attempts: [], workbenchModes: new Map(),
   hardClears: new Set(), hardExerciseClears: new Set(), exerciseClears: null, progressError: '', forgeAnimation: null,

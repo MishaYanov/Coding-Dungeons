@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { creatureName, mountCreature } from '../../public/creatures.mjs';
 import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
+import { RefactoringQuest } from './refactoring.jsx';
 
 const promptLabels = { choice: 'CHOICE', text: 'WRITTEN RESPONSE', code: 'CODE WORKBENCH' };
 const hintLabels = { hint1: 'Hint one', hint2: 'Hint two', debrief: 'Debrief' };
@@ -77,6 +78,40 @@ function RouteSuggestion({ data, game, correct, prompt, value }) {
   return page ? <BookLink page={page} className="recommendation">{prefix} · Level {level}</BookLink> : null;
 }
 
+const gmRemarks = {
+  full: 'Every rune lines up. Even the one at the bottom of my cup.',
+  scored: 'I caught some of that. The rest is doing laps around my cup.',
+  clarify: 'I lost the trail in my own mushroom fog. Give me one clear lantern to follow.',
+  unavailable: 'My cup is speaking louder than the book. My quill is out for this round.',
+};
+
+function MushroomJuiceNote({ id }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    function dismiss(event) {
+      if (event.key === 'Escape') setVisible(false);
+    }
+    document.addEventListener('keydown', dismiss);
+    return () => document.removeEventListener('keydown', dismiss);
+  }, [visible]);
+
+  return <div className="gm-mushroom-note" onPointerLeave={(event) => {
+    if (!event.currentTarget.contains(document.activeElement)) setVisible(false);
+  }}>
+    <div className="gm-mushroom-label">
+      <p>The GM drank too much mushroom juice. Some reviews come back a little sideways.</p>
+      <button type="button" className="gm-mushroom-help" aria-label="Why the GM can make mistakes" aria-describedby={id}
+        onPointerEnter={() => setVisible(true)} onFocus={() => setVisible(true)}
+        onClick={() => setVisible(true)} onBlur={() => setVisible(false)}>?</button>
+    </div>
+    <p id={id} className="gm-mushroom-tooltip" role="tooltip" hidden={!visible}>
+      An offline language model reviews written answers. It can misread a correct answer or miss part of your reasoning.
+      Treat the score as an estimate.
+    </p>
+  </div>;
+}
+
 function AnswerFeedback({ response, data, prompt, game, actions }) {
   const [busy, setBusy] = useState(false);
   const [example, setExample] = useState(null);
@@ -90,6 +125,7 @@ function AnswerFeedback({ response, data, prompt, game, actions }) {
     const feedback = !hard || !assessment ? assessment?.feedback
       : scored ? 'Hard Mode review complete.' : assessment.status === 'unavailable'
         ? 'The review is unavailable. Your answer is saved.' : 'The GM could not verify this answer.';
+    const remark = text(gmRemarks[scored && assessment.score === 100 ? 'full' : assessment?.status]);
     async function reveal() {
       setBusy(true);
       try {
@@ -105,6 +141,7 @@ function AnswerFeedback({ response, data, prompt, game, actions }) {
     }
     return <div className="prompt-feedback" aria-live="polite" data-verdict="saved">
       <strong className="feedback-heading">{scored ? `GM estimate · ${assessment.score}% of rubric points` : 'Response saved'}</strong>
+      {remark && <p className="gm-remark"><q>{remark}</q></p>}
       {text(feedback) && <p>{feedback}</p>}
       {canReveal && (example === null
         ? <button type="button" className="button button-quiet" disabled={busy} onClick={reveal}>Show example answer</button>
@@ -255,7 +292,7 @@ function Prompt({ data, prompt, index, game, actions }) {
     operation.current = true;
     setBusy(true);
     if (!draft) actions.persistDraft(key, value);
-    setMessage(draft ? 'Saving…' : runnable ? 'Compiling and testing…' : prompt.assessment ? 'The GM is reviewing…' : 'Saving response…');
+    setMessage(draft ? 'Saving…' : runnable ? 'Compiling and testing…' : prompt.assessment ? 'The GM is consulting the mushrooms…' : 'Saving response…');
     const current = () => actions.isCurrentHero ? actions.isCurrentHero(hero) : mounted.current;
     let controller;
     try {
@@ -314,6 +351,7 @@ function Prompt({ data, prompt, index, game, actions }) {
     }}>
     <div className="prompt-heading"><h2 id={titleId}>{title}</h2><span className="prompt-type">{promptLabels[prompt.type]}</span></div>
     {text(prompt.body) && <p className="prompt-copy">{prompt.body}</p>}
+    {prompt.assessment && <MushroomJuiceNote id={`${titleId}-gm-help`} />}
     {prompt.assessment && game.combat?.oneLife && <p className="fine-print">Written feedback does not affect HP.</p>}
     {text(exercise?.description) && exercise.description !== prompt.body && <p className="prompt-copy">{exercise.description}</p>}
     {text(exercise?.signature) && <pre className="signature">{exercise.signature}</pre>}
@@ -528,6 +566,7 @@ export function Guide({ game, actions, SpecialEncounter, DiamondEncounter }) {
     <div id="guide-content" className="guide-content" aria-busy={game.loading || undefined}>
       {data && game.hero ? <React.Fragment key={`${key}:${data.page}`}>
         <GuideNotes data={data} game={game} />
+        {game.campaign?.refactoring?.page === data.page && <RefactoringQuest game={game} actions={actions} />}
         {game.progressError && <ProgressConnection actions={actions} />}
         {special && SpecialEncounter && <SpecialEncounter key={special.id} encounter={special} game={game} actions={actions} />}
         {hasCreature && <CreatureEncounter active={active} drillPage={pageNumber(drill?.page)} exerciseId={exerciseId} level={Number(quest.level)} game={game} />}
