@@ -3,12 +3,12 @@ import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
 
 const presentations = {
   refactoring: {
-    slug: 'refactoring', codeLabel: 'Refactoring JavaScript code', submitLabel: 'Submit refactor',
+    codeLabel: 'Refactoring JavaScript code', submitLabel: 'Submit refactor',
     stepsLabel: 'Refactoring quest steps', completion: 'The Relay Ledger is ready for rollout. This quest is saved to your hero.',
   },
   systemDesign: {
-    slug: 'system-design', codeLabel: 'System design JavaScript code', submitLabel: 'Submit solution',
-    stepsLabel: 'System design quest steps', completion: 'You completed the URL shortener design. This quest is saved to your hero.',
+    codeLabel: 'System design JavaScript code', submitLabel: 'Submit solution',
+    stepsLabel: 'System design quest steps', completion: 'Your design is complete and saved to your hero.',
   },
 };
 const verdictLabels = {
@@ -95,7 +95,7 @@ function SideQuestStage({ stage, draft, saveDraft, pending, blocked, fallen, una
 
 function QuestPanel({ game, actions, entry, presentation }) {
   const { hero } = game;
-  const { slug } = presentation;
+  const { slug } = entry;
   const endpoint = `/api/${slug}`;
   const titleId = `${slug}-title`;
   const { api, isCurrentHero, submitExpedition, persistDraft, clearDraft } = actions;
@@ -220,8 +220,8 @@ function QuestPanel({ game, actions, entry, presentation }) {
   </section>;
 }
 
-export function SideQuest({ game, actions, questKey, entry }) {
-  const presentation = presentations[questKey];
-  if (!game.hero || !presentation) return null;
-  return <QuestPanel key={`${game.hero.id}:${questKey}`} {...{ game, actions, entry, presentation }} />;
+export function SideQuest({ game, actions, entry }) {
+  const presentation = entry.key === 'refactoring' ? presentations.refactoring : presentations.systemDesign;
+  if (!game.hero) return null;
+  return <QuestPanel key={`${game.hero.id}:${entry.key}`} {...{ game, actions, entry, presentation }} />;
 }

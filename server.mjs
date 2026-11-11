@@ -16,6 +16,7 @@ import goSuites from './data/workbench/go.mjs';
 import rustSuites, { rustBossCoverage } from './data/workbench/rust.mjs';
 import refactoringQuest from './data/workbench/refactoring.mjs';
 import systemDesignQuest from './data/workbench/system-design.mjs';
+import rateLimiterQuest from './data/workbench/rate-limiter.mjs';
 import { suggestions } from './data/workbench/suggestions.mjs';
 import { evaluateTrial, trialsFor } from './lib/trials.mjs';
 import { diamondExercise, diamondStage, diamondView, evaluateDiamondChoice, evaluateDiamondCode,
@@ -70,6 +71,7 @@ function authoredTrainingAnswer(worldId, prompt) {
 const sideQuestRoutes = new Map([
   ['/api/refactoring', {key:'refactoring', draftPrefix:'refactoring', level:14, catalog:refactoringQuest}],
   ['/api/system-design', {key:'systemDesign', draftPrefix:'system-design', level:13, catalog:systemDesignQuest}],
+  ['/api/rate-limiter', {key:'rateLimiter', draftPrefix:'rate-limiter', level:12, catalog:rateLimiterQuest}],
 ]);
 
 async function loadWorld(spec, number) {
@@ -108,9 +110,9 @@ async function loadWorld(spec, number) {
   const worldEncounters = encounters.filter(encounter => encounter.world === id);
   const sideQuests = {};
   if (id === 'javascript') {
-    for (const {key, level, catalog} of sideQuestRoutes.values()) {
+    for (const {key, draftPrefix, level, catalog} of sideQuestRoutes.values()) {
       const page = campaign.quests.find(quest => quest.level === level)?.sidePage;
-      if (page) sideQuests[key] = {page, title:catalog.title, description:catalog.description};
+      if (page) sideQuests[key] = {key, slug:draftPrefix, page, title:catalog.title, description:catalog.description};
     }
   }
   const exercisePages = new Map(pages.flatMap(page => page.prompts
@@ -134,6 +136,7 @@ async function loadWorld(spec, number) {
       rooms:campaign.rooms.map(room => ({...room, choices:room.choices.map(({result,...choice}) => choice)})),
       specialEncounters:worldEncounters.map(publicEncounter),
       ...sideQuests,
+      sideQuests:Object.values(sideQuests),
       exercises:exercises.map(exercise => ({...workbenchSummary(exercise), page:exercisePages.get(exercise.id)})),
       levelPages:Object.fromEntries(campaign.quests.map(quest => [quest.level, quest.page])),
       total:pages.length,

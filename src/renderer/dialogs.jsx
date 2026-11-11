@@ -284,7 +284,7 @@ function WorldMap({ game, actions }) {
   const quests = campaign.quests ?? [];
   const path = paths.find(({ id }) => id === pathId);
   const specials = campaign.specialEncounters ?? [];
-  const sideQuests = [campaign.refactoring, campaign.systemDesign].filter(Boolean);
+  const sideQuests = campaign.sideQuests ?? [];
   const pathLevels = new Set(path?.levels.map(Number));
   const filter = query.trim().toLowerCase();
   const groups = zonesFor(campaign).map((zone, index) => ({ zone, index, candidates: quests.filter((quest) => {
@@ -326,7 +326,7 @@ function WorldMap({ game, actions }) {
             </button></div>}
           {sideQuests.length > 0 && <section className="special-map">
             <h3 className="zone-title">Side quests</h3>
-            {sideQuests.map(quest => <div className="special-map-entry" key={quest.page}>
+            {sideQuests.map(quest => <div className="special-map-entry" key={quest.key}>
               <BookLink page={quest.page} actions={actions}>{quest.title}</BookLink>
               <p className="fine-print">{quest.description}</p>
             </div>)}

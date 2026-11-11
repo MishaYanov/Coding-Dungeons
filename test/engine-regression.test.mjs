@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { openStore } from '../lib/store.mjs';
 import refactoring from '../data/workbench/refactoring.mjs';
 import systemDesign from '../data/workbench/system-design.mjs';
+import rateLimiter from '../data/workbench/rate-limiter.mjs';
 import { exportSaves, importSaves } from '../desktop/save-transfer.mjs';
 
 const port = 49152;
@@ -274,5 +275,90 @@ test('the URL shortener design unlocks its debrief after one ordered, replay-saf
   assert.deepEqual(persisted.completed, completed);
   assert.deepEqual(persisted.debrief, systemDesign.debrief);
   assert.deepEqual((await request(refactoringEndpoint, {world, hero})).completed, [characterize.id]);
+  assert.deepEqual((await request('/api/progress', {world, hero})).levels, []);
+});
+
+test('the rate limiter unlocks its worked design once and keeps the other side quest saves separate', async () => {
+  const world = 'javascript';
+  const endpoint = '/api/rate-limiter';
+  const campaign = await request('/api/campaign', {world});
+  assert.equal(campaign.rateLimiter.title, rateLimiter.title);
+  const page = await request(`/api/pages/${campaign.rateLimiter.page}`, {world});
+  assert.equal(page.page, campaign.rateLimiter.page);
+  assert.equal((await request('/api/campaign')).rateLimiter, undefined);
+  await request(endpoint, {world, status:401});
+  await request(endpoint, {status:404});
+
+  const {hero} = await request('/api/heroes', {world, status:201, body:{name:'Rate Limit Architect', oneLife:true}});
+  const submit = (body, status = 200) => request(endpoint, {world, hero, body, status});
+  const view = () => request(endpoint, {world, hero});
+  const answer = (stage) => ({
+    stageId:stage.id, submissionId:randomUUID(),
+    ...(stage.kind === 'code' ? {code:stage.exercise.reference, purpose:'submit'} : {optionId:stage.answer}),
+  });
+
+  const otherQuests = [
+    ['/api/refactoring', refactoring.stages.slice(0, 1)],
+    ['/api/system-design', systemDesign.stages.slice(0, 2)],
+  ];
+  for (const [route, stages] of otherQuests) {
+    for (const stage of stages) await request(route, {world, hero, body:answer(stage)});
+    assert.deepEqual((await request(route, {world, hero})).completed, stages.map(({id}) => id));
+  }
+
+  const initial = await view();
+  assert.deepEqual(initial.brief, rateLimiter.brief);
+  assert.deepEqual(initial.completed, []);
+  assert.doesNotMatch(JSON.stringify(initial), /"reference"|"answer"|"tests"|"debrief"/);
+  const final = answer(rateLimiter.stages.at(-1));
+  await submit(final, 409);
+
+  const completed = [];
+  for (const stage of rateLimiter.stages.slice(0, -1)) {
+    const submission = answer(stage);
+    if (stage.kind === 'code') {
+      const practice = await submit({stageId:stage.id, code:submission.code, purpose:'examples'});
+      assert.equal(practice.result.verdict, 'pass');
+      assert.deepEqual(practice.completed, completed);
+      assert.equal(practice.debrief, undefined);
+      assert.equal((await view()).stages.find(({id}) => id === stage.id).draft, submission.code);
+    }
+    const next = await submit(submission);
+    completed.push(stage.id);
+    assert.deepEqual(next.completed, completed);
+    assert.equal(next.debrief, undefined);
+    assert.equal(next.combat.hp, 100);
+    assert.equal(next.combat.potions, 1);
+    assert.equal(next.combatEvent.potionsEarned, 0);
+    if (stage.kind === 'code') {
+      assert.equal(next.result.verdict, 'pass');
+      assert.equal(next.result.passed, initial.stages.find(({id}) => id === stage.id).requiredCases);
+      assert.equal(next.result.failed, 0);
+    } else {
+      assert.equal(next.result.correct, true);
+    }
+  }
+
+  assert.equal((await view()).debrief, undefined);
+  const cleared = await submit(final);
+  completed.push(final.stageId);
+  assert.deepEqual(cleared.completed, completed);
+  assert.deepEqual(cleared.debrief, rateLimiter.debrief);
+  assert.equal(cleared.combat.potions, 2);
+  assert.equal(cleared.combatEvent.potionsEarned, 1);
+  for (const replay of [final, answer(rateLimiter.stages.at(-1))]) {
+    const saved = await submit(replay);
+    assert.deepEqual(saved.completed, completed);
+    assert.deepEqual(saved.debrief, rateLimiter.debrief);
+    assert.equal(saved.combat.potions, 2);
+    assert.equal(saved.combatEvent.potionsEarned, 0);
+  }
+
+  const persisted = await view();
+  assert.deepEqual(persisted.completed, completed);
+  assert.deepEqual(persisted.debrief, rateLimiter.debrief);
+  for (const [route, stages] of otherQuests) {
+    assert.deepEqual((await request(route, {world, hero})).completed, stages.map(({id}) => id));
+  }
   assert.deepEqual((await request('/api/progress', {world, hero})).levels, []);
 });

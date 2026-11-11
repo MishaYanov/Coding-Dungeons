@@ -555,7 +555,7 @@ export function Guide({ game, actions, SpecialEncounter, DiamondEncounter }) {
   const quest = findQuest(game, level);
   const prompts = list(data?.prompts);
   const special = list(game.campaign?.specialEncounters).find((encounter) => encounter.page === data?.page);
-  const sideQuestKey = data && ['refactoring', 'systemDesign'].find(key => game.campaign?.[key]?.page === data.page);
+  const sideQuest = data && game.campaign?.sideQuests?.find(quest => quest.page === data.page);
   const active = prompts.find((prompt) => prompt.exerciseId);
   const drill = quest && levelExercises(game, quest.level)[0];
   const exerciseId = active?.exerciseId ?? drill?.id;
@@ -567,7 +567,7 @@ export function Guide({ game, actions, SpecialEncounter, DiamondEncounter }) {
     <div id="guide-content" className="guide-content" aria-busy={game.loading || undefined}>
       {data && game.hero ? <React.Fragment key={`${key}:${data.page}`}>
         <GuideNotes data={data} game={game} />
-        {sideQuestKey && <SideQuest questKey={sideQuestKey} entry={game.campaign[sideQuestKey]} game={game} actions={actions} />}
+        {sideQuest && <SideQuest entry={sideQuest} game={game} actions={actions} />}
         {game.progressError && <ProgressConnection actions={actions} />}
         {special && SpecialEncounter && <SpecialEncounter key={special.id} encounter={special} game={game} actions={actions} />}
         {hasCreature && <CreatureEncounter active={active} drillPage={pageNumber(drill?.page)} exerciseId={exerciseId} level={Number(quest.level)} game={game} />}
