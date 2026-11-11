@@ -15,6 +15,7 @@ import typescriptSuites from './data/workbench/typescript.mjs';
 import goSuites from './data/workbench/go.mjs';
 import rustSuites, { rustBossCoverage } from './data/workbench/rust.mjs';
 import refactoringQuest from './data/workbench/refactoring.mjs';
+import systemDesignQuest from './data/workbench/system-design.mjs';
 import { suggestions } from './data/workbench/suggestions.mjs';
 import { evaluateTrial, trialsFor } from './lib/trials.mjs';
 import { diamondExercise, diamondStage, diamondView, evaluateDiamondChoice, evaluateDiamondCode,
@@ -66,6 +67,11 @@ function authoredTrainingAnswer(worldId, prompt) {
     ? prompt.feedback : null;
 }
 
+const sideQuestRoutes = new Map([
+  ['/api/refactoring', {key:'refactoring', draftPrefix:'refactoring', level:14, catalog:refactoringQuest}],
+  ['/api/system-design', {key:'systemDesign', draftPrefix:'system-design', level:13, catalog:systemDesignQuest}],
+]);
+
 async function loadWorld(spec, number) {
   const {id} = spec;
   const rust = id === 'rust';
@@ -100,13 +106,18 @@ async function loadWorld(spec, number) {
   };
   const database = parse(rustDatabase);
   const worldEncounters = encounters.filter(encounter => encounter.world === id);
-  const refactoring = id === 'javascript' ? {page:campaign.quests.at(-1).sidePage,
-    title:refactoringQuest.title, description:refactoringQuest.description} : null;
+  const sideQuests = {};
+  if (id === 'javascript') {
+    for (const {key, level, catalog} of sideQuestRoutes.values()) {
+      const page = campaign.quests.find(quest => quest.level === level)?.sidePage;
+      if (page) sideQuests[key] = {page, title:catalog.title, description:catalog.description};
+    }
+  }
   const exercisePages = new Map(pages.flatMap(page => page.prompts
     .filter(prompt => prompt.exerciseId)
     .map(prompt => [prompt.exerciseId, page.page])));
   return {
-    info, pages, rust, refactoring,
+    info, pages, rust, sideQuests,
     cookie:rust ? 'ferrum_hero' : `ferrum_hero_${id}`,
     database:rust ? rustDatabase : join(database.dir, `${database.name}.${id}${database.ext}`),
     pathIds:new Set(['all', '', ...campaign.paths.map(path => path.id)]),
@@ -122,7 +133,7 @@ async function loadWorld(spec, number) {
       quests:campaign.quests.map(({hint1, hint2, debrief, ...quest}) => quest),
       rooms:campaign.rooms.map(room => ({...room, choices:room.choices.map(({result,...choice}) => choice)})),
       specialEncounters:worldEncounters.map(publicEncounter),
-      ...(refactoring ? {refactoring} : {}),
+      ...sideQuests,
       exercises:exercises.map(exercise => ({...workbenchSummary(exercise), page:exercisePages.get(exercise.id)})),
       levelPages:Object.fromEntries(campaign.quests.map(quest => [quest.level, quest.page])),
       total:pages.length,
@@ -527,33 +538,33 @@ async function submitCode(request, response, world, heroId) {
   json(response, report);
 }
 
-function refactoringView(world, heroId) {
+function sideQuestView(world, heroId, {key, draftPrefix, catalog}) {
   const {store} = world;
-  const {page} = world.refactoring;
-  const results = store.encounterResults(heroId, refactoringQuest.id);
-  const completed = completedStages(refactoringQuest, results);
-  const draftFor = id => store.response(heroId, page, `refactoring-${id}`)?.value;
-  const boundary = results.has('extract-boundary') ? draftFor('extract-boundary') : undefined;
-  const stages = refactoringQuest.stages.map(({id, kind, title, prompt, options, exercise}) => {
+  const {page} = world.sideQuests[key];
+  const results = store.encounterResults(heroId, catalog.id);
+  const completed = completedStages(catalog, results);
+  const draftFor = id => store.response(heroId, page, `${draftPrefix}-${id}`)?.value;
+  const stages = catalog.stages.map(({id, kind, title, prompt, options, exercise, carryFrom}) => {
     if (kind === 'choice') return {id, kind, title, prompt, options};
     const {signature, starter, testNames, requiredCases} = workbenchSummary(exercise);
+    const priorCode = carryFrom && results.has(carryFrom) ? draftFor(carryFrom) : undefined;
     return {id, kind, title, prompt, signature, testNames, requiredCases, draft:draftFor(id),
-      starter:id === 'refactor-policy' && boundary ? `${boundary.trimEnd()}\n\n${starter}` : starter};
+      starter:priorCode ? `${priorCode.trimEnd()}\n\n${starter}` : starter};
   });
-  const {title, description, legacyCode} = refactoringQuest;
+  const {title, description, legacyCode, brief, debrief, standardReward} = catalog;
+  const finished = completed.length === stages.length;
   const oneLife = store.combatState(heroId).mode === 'one-life';
-  const reward = completed.length === stages.length
-    ? (oneLife ? 'The guild awarded you one healing potion.' : 'The Relay Ledger is ready for a staged rollout.')
-    : undefined;
-  return {title, description, legacyCode, stages, completed, reward};
+  const reward = finished ? (oneLife ? 'The guild awarded you one healing potion.' : standardReward) : undefined;
+  return {title, description, legacyCode, brief, debrief:finished ? debrief : undefined, stages, completed, reward};
 }
 
-async function submitRefactoring(request, response, world, heroId) {
+async function submitSideQuest(request, response, world, heroId, definition) {
   const {store} = world;
-  const {page} = world.refactoring;
+  const {key, draftPrefix, catalog} = definition;
+  const {page} = world.sideQuests[key];
   const data = await readJson(request);
-  const stage = refactoringQuest.stages.find(item => item.id === data.stageId);
-  if (!stage) throw new HttpError(400, 'Choose a stage of the refactoring quest.');
+  const stage = catalog.stages.find(item => item.id === data.stageId);
+  if (!stage) throw new HttpError(400, 'Choose a stage of the side quest.');
 
   const isCode = stage.kind === 'code';
   const allowed = isCode ? ['stageId', 'code', 'purpose', 'submissionId'] : ['stageId', 'optionId', 'submissionId'];
@@ -562,22 +573,22 @@ async function submitRefactoring(request, response, world, heroId) {
   const {code, purpose} = isCode ? codeSubmission(data) : {purpose:'submit'};
   const examples = purpose === 'examples';
   const submission = examples ? null : prepareSubmission(store, heroId, data,
-    [refactoringQuest.id, stage.id, isCode ? code : data.optionId], true);
-  const view = result => ({...refactoringView(world, heroId), result});
+    [catalog.id, stage.id, isCode ? code : data.optionId], true);
+  const view = result => ({...sideQuestView(world, heroId, definition), result});
   const respond = outcome => json(response, submissionResult({...outcome, result:view(outcome.result.result)}, true));
   const currentOutcome = result => ({result:{result}, combat:store.combatState(heroId),
     combatEvent:{damage:0, healing:0, potionsEarned:0}});
   if (submission?.prior) return respond(submission.prior);
 
-  const progress = () => store.encounterResults(heroId, refactoringQuest.id);
-  const draftKey = `refactoring-${stage.id}`;
+  const progress = () => store.encounterResults(heroId, catalog.id);
+  const draftKey = `${draftPrefix}-${stage.id}`;
   const previous = store.withEncounter(() => {
     const results = progress();
     if (results.has(stage.id)) return results.get(stage.id);
-    if (refactoringQuest.stages.find(item => !results.has(item.id)) !== stage) {
+    if (catalog.stages.find(item => !results.has(item.id)) !== stage) {
       throw new HttpError(409, 'Finish the earlier stages first.');
     }
-    if (isCode) store.saveResponse(heroId, page, draftKey, code, 'Your refactoring draft is saved.');
+    if (isCode) store.saveResponse(heroId, page, draftKey, code, 'Your side quest draft is saved.');
   });
   if (previous) return examples ? json(response, view(previous)) : respond(currentOutcome(previous));
 
@@ -588,7 +599,7 @@ async function submitRefactoring(request, response, world, heroId) {
     if (signal.aborted) return;
     attempt = {...run, purpose, correct:run.verdict === 'pass',
       feedback:run.verdict === 'pass'
-        ? (examples ? 'The examples passed. Submit the refactor to run the full suite.' : 'The refactor passed the full regression suite.')
+        ? (examples ? 'The examples passed. Submit your solution to run the full suite.' : 'Your solution passed the full suite.')
         : 'Your draft is saved. Review the workbench result and try again.'};
     if (examples || !['pass', 'fail', 'compile_error'].includes(run.verdict)) return json(response, view(attempt));
   } else {
@@ -601,12 +612,12 @@ async function submitRefactoring(request, response, world, heroId) {
     if (prior) return prior;
     const completed = progress().get(stage.id);
     if (completed) return currentOutcome(completed);
-    const rewardKey = attempt.correct && refactoringQuest.stages.at(-1) === stage
-      ? `encounter:${refactoringQuest.id}` : undefined;
+    const rewardKey = attempt.correct && catalog.stages.at(-1) === stage
+      ? `encounter:${catalog.id}` : undefined;
     return store.settleCombat(heroId, {...submission.ticket, wrong:!attempt.correct, rewardKey}, () => {
       if (attempt.correct) {
-        if (isCode) store.saveResponse(heroId, page, draftKey, code, 'The refactor passed.');
-        store.recordEncounterStage(heroId, refactoringQuest.id, stage.id, attempt);
+        if (isCode) store.saveResponse(heroId, page, draftKey, code, 'Your solution passed.');
+        store.recordEncounterStage(heroId, catalog.id, stage.id, attempt);
       }
       return {result:attempt};
     });
@@ -739,11 +750,12 @@ const server = createServer(async (request,response) => {
         throw new HttpError(403, 'Open Ferrum locally to make changes.');
       }
     }
-    if (path === '/api/refactoring' && (method === 'GET' || method === 'POST')) {
-      if (!world.refactoring) throw new HttpError(404, 'The refactoring quest is in JavaScript World 1.');
+    const sideQuest = sideQuestRoutes.get(path);
+    if (sideQuest && (method === 'GET' || method === 'POST')) {
+      if (!world.sideQuests[sideQuest.key]) throw new HttpError(404, 'This side quest is in JavaScript World 1.');
       const heroId = await requireHero(request, world);
-      if (method === 'POST') return await submitRefactoring(request, response, world, heroId);
-      return json(response, refactoringView(world, heroId));
+      if (method === 'POST') return await submitSideQuest(request, response, world, heroId, sideQuest);
+      return json(response, sideQuestView(world, heroId, sideQuest));
     }
     if (method === 'GET' || method === 'POST') {
       const match = path.match(/^\/api\/encounters\/([a-z0-9-]{1,64})$/);

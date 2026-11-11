@@ -235,6 +235,7 @@ assert(first.ledger.acceptedIds !== second.ledger.acceptedIds && first.decisions
 
 export default {
   id: 'refactoring-relay',
+  standardReward: 'The Relay Ledger is ready for a staged rollout.',
   title: 'Refactoring Quest · The Relay Ledger',
   description: 'Three crews patched the Relay Ledger in place. Now one loop decodes orders, applies routing rules, and mutates the live ledger. A new dispatch screen needs a preview. Capture the old rules, separate validation from routing, and roll out a router that can preview without changing live state.',
   legacyCode,
@@ -274,6 +275,7 @@ For a valid row return { ok: true, order: { id, crates, expedited } }. Trim and 
     },
     {
       id: 'refactor-policy',
+      carryFrom: 'extract-boundary',
       kind: 'code',
       title: 'Build a router that can preview',
       prompt: `Keep your parseRelayOrder(raw) in this file and use it from routeRelayBatch(rows, ledger). The rows argument is an array of JSON strings. The ledger contains a nonnegative safe integer remaining and an acceptedIds array of unique, already-normalized IDs.

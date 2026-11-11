@@ -169,6 +169,21 @@ test('the JavaScript world map opens the Relay Ledger refactoring path', async (
   assert.equal(await quest.getByRole('list', {name:'Refactoring quest steps'}).getByRole('listitem').count(), 4);
 });
 
+test('the JavaScript World Map opens the URL shortener design quest', async (t) => {
+  const page = await newPage(t, '#page=1', 'javascript');
+  await createHero(page, 'Short Link Architect', 1);
+  await page.getByRole('button', {name:'World map', exact:true}).click();
+  const map = page.getByRole('dialog', {name:'World map', exact:true});
+  await map.getByRole('link', {name:'Refactoring Quest · The Relay Ledger', exact:true}).waitFor();
+  await map.getByRole('link', {name:'System Design Quest · Design a URL Shortener', exact:true}).click();
+  await openBookPage(page, 43);
+  const quest = page.getByRole('region', {name:'System Design Quest · Design a URL Shortener'});
+  await quest.getByText('0 / 5 steps complete', {exact:true}).waitFor();
+  await quest.getByText(/864,000 create requests/).waitFor();
+  assert.equal(await quest.getByRole('list', {name:'System design quest steps'}).getByRole('listitem').count(), 5);
+  assert.equal(await quest.getByText('Worked design', {exact:true}).count(), 0);
+});
+
 test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs', async (t) => {
   const page = await newPage(t, '#page=15', null);
   await page.getByText('Your saved heroes will appear here.').waitFor();

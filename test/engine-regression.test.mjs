@@ -12,6 +12,7 @@ import { after, before, test, mock } from 'node:test';
 import { promisify } from 'node:util';
 import { openStore } from '../lib/store.mjs';
 import refactoring from '../data/workbench/refactoring.mjs';
+import systemDesign from '../data/workbench/system-design.mjs';
 import { exportSaves, importSaves } from '../desktop/save-transfer.mjs';
 
 const port = 49152;
@@ -187,4 +188,91 @@ test('the refactoring quest carries working code between stages and awards one p
   } finally {
     store.close();
   }
+});
+
+test('the URL shortener design unlocks its debrief after one ordered, replay-safe completion', async () => {
+  const world = 'javascript';
+  const endpoint = '/api/system-design';
+  const refactoringEndpoint = '/api/refactoring';
+  const campaign = await request('/api/campaign', {world});
+  assert.equal(campaign.systemDesign.title, systemDesign.title);
+  assert.equal((await request(`/api/pages/${campaign.systemDesign.page}`, {world})).page, campaign.systemDesign.page);
+  assert.equal((await request('/api/campaign')).systemDesign, undefined);
+  await request(endpoint, {world, status:401});
+  await request(endpoint, {status:404});
+
+  const {hero} = await request('/api/heroes', {world, status:201, body:{name:'Short Link Architect', oneLife:true}});
+  const [estimate, storage, allocator, cache, incident] = systemDesign.stages;
+  const choice = (stage, optionId = stage.answer) => ({stageId:stage.id, optionId, submissionId:randomUUID()});
+  const reference = allocator.exercise.reference;
+  const example = {stageId:allocator.id, code:reference, purpose:'examples'};
+  const submit = (body, status = 200) => request(endpoint, {world, hero, body, status});
+  const view = () => request(endpoint, {world, hero});
+  const completedBefore = (state, next) => {
+    assert.deepEqual(state.completed, systemDesign.stages.slice(0, systemDesign.stages.indexOf(next)).map(({id}) => id));
+    assert.equal(state.debrief, undefined);
+  };
+
+  const [characterize] = refactoring.stages;
+  const refactoringProgress = await request(refactoringEndpoint, {world, hero, body:choice(characterize)});
+  assert.deepEqual(refactoringProgress.completed, [characterize.id]);
+
+  const initial = await view();
+  completedBefore(initial, estimate);
+  assert.deepEqual(initial.brief, systemDesign.brief);
+  assert.doesNotMatch(JSON.stringify(initial), /"reference"|"answer"|"tests"|"debrief"/);
+  await submit(choice(storage), 409);
+  await submit(example, 409);
+  await submit(choice(incident), 409);
+
+  const wrong = choice(estimate, estimate.options.find(({id}) => id !== estimate.answer).id);
+  const missed = await submit(wrong);
+  assert.equal(missed.result.correct, false);
+  assert.equal(missed.combat.hp, 95);
+  assert.equal(missed.combatEvent.damage, 5);
+  completedBefore(missed, estimate);
+  assert.equal((await submit(wrong)).combatEvent.damage, 0);
+
+  completedBefore(await submit(choice(estimate)), storage);
+  completedBefore(await submit(choice(storage)), allocator);
+  const failedExample = await submit({...example, code:'function allocateShortCode('});
+  assert.equal(failedExample.result.verdict, 'compile_error');
+  completedBefore(failedExample, allocator);
+  const passedExample = await submit(example);
+  assert.equal(passedExample.result.verdict, 'pass');
+  completedBefore(passedExample, allocator);
+  assert.equal((await view()).stages.find(({id}) => id === allocator.id).draft, reference);
+  const practiced = (await request('/api/progress', {world, hero})).combat;
+  assert.equal(practiced.hp, 95);
+  assert.equal(practiced.potions, 1);
+
+  const actual = {...example, purpose:'submit', submissionId:randomUUID()};
+  const implemented = await submit(actual);
+  assert.equal(implemented.result.verdict, 'pass');
+  assert.ok(implemented.result.passed > passedExample.result.passed);
+  assert.equal(implemented.result.failed, 0);
+  completedBefore(implemented, cache);
+  completedBefore(await submit(choice(cache)), incident);
+  assert.equal((await view()).debrief, undefined);
+
+  const final = choice(incident);
+  const cleared = await submit(final);
+  const completed = systemDesign.stages.map(({id}) => id);
+  assert.deepEqual(cleared.completed, completed);
+  assert.deepEqual(cleared.debrief, systemDesign.debrief);
+  assert.equal(cleared.combat.hp, 95);
+  assert.equal(cleared.combat.potions, 2);
+  assert.equal(cleared.combatEvent.potionsEarned, 1);
+  for (const replay of [final, choice(incident), actual]) {
+    const saved = await submit(replay);
+    assert.deepEqual(saved.completed, completed);
+    assert.deepEqual(saved.debrief, systemDesign.debrief);
+    assert.equal(saved.combat.potions, 2);
+    assert.equal(saved.combatEvent.potionsEarned, 0);
+  }
+  const persisted = await view();
+  assert.deepEqual(persisted.completed, completed);
+  assert.deepEqual(persisted.debrief, systemDesign.debrief);
+  assert.deepEqual((await request(refactoringEndpoint, {world, hero})).completed, [characterize.id]);
+  assert.deepEqual((await request('/api/progress', {world, hero})).levels, []);
 });

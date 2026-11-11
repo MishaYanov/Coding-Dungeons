@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { creatureName, mountCreature } from '../../public/creatures.mjs';
 import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
-import { RefactoringQuest } from './refactoring.jsx';
+import { SideQuest } from './side-quest.jsx';
 
 const promptLabels = { choice: 'CHOICE', text: 'WRITTEN RESPONSE', code: 'CODE WORKBENCH' };
 const hintLabels = { hint1: 'Hint one', hint2: 'Hint two', debrief: 'Debrief' };
@@ -555,6 +555,7 @@ export function Guide({ game, actions, SpecialEncounter, DiamondEncounter }) {
   const quest = findQuest(game, level);
   const prompts = list(data?.prompts);
   const special = list(game.campaign?.specialEncounters).find((encounter) => encounter.page === data?.page);
+  const sideQuestKey = data && ['refactoring', 'systemDesign'].find(key => game.campaign?.[key]?.page === data.page);
   const active = prompts.find((prompt) => prompt.exerciseId);
   const drill = quest && levelExercises(game, quest.level)[0];
   const exerciseId = active?.exerciseId ?? drill?.id;
@@ -566,7 +567,7 @@ export function Guide({ game, actions, SpecialEncounter, DiamondEncounter }) {
     <div id="guide-content" className="guide-content" aria-busy={game.loading || undefined}>
       {data && game.hero ? <React.Fragment key={`${key}:${data.page}`}>
         <GuideNotes data={data} game={game} />
-        {game.campaign?.refactoring?.page === data.page && <RefactoringQuest game={game} actions={actions} />}
+        {sideQuestKey && <SideQuest questKey={sideQuestKey} entry={game.campaign[sideQuestKey]} game={game} actions={actions} />}
         {game.progressError && <ProgressConnection actions={actions} />}
         {special && SpecialEncounter && <SpecialEncounter key={special.id} encounter={special} game={game} actions={actions} />}
         {hasCreature && <CreatureEncounter active={active} drillPage={pageNumber(drill?.page)} exerciseId={exerciseId} level={Number(quest.level)} game={game} />}

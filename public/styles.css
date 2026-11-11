@@ -386,7 +386,9 @@ svg { display: block; flex-shrink: 0; }
 .special-form, .special-controls { display: grid; gap: 8px; }
 .special-controls { margin: 0; padding: 0; border: 0; min-width: 0; }
 .special-controls legend { padding: 0 0 8px; font-size: .87rem; line-height: 1.55; }
-#refactoring-quest .special-controls legend { white-space: pre-wrap; overflow-wrap: anywhere; }
+.coding-side-quest .special-controls legend, .side-quest-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
+.side-quest-notes { color: var(--text); font-size: .85rem; }
+.details-block .side-quest-notes { margin-top: 7px; }
 .special-controls .button, .special-body > .button { justify-self: start; }
 .special-option {
   display: grid;
@@ -417,6 +419,7 @@ svg { display: block; flex-shrink: 0; }
 .special-checks [data-done="false"] { color: var(--red); }
 .special-victory { color: var(--teal); }
 .special-map { margin-bottom: 13px; }
+.special-map-entry + .special-map-entry { margin-top: 8px; }
 .special-map-entry {
   display: flex;
   flex-wrap: wrap;

@@ -1,8 +1,16 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
 
-const endpoint = '/api/refactoring';
-const defaultTitle = 'Refactoring Quest · The Relay Ledger';
+const presentations = {
+  refactoring: {
+    slug: 'refactoring', codeLabel: 'Refactoring JavaScript code', submitLabel: 'Submit refactor',
+    stepsLabel: 'Refactoring quest steps', completion: 'The Relay Ledger is ready for rollout. This quest is saved to your hero.',
+  },
+  systemDesign: {
+    slug: 'system-design', codeLabel: 'System design JavaScript code', submitLabel: 'Submit solution',
+    stepsLabel: 'System design quest steps', completion: 'You completed the URL shortener design. This quest is saved to your hero.',
+  },
+};
 const verdictLabels = {
   fail: 'Tests did not pass',
   compile_error: 'Compilation failed',
@@ -13,7 +21,7 @@ const verdictLabels = {
   error: 'Runner error',
 };
 
-function RefactoringResult({ result }) {
+function SideQuestResult({ result }) {
   if (!result) return null;
   const code = typeof result.verdict === 'string';
   const passed = code ? result.verdict === 'pass' : result.correct === true;
@@ -39,7 +47,7 @@ function RefactoringResult({ result }) {
   </div>;
 }
 
-function RefactoringStage({ stage, draft, saveDraft, pending, blocked, fallen, unavailable, focusTarget, submit }) {
+function SideQuestStage({ stage, draft, saveDraft, pending, blocked, fallen, unavailable, focusTarget, submit, presentation }) {
   const code = stage.kind === 'code';
   const [value, setValue] = useState(code ? draft ?? stage.starter ?? '' : '');
   const indentationId = useId();
@@ -61,7 +69,7 @@ function RefactoringStage({ stage, draft, saveDraft, pending, blocked, fallen, u
       <legend>{stage.prompt}</legend>
       {code ? <>
         {stage.signature && <pre className="signature">{stage.signature}</pre>}
-        <textarea className="code-editor" aria-label="Refactoring JavaScript code" aria-describedby={indentationId}
+        <textarea className="code-editor" aria-label={presentation.codeLabel} aria-describedby={indentationId}
           rows={12} maxLength={49152} value={value} required spellCheck={false}
           autoCapitalize="off" autoComplete="off" autoCorrect="off" {...indentation} />
         <p id={indentationId} className="fine-print">{indentationHelp}</p>
@@ -77,7 +85,7 @@ function RefactoringStage({ stage, draft, saveDraft, pending, blocked, fallen, u
       {unavailable && <p className="fine-print">{unavailable} You can keep editing your draft.</p>}
       <div className="form-actions">
         <button type="submit" value="submit" className="button button-primary" data-expedition-submit=""
-          disabled={submitDisabled}>{code ? 'Submit refactor' : 'Check answer'}</button>
+          disabled={submitDisabled}>{code ? presentation.submitLabel : 'Check answer'}</button>
         {code && <button type="submit" value="examples" className="button button-quiet"
           disabled={practiceDisabled}>Run Examples</button>}
       </div>
@@ -85,8 +93,11 @@ function RefactoringStage({ stage, draft, saveDraft, pending, blocked, fallen, u
   </form>;
 }
 
-function QuestPanel({ game, actions }) {
+function QuestPanel({ game, actions, entry, presentation }) {
   const { hero } = game;
+  const { slug } = presentation;
+  const endpoint = `/api/${slug}`;
+  const titleId = `${slug}-title`;
   const { api, isCurrentHero, submitExpedition, persistDraft, clearDraft } = actions;
   const [quest, setQuest] = useState(null);
   const [loadError, setLoadError] = useState('');
@@ -99,7 +110,7 @@ function QuestPanel({ game, actions }) {
   const focusAfterStage = useRef(false);
   const current = quest?.stages.find(({ id }) => !quest.completed.includes(id));
   const finished = Boolean(quest && !current);
-  const draftKey = current?.kind === 'code' ? `${game.page.page}:refactoring-${current.id}` : null;
+  const draftKey = current?.kind === 'code' ? `${entry.page}:${slug}-${current.id}` : null;
   const unavailable = draftKey && game.runner?.toLowerCase() === 'unavailable'
     ? game.runnerDetail || 'The local JavaScript runner is unavailable.' : '';
   const blocked = pending || game.switchingHero;
@@ -117,7 +128,7 @@ function QuestPanel({ game, actions }) {
       if (!controller.signal.aborted && isCurrentHero(hero)) setLoadError(failure.message);
     });
     return () => controller.abort();
-  }, [api, hero, isCurrentHero, retry]);
+  }, [api, endpoint, hero, isCurrentHero, retry]);
   useLayoutEffect(() => {
     if (focusAfterStage.current) {
       focusAfterStage.current = false;
@@ -157,9 +168,9 @@ function QuestPanel({ game, actions }) {
 
   const status = loadError ? 'Quest unavailable' : finished ? 'Quest complete'
     : quest ? `${quest.completed.length} / ${quest.stages.length} steps complete` : 'Loading side quest…';
-  return <section id="refactoring-quest" className="field-card special-encounter" aria-labelledby="refactoring-title">
+  return <section id={`${slug}-quest`} className="field-card special-encounter coding-side-quest" aria-labelledby={titleId}>
     <div className="special-heading">
-      <div><p className="eyebrow">SIDE QUEST</p><h2 id="refactoring-title">{quest?.title ?? defaultTitle}</h2></div>
+      <div><p className="eyebrow">SIDE QUEST</p><h2 id={titleId}>{quest?.title ?? entry.title}</h2></div>
       <p className="special-status" role="status">{status}</p>
     </div>
     {loadError && <div className="special-body">
@@ -171,11 +182,12 @@ function QuestPanel({ game, actions }) {
     </div>}
     {quest && <>
       <p className="special-description">{quest.description}</p>
+      {quest.brief && <p className="side-quest-notes">{quest.brief}</p>}
       {quest.legacyCode && <details className="details-block">
         <summary>Original ledger code</summary>
         <pre className="test-output">{quest.legacyCode}</pre>
       </details>}
-      <ol className="special-steps" aria-label="Refactoring quest steps">
+      <ol className="special-steps" aria-label={presentation.stepsLabel}>
         {quest.stages.map((stage) => {
           const cleared = quest.completed.includes(stage.id);
           const active = current === stage;
@@ -186,9 +198,9 @@ function QuestPanel({ game, actions }) {
           </li>;
         })}
       </ol>
-      <RefactoringResult result={quest.result} />
+      <SideQuestResult result={quest.result} />
       <div className="special-body">
-        {current && <RefactoringStage key={current.id} stage={current}
+        {current && <SideQuestStage key={current.id} stage={current} presentation={presentation}
           draft={draftKey ? game.drafts.get(draftKey) ?? current.draft : undefined}
           saveDraft={(value) => {
             if (isCurrentHero(hero)) persistDraft(draftKey, value);
@@ -196,15 +208,20 @@ function QuestPanel({ game, actions }) {
         {error ? <p className="inline-status" role="alert" data-error="true">{error}</p> : pending
           && <p className="inline-status" role="status">{draftKey ? 'Running JavaScript tests…' : 'The GM is checking your answer…'}</p>}
         {finished && <>
-          <p className="special-victory" ref={focusTarget} tabIndex={-1}>The Relay Ledger is ready for rollout. This quest is saved to your hero.</p>
+          <p className="special-victory" ref={focusTarget} tabIndex={-1}>{presentation.completion}</p>
           {quest.reward && <p className="fine-print">{quest.reward}</p>}
+          {quest.debrief && <details className="details-block">
+            <summary>Worked design</summary>
+            <p className="side-quest-notes">{quest.debrief}</p>
+          </details>}
         </>}
       </div>
     </>}
   </section>;
 }
 
-export function RefactoringQuest({ game, actions }) {
-  if (game.world?.id !== 'javascript' || !game.hero || !game.page) return null;
-  return <QuestPanel key={`${game.hero.id}:${game.page.page}`} game={game} actions={actions} />;
+export function SideQuest({ game, actions, questKey, entry }) {
+  const presentation = presentations[questKey];
+  if (!game.hero || !presentation) return null;
+  return <QuestPanel key={`${game.hero.id}:${questKey}`} {...{ game, actions, entry, presentation }} />;
 }
