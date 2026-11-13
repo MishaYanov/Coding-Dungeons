@@ -8,6 +8,12 @@ const files = ['ferrum.sqlite', 'ferrum.javascript.sqlite', 'ferrum.typescript.s
 const readerDataFile = 'reader-data.json';
 const maxReaderDataBytes = 32 * 1024 * 1024;
 const maxSavePayloadBytes = 1024 * 1024;
+const maxSaveDatabaseBytes = 256 * 1024 * 1024;
+const maxSaveWalBytes = 2 * maxSaveDatabaseBytes;
+const maxSavedTextBytes = 64 * 1024;
+const maxSavedKeyBytes = 1024;
+const maxSavedRows = 10_000;
+const maxSavedProgressBytes = 16 * 1024 * 1024;
 const maxDraftLength = 49_152;
 const promptDraftKey = /^([1-9]\d{0,15}):[a-z0-9][a-z0-9_-]{0,79}$/i;
 const draftsKey = (id) => `ferrum-prompt-drafts-v2:${id}`;
@@ -43,14 +49,22 @@ function expectedSchema() {
 
 const allowedSchema = expectedSchema();
 
-async function hasFile(path) {
+async function hasFile(path, maxBytes = Infinity) {
   try {
-    if (!(await lstat(path)).isFile()) throw new Error('Expected a regular save file.');
+    const file = await lstat(path);
+    if (!file.isFile()) throw new Error('Expected a regular save file.');
+    if (file.size > maxBytes) throw new Error('SQLite save exceeds the size limit.');
     return true;
   } catch (error) {
     if (error.code === 'ENOENT') return false;
     throw error;
   }
+}
+
+function checkDatabaseSize(db, maxBytes) {
+  const {page_count: pageCount} = db.prepare('PRAGMA main.page_count').get();
+  const {page_size: pageSize} = db.prepare('PRAGMA main.page_size').get();
+  if (pageCount * pageSize > maxBytes) throw new Error('SQLite save exceeds the size limit.');
 }
 
 function openReadOnly(path) {
@@ -78,7 +92,7 @@ function supportedLegacy(db, objects) {
   });
 }
 
-function inspect(db, {allowLegacy = true, validatePayloads = false} = {}) {
+function inspect(db, {allowLegacy = true, validatePayloads = false, validateRows = false} = {}) {
   const objects = schemaObjects(db);
   const tables = new Set(objects.filter(({type}) => type === 'table').map(({name}) => name));
   const legacy = !tables.has('heroes') && [...legacyColumns.keys()].some(name => tables.has(name));
@@ -91,9 +105,94 @@ function inspect(db, {allowLegacy = true, validatePayloads = false} = {}) {
   if (!legacy && db.prepare('PRAGMA foreign_key_check').get()) {
     throw new Error('SQLite save contains records with missing references.');
   }
+  if (validateRows) {
+    inspectSavedText(db, tables);
+    if (!legacy) inspectSavedRows(db, tables);
+  }
   if (validatePayloads && !legacy) inspectSavedPayloads(db, tables);
   const occupied = saveTables.some(table => tables.has(table) && db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get());
   return {legacy, occupied};
+}
+
+function inspectSavedRows(db, tables) {
+  if (db.prepare(`SELECT 1 FROM heroes WHERE typeof(id) != 'text' OR length(id) != 36 OR instr(id, char(0)) > 0
+    OR typeof(last_page) != 'integer' OR last_page NOT BETWEEN 1 AND ? LIMIT 1`).get(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('Invalid hero record.');
+  }
+  for (const {id} of db.prepare('SELECT id FROM heroes').iterate()) {
+    if (!isReaderHeroId(id)) throw new Error('Invalid hero record.');
+  }
+  if (tables.has('one_life_heroes') && db.prepare(`SELECT 1 FROM one_life_heroes
+    WHERE typeof(hp) != 'integer' OR hp NOT BETWEEN 0 AND 100
+    OR typeof(potions) != 'integer' OR potions NOT BETWEEN 0 AND ? LIMIT 1`).get(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('Invalid One Life record.');
+  }
+
+  for (const table of ['heroes', 'progress', 'workbench_modes', 'workbench_clears',
+    'encounter_completions', 'combat_rewards']) {
+    if (!tables.has(table)) continue;
+    const group = table === 'heroes' ? '' : 'GROUP BY hero_id';
+    if (db.prepare(`SELECT count(*) FROM ${table} ${group} HAVING count(*) > ? LIMIT 1`).get(maxSavedRows)) {
+      throw new Error(`Too many saved rows in ${table}.`);
+    }
+  }
+  if (tables.has('responses')) {
+    const hasAssessments = tables.has('written_assessments');
+    const join = hasAssessments ? 'LEFT JOIN written_assessments a USING (hero_id, page, prompt_id)' : '';
+    const assessmentBytes = hasAssessments ? '+ coalesce(length(CAST(a.result AS BLOB)), 0)' : '';
+    if (db.prepare(`SELECT 1 FROM responses r ${join} GROUP BY r.hero_id HAVING count(*) > ? OR
+      sum(length(CAST(r.prompt_id AS BLOB)) + length(CAST(r.value AS BLOB))
+        + length(CAST(r.feedback AS BLOB)) ${assessmentBytes}) > ? LIMIT 1`)
+      .get(maxSavedRows, maxSavedProgressBytes)) {
+      throw new Error('Too many saved responses or response bytes for one hero.');
+    }
+  }
+  if (tables.has('progress') && db.prepare(`SELECT 1 FROM progress GROUP BY hero_id HAVING
+    sum(coalesce(length(CAST(answer AS BLOB)), 0) + coalesce(length(CAST(code AS BLOB)), 0)) > ? LIMIT 1`)
+    .get(maxSavedProgressBytes)) {
+    throw new Error('Too many saved progress bytes for one hero.');
+  }
+  if (tables.has('attempts')) {
+    if (db.prepare(`SELECT 1 FROM attempts WHERE verdict = 'pass' GROUP BY hero_id
+      HAVING count(DISTINCT exercise_id) > ? LIMIT 1`).get(maxSavedRows)) {
+      throw new Error('Too many saved exercise clears for one hero.');
+    }
+    const hasDetails = tables.has('workbench_attempt_details');
+    const join = hasDetails ? 'LEFT JOIN workbench_attempt_details d ON (a.hero_id = d.hero_id AND a.id = d.attempt_id)' : '';
+    const detailBytes = hasDetails ? '+ coalesce(length(CAST(d.details AS BLOB)), 0)' : '';
+    if (db.prepare(`WITH recent AS (SELECT a.hero_id, a.id, a.output,
+      row_number() OVER (PARTITION BY a.hero_id ORDER BY a.id DESC) AS rank FROM attempts a)
+      SELECT 1 FROM recent a ${join} WHERE a.rank <= 100 GROUP BY a.hero_id
+      HAVING sum(length(CAST(a.output AS BLOB)) ${detailBytes}) > ? LIMIT 1`).get(maxSavedProgressBytes)) {
+      throw new Error('Too many saved attempt bytes for one hero.');
+    }
+  }
+}
+
+const savedTextFields = [
+  ['heroes', ['name', 'name_key', 'path', 'updated_at'], []],
+  ['profile', ['callsign', 'path'], []],
+  ['progress', [], ['answer', 'code']],
+  ['responses', ['prompt_id'], ['value', 'feedback']],
+  ['attempts', ['prompt_id', 'exercise_id', 'verdict', 'created_at'], ['source', 'output']],
+  ['diamond_encounters', [], ['draft']],
+  ['encounter_completions', ['encounter_id', 'stage_id'], []],
+  ['workbench_clears', ['exercise_id'], []],
+  ['combat_rewards', ['reward_key'], []],
+];
+
+function inspectSavedText(db, tables) {
+  for (const [table, keys, fields] of savedTextFields) {
+    if (!tables.has(table)) continue;
+    const columns = [...keys.map(column => [column, maxSavedKeyBytes]),
+      ...fields.map(column => [column, maxSavedTextBytes])];
+    const conditions = columns.map(([column]) => `(${column} IS NOT NULL
+      AND (typeof(${column}) != 'text' OR length(CAST(${column} AS BLOB)) > ?))`);
+    if (db.prepare(`SELECT 1 FROM ${table} WHERE ${conditions.join(' OR ')} LIMIT 1`)
+      .get(...columns.map(([, limit]) => limit))) {
+      throw new Error(`Invalid or oversized save text in ${table}.`);
+    }
+  }
 }
 
 function heroIds(directory, name) {
@@ -291,15 +390,20 @@ async function restorePlan(rows, incoming, destination, available) {
   return entries;
 }
 
-async function snapshotSaves(source, destination, forImport = false) {
+async function snapshotSaves(source, destination, {forImport = false, maxDatabaseBytes = maxSaveDatabaseBytes} = {}) {
   const copied = [];
   for (const name of files) {
     const file = join(source, name);
     try {
-      if (!await hasFile(file)) continue;
+      if (!await hasFile(file, maxDatabaseBytes)) continue;
+      await hasFile(`${file}-wal`, maxSaveWalBytes);
+      await hasFile(`${file}-shm`, maxSaveDatabaseBytes);
       const snapshotPath = join(destination, name);
       const db = openReadOnly(file);
       try {
+        // Pin the same committed snapshot that SQLite will copy, including WAL pages.
+        db.exec('BEGIN');
+        checkDatabaseSize(db, maxDatabaseBytes);
         await backup(db, snapshotPath);
       } finally {
         db.close();
@@ -307,7 +411,8 @@ async function snapshotSaves(source, destination, forImport = false) {
       const snapshot = openReadOnly(snapshotPath);
       let legacy;
       try {
-        ({legacy} = inspect(snapshot, {validatePayloads:true}));
+        checkDatabaseSize(snapshot, maxDatabaseBytes);
+        ({legacy} = inspect(snapshot, {validatePayloads:true, validateRows:forImport}));
       } finally {
         snapshot.close();
       }
@@ -316,7 +421,8 @@ async function snapshotSaves(source, destination, forImport = false) {
         migrated.close();
         const verified = openReadOnly(snapshotPath);
         try {
-          inspect(verified, {allowLegacy:false, validatePayloads:true});
+          checkDatabaseSize(verified, maxDatabaseBytes);
+          inspect(verified, {allowLegacy:false, validatePayloads:true, validateRows:true});
         } finally {
           verified.close();
         }
@@ -344,7 +450,7 @@ export async function exportSaves(source, parent, {readerStorage} = {}) {
 
 // The desktop stops its engine before importing, so occupied worlds cannot
 // change between the inspection and SQLite's transactional backup.
-export async function importSaves(source, destination, {readerStorage} = {}) {
+export async function importSaves(source, destination, {readerStorage, maxDatabaseBytes = maxSaveDatabaseBytes} = {}) {
   const from = await realpath(source);
   const readerRows = await readReaderData(from);
   await mkdir(destination, {recursive: true});
@@ -354,7 +460,7 @@ export async function importSaves(source, destination, {readerStorage} = {}) {
 
   const incoming = await mkdtemp(join(to, '.incoming-'));
   try {
-    const copied = await snapshotSaves(from, incoming, true);
+    const copied = await snapshotSaves(from, incoming, {forImport:true, maxDatabaseBytes});
     const available = [];
     const skipped = [];
     for (const name of copied) {

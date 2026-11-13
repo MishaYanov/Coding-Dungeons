@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -27,7 +28,7 @@ async function directories(t) {
   const source = join(root, 'source');
   const destination = join(root, 'destination');
   await Promise.all([mkdir(source), mkdir(destination)]);
-  async function seed(file, name, id = name) {
+  async function seed(file, name, id = randomUUID()) {
     const store = await openStore({file: join(source, file)});
     openStores.push(store);
     store.createHero({id, name});
@@ -92,6 +93,75 @@ test('desktop imports into empty worlds and keeps occupied worlds intact', async
   assert.deepEqual(names(join(destination, rustName)), ['Imported Rust']);
   assert.deepEqual(names(join(destination, jsName)), ['Kept JS']);
   assert.deepEqual(await importSaves(source, destination), {imported: [], skipped: [rustName, jsName]});
+});
+
+test('desktop rejects a save whose committed WAL expands its database past the import limit', async (t) => {
+  const {source, destination, seed} = await directories(t);
+  await seed(rustName, 'Rhea', rustHero);
+  await seed(jsName, 'Jules', jsHero);
+  const file = join(source, jsName);
+  const maxDatabaseBytes = 256 * 1024;
+  const db = new DatabaseSync(file);
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint = 0;');
+    db.prepare('UPDATE heroes SET name = ? WHERE id = ?').run('a'.repeat(2 * maxDatabaseBytes), jsHero);
+    assert.ok((await stat(file)).size < maxDatabaseBytes);
+    assert.ok((await stat(`${file}-wal`)).size > maxDatabaseBytes);
+    await assert.rejects(importSaves(source, destination, {maxDatabaseBytes}), /javascript\.sqlite: SQLite save exceeds the size limit/);
+    await assert.rejects(stat(join(destination, rustName)), {code:'ENOENT'});
+    await assert.rejects(stat(join(destination, jsName)), {code:'ENOENT'});
+  } finally {
+    db.close();
+  }
+});
+
+test('desktop rejects invalid hero and combat fields before writing any world', async (t) => {
+  const {source, destination, seed} = await directories(t);
+  await seed(rustName, 'Rhea', rustHero);
+  const js = await seed(jsName, 'Jules', 'unsupported-id');
+  await assert.rejects(importSaves(source, destination), /Invalid hero record/);
+  await assert.rejects(stat(join(destination, rustName)), {code:'ENOENT'});
+
+  const file = join(source, jsName);
+  const db = new DatabaseSync(file);
+  try {
+    db.prepare('DELETE FROM heroes WHERE id = ?').run('unsupported-id');
+    js.createHero({id:jsHero, name:'Jules', oneLife:true});
+    db.prepare('UPDATE one_life_heroes SET hp = ? WHERE hero_id = ?').run(5.5, jsHero);
+    await assert.rejects(importSaves(source, destination), /Invalid One Life record/);
+    await assert.rejects(stat(join(destination, rustName)), {code:'ENOENT'});
+    db.prepare('UPDATE one_life_heroes SET hp = ? WHERE hero_id = ?').run(5, jsHero);
+    assert.deepEqual(await importSaves(source, destination), {imported:[rustName, jsName], skipped:[]});
+  } finally {
+    db.close();
+  }
+});
+
+test('desktop bounds individual response text and total responses before writing any world', async (t) => {
+  const {source, destination, seed} = await directories(t);
+  await seed(rustName, 'Rhea', rustHero);
+  await seed(jsName, 'Jules', jsHero);
+  const db = new DatabaseSync(join(source, jsName));
+  const addResponses = (count, bytes) => db.prepare(`WITH RECURSIVE rows(n) AS (
+    VALUES (1) UNION ALL SELECT n + 1 FROM rows WHERE n < ?
+  ) INSERT INTO responses (hero_id, page, prompt_id, value, feedback)
+    SELECT ?, n, 'notes', ?, 'Saved.' FROM rows`).run(count, jsHero, 'a'.repeat(bytes));
+  try {
+    addResponses(1, 64 * 1024 + 1);
+    await assert.rejects(importSaves(source, destination), /oversized save text in responses/);
+    await assert.rejects(stat(join(destination, rustName)), {code:'ENOENT'});
+    db.exec('DELETE FROM responses');
+    addResponses(10_001, 1);
+    await assert.rejects(importSaves(source, destination), /Too many saved responses or response bytes/);
+    db.exec('DELETE FROM responses');
+    addResponses(400, 48 * 1024);
+    await assert.rejects(importSaves(source, destination), /Too many saved responses or response bytes/);
+    await assert.rejects(stat(join(destination, rustName)), {code:'ENOENT'});
+    db.exec('DELETE FROM responses WHERE page > 10');
+    assert.deepEqual(await importSaves(source, destination), {imported:[rustName, jsName], skipped:[]});
+  } finally {
+    db.close();
+  }
 });
 
 test('desktop backup round-trips unsent drafts and reading position for imported heroes only', async (t) => {

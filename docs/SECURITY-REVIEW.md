@@ -1,11 +1,12 @@
 # Coding Dungeons security review
 
-Reviewed the Windows desktop build, the local browser development server, the save format, and the JavaScript, TypeScript, Rust, and Go grading paths on November 8, 2026.
+Reviewed the Windows desktop build, the local browser development server, the save format, and the JavaScript, TypeScript, Rust, and Go grading paths on November 8 and 13, 2026.
 
 | Finding | Impact | Change |
 | --- | --- | --- |
 | The installer toolchain used an affected archive extractor. | Upstream advisories cover extraction in the build environment. The extractor is a build dependency. | Updated Electron Forge and its archive and glob dependencies. The updated npm lockfile returned zero advisories at review time. |
 | Save import accepted a database based on the presence of a table name. | A selected file could install unexpected SQLite triggers or an incompatible schema and affect later saves. | Validate a private copy against the supported schemas before changing any live save. Migrate legacy saves in the private copy. Disable SQLite trusted schema. |
+| Save import accepted unbounded databases and progress data. | A selected backup could consume disk space or stall later progress reads. | Check database and journal sizes before staging and validate hero records and progress payloads before installation. |
 | A hint URL changed hero progress on GET. | A page on a sibling localhost origin could mark the active hero as assisted without going through the mutation guard. | Require POST, the local mutation header, a valid hero, and the expected origin for browser requests. |
 | Packaging copied most untracked files in the project folder. | A local backup or signing file placed in the project could be included in the distributed app. | Allow only the required application paths and check the separately bundled runtime for unexpected root entries, private files, and links. |
 | Go's generated verdict used a Boolean name shared with the submission's package. | The submission's package scope could change how the fixture recorded failure. | Use a numeric failure marker and dispatch cases by index without using submission-visible names for bounds checks. |

@@ -48,6 +48,7 @@ async function requireSigning() {
   if (!certificate && !thumbprint) {
     throw new Error('A release installer requires a Windows signing certificate. Configure FERRUM_WINDOWS_CERTIFICATE_THUMBPRINT or FERRUM_WINDOWS_CERTIFICATE_FILE.');
   }
+  if (certificate && thumbprint) throw new Error('Choose either a signing certificate file or a certificate thumbprint.');
   if (thumbprint && !/^[a-f0-9]{40}$/i.test(thumbprint)) {
     throw new Error('FERRUM_WINDOWS_CERTIFICATE_THUMBPRINT must contain 40 hexadecimal characters.');
   }
@@ -94,9 +95,10 @@ async function verifyWindowsFile(file) {
 async function verifyPackagedApplication(payload) {
   const directory = await mkdtemp(join(tmpdir(), 'coding-dungeons-signature-'));
   const entry = 'lib/net45/' + executableName + '.exe';
+  const updaterEntry = 'lib/net45/squirrel.exe';
   try {
     try {
-      await run('tar.exe', ['-xf', payload, '-C', directory, entry], {windowsHide: true, timeout: 120_000});
+      await run('tar.exe', ['-xf', payload, '-C', directory, entry, updaterEntry], {windowsHide: true, timeout: 120_000});
     } catch {
       throw new Error('The installer payload did not contain a readable application executable.');
     }
@@ -111,6 +113,7 @@ async function verifyPackagedApplication(payload) {
       throw new Error('Build the Windows package without FERRUM_DESKTOP_TEST_PACKAGE before making the installer.');
     }
     await verifyWindowsFile(executable);
+    await verifyWindowsFile(join(directory, updaterEntry));
   } finally {
     await rm(directory, {recursive: true, force: true});
   }

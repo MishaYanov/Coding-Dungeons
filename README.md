@@ -75,7 +75,7 @@ npm.cmd version patch --no-git-tag-version
 npm.cmd run desktop:make
 ```
 
-The release build requires a trusted Authenticode signing identity and access to an RFC 3161 timestamp server at build time. Set `FERRUM_WINDOWS_CERTIFICATE_THUMBPRINT` for a code-signing certificate in the current user's certificate store, or set `FERRUM_WINDOWS_CERTIFICATE_FILE` and, when needed, `FERRUM_WINDOWS_CERTIFICATE_PASSWORD` for an external PFX. Set `FERRUM_WINDOWS_SIGNTOOL` to the Windows SDK SignTool path if it is outside `PATH`. Keep signing credentials outside the project. For a private test build, set `FERRUM_ALLOW_UNSIGNED_INSTALLER=1` before running the maker. Its output is named `CodingDungeonsSetup-local.exe`.
+The release build requires a trusted Authenticode signing identity and access to an RFC 3161 timestamp server at build time. Set `FERRUM_WINDOWS_CERTIFICATE_THUMBPRINT` for a code-signing certificate in the current user's certificate store, or set `FERRUM_WINDOWS_CERTIFICATE_FILE` and, when needed, `FERRUM_WINDOWS_CERTIFICATE_PASSWORD` for an external PFX. Set `FERRUM_WINDOWS_SIGNTOOL` to the Windows SDK SignTool path if it is outside `PATH`. Keep signing credentials outside the project. For a private test build, set `FERRUM_ALLOW_UNSIGNED_INSTALLER=1` before running the maker. Its output is named `CodingDungeonsSetup-local.exe`. Installed copies use the bundled runtimes and work offline.
 
 Close the installed app and run `out\make\squirrel.windows\x64\CodingDungeonsSetup.exe`. Use a version higher than the installed one and keep the same app identity. The installer replaces the application files and uses the existing saves in `%APPDATA%\Coding Dungeons\state`. Build outputs and staged runtimes stay outside Git.
 
