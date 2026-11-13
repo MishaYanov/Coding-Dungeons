@@ -1,3 +1,5 @@
+[![Verify](https://github.com/MishaYanov/Coding-Dungeons/actions/workflows/verify.yml/badge.svg)](https://github.com/MishaYanov/Coding-Dungeons/actions/workflows/verify.yml)
+
 THE FERRUM EXPEDITION
 Interactive JavaScript, TypeScript, Rust, and Go campaigns
 
