@@ -5,10 +5,9 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './lib/store.mjs';
-import { grade, runnerStatus } from './lib/grader.mjs';
 import { encounters, evaluateStage, publicEncounter } from './lib/encounters.mjs';
 import { createWrittenGm } from './lib/written-gm.mjs';
-import { fixtureMetadata, presentWorkbenchRun, runCourseExercise, runLegacyRust, workbenchSummary } from './lib/workbench-service.mjs';
+import { fixtureMetadata, presentWorkbenchRun, runCourseExercise, workbenchSummary } from './lib/workbench-service.mjs';
 import { createStandaloneRunner } from './lib/standalone-runner.mjs';
 import javascriptSuites from './data/workbench/javascript.mjs';
 import typescriptSuites from './data/workbench/typescript.mjs';
@@ -221,9 +220,16 @@ function heroName(value) {
 
 const heroIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function cookieHero(request, cookie) {
+  return new RegExp(`(?:^|;\\s*)${cookie}=([a-f0-9-]{36})(?:;|$)`, 'i').exec(request.headers.cookie ?? '')?.[1];
+}
+
+function requestedHeroId(request, cookie) {
+  return request.headers['x-ferrum-hero'] ?? cookieHero(request, cookie);
+}
+
 async function requireHero(request, {cookie, store}) {
-  const id = request.headers['x-ferrum-hero'] ??
-    new RegExp(`(?:^|;\\s*)${cookie}=([a-f0-9-]{36})(?:;|$)`, 'i').exec(request.headers.cookie ?? '')?.[1];
+  const id = requestedHeroId(request, cookie);
   if (typeof id !== 'string' || !heroIdPattern.test(id) || !(await store.hero(id))) {
     throw new HttpError(401, 'Create or load a hero to save your expedition.');
   }
@@ -251,6 +257,17 @@ async function loadHero(request, response, world) {
   const hero = await world.store.hero(id);
   if (!hero) throw new HttpError(404, 'Hero not found.');
   selectHero(response, world, hero);
+}
+
+function deleteHero(request, response, {cookie, store}, id) {
+  if (!heroIdPattern.test(id)) throw new HttpError(400, 'Choose a saved hero.');
+  const deleted = store.deleteHero(id);
+  if (cookieHero(request, cookie) === id) {
+    response.setHeader('Set-Cookie', `${cookie}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);
+  }
+  // Reader draft and page keys use a hero ID without a world.
+  const clearReaderData = !worlds.some(world => world.store !== store && world.store.hero(id));
+  json(response, {deleted, clearReaderData});
 }
 
 async function profilePatch(request, response, world, heroId) {
@@ -501,7 +518,6 @@ function runWorldExercise(world, exercise, code, purpose, signal) {
         caseIds:fixtures.map(({id}) => id), signal});
       return presentWorkbenchRun(raw, fixtures);
     }
-    if (world.rust && !desktopToken) return runLegacyRust(grade, code, exercise, purpose, signal);
     return noRun('unavailable', desktopToken ? diagnostics.detail
       : `The local ${world.info.name} sandbox is unavailable. Your draft is saved.`);
   }, noRun('busy', 'The local evaluation queue is full. Try again in a moment.'), signal);
@@ -747,11 +763,15 @@ const server = createServer(async (request,response) => {
     const world = worldMap.get(request.headers['x-ferrum-world'] ?? 'rust');
     if (!world) throw new HttpError(404, 'World not found.');
     const {store} = world;
-    if (method === 'POST' || method === 'PATCH') {
+    if (method === 'POST' || method === 'PATCH' || method === 'DELETE') {
       const origin = request.headers.origin;
       if (request.headers['x-ferrum-request'] !== '1' || (origin && origin !== `http://${host}`)) {
         throw new HttpError(403, 'Open Ferrum locally to make changes.');
       }
+    }
+    if (method === 'DELETE') {
+      const heroRoute = path.match(/^\/api\/heroes\/([^/]+)$/);
+      if (heroRoute) return deleteHero(request, response, world, heroRoute[1]);
     }
     const sideQuest = sideQuestRoutes.get(path);
     if (sideQuest && (method === 'GET' || method === 'POST')) {
@@ -785,7 +805,7 @@ const server = createServer(async (request,response) => {
         const native = language === 'rust' || language === 'go';
         const diagnostics = native ? await standalone.diagnostics(language) : null;
         const available = diagnostics?.available ?? world.exerciseMap.size > 0;
-        const runner = available ? 'available' : world.rust && !desktopToken ? await runnerStatus() : 'unavailable';
+        const runner = available ? 'available' : 'unavailable';
         return json(response, {
           storage:store.label, runner,
           ...(desktopToken && diagnostics?.detail ? {runnerDetail:diagnostics.detail} : {}),
@@ -849,6 +869,14 @@ const server = createServer(async (request,response) => {
     if (error.code === 'DIAMOND_NOT_FOUND') return json(response, {error:error.message}, 404);
     if (error.code === 'DIAMOND_STAGE_INVALID') return json(response, {error:error.message}, 400);
     if (error.code === 'DIAMOND_STAGE_LOCKED') return json(response, {error:error.message}, 409);
+    if (error.code === 'ERR_SQLITE_ERROR' && error.errcode === 787) {
+      // A grading request may reach its final write after its hero was deleted.
+      const world = worldMap.get(request.headers['x-ferrum-world'] ?? 'rust');
+      const heroId = world && requestedHeroId(request, world.cookie);
+      if (typeof heroId === 'string' && heroIdPattern.test(heroId) && !world.store.hero(heroId)) {
+        return json(response, {error:'Hero not found.'}, 404);
+      }
+    }
     if (['HERO_FALLEN','COMBAT_SUBMISSION_CONFLICT','POTION_UNAVAILABLE','HEALTH_FULL'].includes(error.code)) {
       return json(response, {error:error.message}, 409);
     }

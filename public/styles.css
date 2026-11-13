@@ -653,10 +653,13 @@ dialog::backdrop { background: #050a10b8; }
 .one-life-option input { width: 1rem; height: 1rem; min-height: 0; accent-color: var(--copper); }
 .hero-list { display: grid; gap: 7px; max-height: min(290px, 43dvh); overflow: auto; }
 .hero-list > p { font-size: .83rem; }
+.hero-slot-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
 .hero-slot { display: flex; align-items: center; gap: 8px; text-align: left; justify-content: flex-start; width: 100%; padding: 7px 9px; }
 .hero-slot-copy { display: grid; min-width: 0; gap: 2px; }
 .hero-slot-copy strong { overflow-wrap: anywhere; }
 .hero-slot-meta { color: var(--muted); font-weight: 450; font-size: .72rem; }
+.hero-delete { color: var(--red); }
+.hero-delete-confirmation { display: grid; gap: 12px; }
 .hero-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; min-height: 28px; margin-top: 10px; }
 .sheet-dialog { width: min(595px, 100%); }
 .sheet-hero { display: grid; gap: 8px; padding: 14px; border: 1px solid #5f5146; border-radius: 10px; background: linear-gradient(130deg, #2c292a, #1b2d39); }

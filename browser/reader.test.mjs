@@ -20,7 +20,7 @@ async function startServer() {
   app = spawn(process.execPath, ['server.mjs'], {
     cwd: project,
     env: { ...process.env, PORT: '0', FERRUM_DB: join(scratch, 'browser.sqlite'),
-      DOCKER_CONTEXT: '', DOCKER_HOST: 'tcp://127.0.0.1:1' },
+      DUNGEONS_NATIVE_RUNNER_DIR: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
@@ -199,9 +199,10 @@ test('the JavaScript World Map opens the rate limiter design quest', async (t) =
 });
 
 test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs', async (t) => {
-  const page = await newPage(t, '#page=15', null);
-  await page.getByText('Your saved heroes will appear here.').waitFor();
-  await createHero(page, 'Keyboard Warden', 15);
+  const page = await newPage(t, '');
+  await createHero(page, 'Keyboard Warden', 1);
+  await jumpTo(page, 15);
+  await page.locator('#reader-viewport').focus();
   await page.keyboard.press('d');
   await openBookPage(page, 16);
   await page.keyboard.press('a');
@@ -227,6 +228,34 @@ test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs',
   await openBookPage(page, 6);
 });
 
+test('hero deletion can be canceled, and confirmed deletion survives reload', async (t) => {
+  const page = await newPage(t, '');
+  await createHero(page, 'Keeper of the Archive', 1);
+  await jumpTo(page, 15);
+  await page.getByRole('button', {name: 'Switch hero', exact: true}).click();
+  await createHero(page, 'Discarded Expedition', 1);
+  await page.getByRole('button', {name: 'Switch hero', exact: true}).click();
+  const picker = page.getByRole('dialog', {name: 'Choose your hero'});
+  const remove = picker.getByRole('button', {name: 'Delete hero Discarded Expedition', exact: true});
+  await remove.click();
+  const confirmation = page.getByRole('dialog', {name: 'Delete hero?'});
+  await confirmation.getByText('Discarded Expedition', {exact: true}).waitFor();
+  await confirmation.getByRole('button', {name: 'Cancel', exact: true}).click();
+  await confirmation.waitFor({state: 'hidden'});
+  assert.equal(await remove.count(), 1);
+
+  await remove.click();
+  await confirmation.getByRole('button', {name: 'Delete hero', exact: true}).click();
+  await picker.getByText('Deleted Discarded Expedition.', {exact: true}).waitFor();
+  assert.equal(await remove.count(), 0);
+  assert.equal(await page.locator('#header-callsign').textContent(), 'Explorer');
+  await page.reload();
+  await picker.getByRole('button', {name: /^Keeper of the Archive/}).waitFor();
+  assert.equal(await remove.count(), 0);
+  await picker.getByRole('button', {name: /^Keeper of the Archive/}).click();
+  await openBookPage(page, 15);
+});
+
 test('a hero switch preserves the outgoing page and restores the right answer in a fresh context', async (t) => {
   const checkpoint = pages.find((page) => page.prompts.some((prompt) => prompt.id === 'checkpoint-1'));
   const choice = checkpoint.prompts.find((prompt) => prompt.id === 'checkpoint-1');
@@ -245,7 +274,7 @@ test('a hero switch preserves the outgoing page and restores the right answer in
   await createHero(page, 'Other Scout', 1);
 
   const fresh = await newPage(t, '');
-  await fresh.getByRole('button', { name: /Choice Scout/ }).click();
+  await fresh.getByRole('button', { name: /^Choice Scout/ }).click();
   await openBookPage(fresh, checkpoint.page + 1);
   await fresh.keyboard.press('a');
   await openBookPage(fresh, checkpoint.page);

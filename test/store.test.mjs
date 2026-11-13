@@ -35,6 +35,40 @@ const attempt = {
   code: 'submitted Rust', verdict: 'pass', output: 'completed test report', passed: 3, failed: 0,
 };
 
+test('deleting a hero cascades through their saves and leaves another hero intact', async t => {
+  const file = await fixture(t);
+  const store = await openStore({ file });
+  try {
+    const removed = store.createHero({ id: randomUUID(), name: 'Removed hero', oneLife: true });
+    const retained = store.createHero({ id: randomUUID(), name: 'Retained hero' });
+    store.saveLevel(removed.id, 1, { scout: true });
+    store.startAssessment(removed.id, 25, 'training-1-3', 'Draft');
+    store.recordAttempt(removed.id, { ...attempt, purpose: 'submit', mode: 'hard', runId: randomUUID() });
+    store.recordEncounterStage(removed.id, 'refactoring-relay', 'characterize', { correct: true });
+    store.startDiamondEncounter(removed.id, 18);
+    store.setWorkbenchMode(removed.id, 1, 'hard');
+    const id = randomUUID();
+    store.settleCombat(removed.id, { id, fingerprint: id, wrong: false, rewardKey: 'encounter:example' });
+    store.saveResponse(retained.id, 1, 'notes', 'Keep this', 'Saved');
+
+    assert.equal(store.deleteHero(removed.id), true);
+    assert.equal(store.deleteHero(removed.id), false);
+    assert.equal(store.hero(removed.id), undefined);
+    assert.deepEqual(store.heroes().map(({id}) => id), [retained.id]);
+    assert.equal(store.response(retained.id, 1, 'notes').value, 'Keep this');
+    inDatabase(file, db => {
+      const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name <> 'heroes'").all();
+      for (const {name} of tables) {
+        const removedRow = db.prepare(`SELECT 1 FROM ${name} WHERE hero_id = ?`).get(removed.id);
+        assert.equal(removedRow, undefined, `${name} retained a deleted hero's record`);
+      }
+      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+    });
+  } finally {
+    store.close();
+  }
+});
+
 test('Workbench examples cannot clear a creature and replayed submissions award Forge once', async t => {
   const file = await fixture(t);
   const store = await openStore({ file });

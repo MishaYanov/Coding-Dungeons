@@ -39,6 +39,9 @@ function registerReaderActions(window, origin, directory, links) {
   ipcMain.on('ferrum-reader:set', (event, key, value) => {
     event.returnValue = isReader(event) && readerStorage.set(key, value);
   });
+  ipcMain.on('ferrum-reader:remove-hero', (event, id) => {
+    event.returnValue = isReader(event) && readerStorage.removeHero(id);
+  });
   ipcMain.on('ferrum-reader:open-link', (event, url) => {
     if (!isReader(event) || !links.has(url)) return;
     void shell.openExternal(url).catch(() => {

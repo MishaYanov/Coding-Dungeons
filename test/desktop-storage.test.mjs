@@ -51,3 +51,20 @@ test('desktop storage accepts only bounded reader keys and values', async (t) =>
   assert.equal(storage.set(drafts, 'x'.repeat(2 * 1024 * 1024 + 1)), false);
   assert.deepEqual((await readdir(folder)).sort(), initialFiles);
 });
+
+test('deleting a hero removes only their desktop drafts and reading position', async (t) => {
+  const {open} = await directory(t);
+  const storage = open();
+  const otherDraft = 'ferrum-prompt-drafts-v2:22222222-bbbb-4bbb-bbbb-222222222222';
+  storage.set(drafts, '{"1:example":"draft"}');
+  storage.set(page, '2');
+  storage.set(otherDraft, '{"1:example":"keep"}');
+  assert.equal(storage.removeHero('../../state'), false);
+  assert.equal(storage.get(drafts), '{"1:example":"draft"}');
+  assert.equal(storage.removeHero(hero), true);
+  assert.equal(storage.removeHero(hero), true);
+  const reopened = open();
+  assert.equal(reopened.get(drafts), null);
+  assert.equal(reopened.get(page), null);
+  assert.equal(reopened.get(otherDraft), '{"1:example":"keep"}');
+});

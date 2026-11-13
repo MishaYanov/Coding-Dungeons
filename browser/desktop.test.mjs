@@ -208,8 +208,16 @@ test('Windows package protects its engine, runs the required Workbenches, and re
     const reopened = await application.firstWindow();
     const reopenedWorlds = await worldPicker(reopened);
     await reopenedWorlds.getByRole('link', {name: /^World 1 JavaScript\b/}).click();
-    await reopened.getByRole('button', {name: /Desktop smoke hero/}).click();
+    await reopened.getByRole('button', {name: /^Desktop smoke hero/}).click();
     await reopened.getByRole('button', {name: 'Character sheet'}).click();
     await reopened.getByRole('dialog', {name: 'Character sheet'})
       .getByText('Diamonds collected · 3', {exact: true}).waitFor();
+    await reopened.keyboard.press('Escape');
+    await reopened.getByRole('button', {name: 'Switch hero', exact: true}).click();
+    const picker = reopened.getByRole('dialog', {name: 'Choose your hero'});
+    await picker.getByRole('button', {name: 'Delete hero Desktop smoke hero', exact: true}).click();
+    await reopened.getByRole('dialog', {name: 'Delete hero?'}).getByRole('button', {name: 'Delete hero', exact: true}).click();
+    await picker.getByText('Deleted Desktop smoke hero.', {exact: true}).waitFor();
+    await reopened.reload();
+    await picker.getByText('Your saved heroes will appear here.', {exact: true}).waitFor();
   });

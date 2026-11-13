@@ -6,16 +6,16 @@ Builds the Windows x64 Rust, Go, and Wasmtime assets for the desktop package.
 The Rust 1.99.1 MSVC toolchain directory with the wasm32-wasip1 target installed.
 
 .PARAMETER GoToolchain
-The Go 1.25.1 Windows amd64 installation directory.
+The Go 1.27.4 Windows amd64 installation directory from the official verified distribution.
 
 .PARAMETER ArtifactSource
 A local folder containing wasmtime.50.0.1.nupkg, the Microsoft.NETCore.App.Runtime.win-x64
-and Microsoft.NETCore.App.Host.win-x64 packages at 8.0.33, and wasmtime-dotnet-LICENSE
+and Microsoft.NETCore.App.Host.win-x64 packages at 10.0.15, and wasmtime-dotnet-LICENSE
 from Wasmtime .NET commit 4aac1a5958f4da2dadca4ae84e16004516372dd6. Also provide
 the pinned LLVM, zlib, and zstd archives and LLVM license from build-wasm-linker.ps1.
 
 .NOTES
-Use Visual Studio C++ Build Tools, CMake, Ninja, and a .NET SDK that can publish net8.0 for win-x64. The script verifies the input package
+Use Visual Studio C++ Build Tools, CMake, Ninja, and the .NET 10 SDK. The script verifies the input package
 hashes and publishes from the supplied offline source. Stage these assets before packaging.
 The installed engine still requires the broker's Windows isolation probe to succeed.
 #>
@@ -80,16 +80,17 @@ if ($LASTEXITCODE -ne 0 -or $rustVersion -notmatch '^rustc 1\.99\.1(?: |$)') {
     throw 'Supply the pinned Rust 1.99.1 Windows x64 MSVC toolchain.'
 }
 $goVersion = (& (Join-Path $goRoot 'bin/go.exe') version) -join ' '
-if ($LASTEXITCODE -ne 0 -or $goVersion -ne 'go version go1.25.1 windows/amd64') {
-    throw 'Supply the pinned Go 1.25.1 Windows amd64 toolchain.'
+if ($LASTEXITCODE -ne 0 -or $goVersion -ne 'go version go1.27.4 windows/amd64') {
+    throw 'Supply the pinned Go 1.27.4 Windows amd64 toolchain.'
 }
 $rustDrivers = @(Get-ChildItem -LiteralPath (Join-Path $rustRoot 'bin') -File -Filter 'rustc_driver-*.dll')
 if ($rustDrivers.Count -ne 1) { throw 'Expected one Rust compiler driver DLL.' }
 
-$runtimePackName = 'microsoft.netcore.app.runtime.win-x64.8.0.33.nupkg'
+$dotnetRuntimeVersion = '10.0.15'
+$runtimePackName = "microsoft.netcore.app.runtime.win-x64.$dotnetRuntimeVersion.nupkg"
 $packageHashes = @{
-    $runtimePackName = '82B2C1AD62B334BA0DE2E7C2D957D9BC8045FD1B643A9B119087D4A0A02F5E1C'
-    'microsoft.netcore.app.host.win-x64.8.0.33.nupkg' = '427C42A3955B5756CB79D0AACAF9B5936A3DAAB51976255BED621E697B4C3251'
+    $runtimePackName = '7423F58917342B9E4BF276FB164D5726D2C90FE2FE989C552B9E39056256A035'
+    "microsoft.netcore.app.host.win-x64.$dotnetRuntimeVersion.nupkg" = '41D6989224D9E273880072041C0FA7A2D8C92F1CF11E989E8967D3D589A066AD'
     'wasmtime.50.0.1.nupkg' = '661228005770C4A0E1435E1A606A52557F3FD1FDA3993927559B40A900867208'
     'wasmtime-dotnet-LICENSE' = 'A6C48161A09ACC75A0E25503BAB66A731EB5FBA5392ED4BB4743E4BA5085327A'
 }
@@ -131,7 +132,7 @@ try {
         $publishArgs = @(
             'publish', (Join-Path $workerSource 'WasmWorker.csproj'), '-c', 'Release',
             '-r', 'win-x64', '--self-contained', 'true', '--output', $workerDestination,
-            '--source', $artifacts, '-p:RuntimeFrameworkVersion=8.0.33',
+            '--source', $artifacts, "-p:RuntimeFrameworkVersion=$dotnetRuntimeVersion",
             '-p:DisableTransitiveFrameworkReferenceDownloads=true', '-p:NuGetAudit=false',
             '-p:DebugType=None', '-p:DebugSymbols=false'
         )

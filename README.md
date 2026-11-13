@@ -46,7 +46,7 @@ Open [the reader](http://127.0.0.1:4173/), choose a world, and create or load a 
 
 Heroes and answers are saved in local SQLite databases under `state/`. The reader includes built book assets, so starting it requires no PDF build.
 
-JavaScript and TypeScript grade locally in the browser build's Node engine. Rust can also use a local Linux Docker engine and the `rust:1.99.1-slim-bookworm` image in that build. Go uses the staged Windows sandbox. For optional developer model paths, see [.env.example](.env.example).
+JavaScript and TypeScript grade locally in the browser build's Node engine. Rust and Go use the staged Windows sandbox. To enable both in the browser build, set `DUNGEONS_NATIVE_RUNNER_DIR` to the `desktop/runtime/standalone-runner` directory after staging it. For optional developer model paths, see [.env.example](.env.example).
 
 ## Develop
 
@@ -57,9 +57,11 @@ npm run test:browser
 npm run test:book
 ```
 
-The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go reference checks use Go 1.25.1. See the [standalone app PRD](docs/CODING-DUNGEONS-PRD.md) for the release test matrix.
+The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go reference checks use Go 1.27.4. See the [standalone app PRD](docs/CODING-DUNGEONS-PRD.md) for the release test matrix.
 
 On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1` and follow the [native runner build instructions](native/README.md) if `desktop/runtime` is missing. Keep those staged files for later builds. Install dependencies with `npm.cmd ci` on a fresh checkout.
+
+For the desktop smoke test, set `FERRUM_DESKTOP_TEST_PACKAGE=1` before running `npm.cmd run desktop:package` and `npm.cmd run test:desktop`. With the full runtime staged, set `FERRUM_DESKTOP_REQUIRE_NATIVE=1` and `FERRUM_DESKTOP_REQUIRE_GM=1` to exercise all four runners and the offline GM. Clear the test-package variable before making an installer.
 
 To build a new update from an already released version, bump the version and make a Windows installer. Run the following in PowerShell from the project folder.
 
@@ -72,6 +74,8 @@ $env:SQUIRREL_TEMP = $installerTemp
 npm.cmd version patch --no-git-tag-version
 npm.cmd run desktop:make
 ```
+
+The release build requires a trusted Authenticode signing identity and access to an RFC 3161 timestamp server at build time. Set `FERRUM_WINDOWS_CERTIFICATE_THUMBPRINT` for a code-signing certificate in the current user's certificate store, or set `FERRUM_WINDOWS_CERTIFICATE_FILE` and, when needed, `FERRUM_WINDOWS_CERTIFICATE_PASSWORD` for an external PFX. Set `FERRUM_WINDOWS_SIGNTOOL` to the Windows SDK SignTool path if it is outside `PATH`. Keep signing credentials outside the project. For a private test build, set `FERRUM_ALLOW_UNSIGNED_INSTALLER=1` before running the maker. Its output is named `CodingDungeonsSetup-local.exe`.
 
 Close the installed app and run `out\make\squirrel.windows\x64\CodingDungeonsSetup.exe`. Use a version higher than the installed one and keep the same app identity. The installer replaces the application files and uses the existing saves in `%APPDATA%\Coding Dungeons\state`. Build outputs and staged runtimes stay outside Git.
 

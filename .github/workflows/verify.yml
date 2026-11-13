@@ -29,19 +29,27 @@ jobs:
           cache-dependency-path: requirements-book.txt
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25.1"
+          go-version: "1.27.4"
           cache: false
       - name: Install dependencies
         run: |
           npm ci
           python -m pip install -r requirements-book.txt
           rustup show
+      - name: Check npm advisories
+        run: npm audit --audit-level=high
       - name: Test the reader
         run: npm test
       - name: Test browser journeys
         run: |
           npx playwright-core install chromium
           npm run test:browser
+      - name: Test packaged Windows desktop
+        env:
+          FERRUM_DESKTOP_TEST_PACKAGE: "1"
+        run: |
+          npm run desktop:package
+          npm run test:desktop
       - name: Run Rust examples
         run: npm run test:book
       - name: Check book assets

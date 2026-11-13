@@ -3,6 +3,9 @@
 !.env.example
 .idea/
 .vscode/
+*.pfx
+*.p12
+*.key
 node_modules/
 state/
 *.db

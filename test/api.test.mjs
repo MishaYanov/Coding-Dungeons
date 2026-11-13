@@ -23,9 +23,7 @@ async function start() {
     ...process.env,
     PORT: '0',
     FERRUM_DB: database,
-    // The HTTP suite is deterministic and never invokes the Docker engine.
-    DOCKER_CONTEXT: '',
-    DOCKER_HOST: 'tcp://127.0.0.1:2375',
+    DUNGEONS_NATIVE_RUNNER_DIR: '',
   };
   child = spawn(process.execPath, ['server.mjs'], {
     cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
@@ -616,6 +614,40 @@ test('offline grading validates exercise binding and saves the submission withou
   assert.equal(progress.responses[0].value, body.code);
   assert.deepEqual(progress.levels, []);
   assert.deepEqual(progress.attempts, []);
+});
+
+test('deleting a hero is guarded, world scoped, and preserves a shared reader ID', async () => {
+  const {hero} = await createHero('Temporary Delete Hero');
+  const endpoint = `/api/heroes/${hero.id}`;
+  const guarded = {method: 'DELETE', headers: mutationHeaders};
+  const {dir, name, ext} = parse(database);
+  const javascript = new DatabaseSync(join(dir, `${name}.javascript${ext}`));
+  try {
+    javascript.prepare('INSERT INTO heroes (id, name, name_key, updated_at) VALUES (?, ?, ?, ?)')
+      .run(hero.id, 'Retained JS Hero', 'retained js hero', new Date().toISOString());
+    await request('/api/answers', {
+      method: 'POST', hero, body: {page: 1, promptId: 'notes', value: 'Remove this answer'},
+    });
+    await request(endpoint, {method: 'DELETE', status: 403});
+    await request(endpoint, {
+      ...guarded, headers: {...mutationHeaders, Origin: 'https://outside.invalid'}, status: 403,
+    });
+    await request('/api/heroes/not-a-uuid', {...guarded, status: 400});
+    const {payload: removed, response} = await request(endpoint, {
+      ...guarded, headers: {...mutationHeaders, Origin: base, Cookie: `ferrum_hero=${hero.id}`},
+    });
+    assert.deepEqual(removed, {deleted: true, clearReaderData: false});
+    assert.match(response.headers.get('Set-Cookie'), /^ferrum_hero=; Path=\/; Max-Age=0; HttpOnly; SameSite=Strict$/);
+    await request('/api/progress', {hero, status: 401});
+    await request('/api/heroes/load', {method: 'POST', body: {id: hero.id}, status: 404});
+    assert.deepEqual((await request(endpoint, guarded)).payload, {deleted: false, clearReaderData: false});
+    const {payload: other} = await request('/api/progress', {hero, headers: javascriptWorld});
+    assert.equal(other.profile.callsign, 'Retained JS Hero');
+    const {payload: final} = await request(endpoint, {...guarded, headers: {...mutationHeaders, ...javascriptWorld}});
+    assert.deepEqual(final, {deleted: true, clearReaderData: true});
+  } finally {
+    javascript.close();
+  }
 });
 
 test('saved answers get the current edition feedback without losing the submitted value', async () => {

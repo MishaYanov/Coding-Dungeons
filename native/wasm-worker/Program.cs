@@ -17,7 +17,8 @@ try
 {
     var artifact = new FileInfo(args[0]);
     if (!artifact.Exists || artifact.Length < 8 || artifact.Length > artifactLimit) return invalidArtifact;
-    using var config = new Config().WithFuelConsumption(true).WithWasmThreads(false);
+    // Explicit Wasm checks avoid hardware trap recovery through Windows shadow stacks.
+    using var config = new Config().WithFuelConsumption(true).WithWasmThreads(false).WithSignalsBasedTraps(false);
     using var engine = new Engine(config);
     using var module = WasmModule.FromFile(engine, artifact.FullName);
     using var linker = new Linker(engine);

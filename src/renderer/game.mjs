@@ -34,6 +34,17 @@ function writeLocal(key, value) {
   }
 }
 
+function removeReaderData(id) {
+  try {
+    if (window.codingDungeonsStorage) return window.codingDungeonsStorage.removeHero(id);
+    localStorage.removeItem(`${draftKey}:${id}`);
+    localStorage.removeItem(`${lastPageKey}:${id}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readDrafts(hero) {
   try {
     const value = JSON.parse(readLocal(`${draftKey}:${hero.id}`) || '{}');
@@ -378,6 +389,40 @@ export function createGame() {
     }
   }
 
+  async function deleteHero(id) {
+    if (!game.world || game.switchingHero) throw new Error('Wait for the hero picker to finish.');
+    const world = game.world;
+    update({ switchingHero: true });
+    try {
+      const { deleted, clearReaderData } = await api(`/api/heroes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (savedHero(world) === id) {
+        manualHeroSelection = true;
+        rememberHero(world, null);
+      }
+      if (game.hero?.id === id) {
+        manualHeroSelection = true;
+        clearTimeout(toastTimer);
+        pageRequest++;
+        progressRequest++;
+        combatVersion = 0;
+        pendingCombat = null;
+        const url = new URL(location.href);
+        url.searchParams.set('world', world.id);
+        url.hash = '';
+        history.replaceState(null, '', url);
+        update({
+          ...emptyProgress(), hero: null, drafts: new Map(), profile: { callsign: 'Explorer', path: '' },
+          combat: null, combatNotice: '', potionBusy: false, diamond: null, diamonds: 0,
+          diamondStarting: false, diamondFocus: false, page: null, pageError: null, ready: false,
+          loading: false, dialog: 'hero', toast: '', readerMessage: 'Choose a hero to open the campaign book.',
+        });
+      }
+      return { deleted, readerDataCleared: !clearReaderData || removeReaderData(id) };
+    } finally {
+      update({ switchingHero: false });
+    }
+  }
+
   async function saveProfile(callsign, path) {
     const hero = game.hero;
     const result = await api('/api/profile', { hero, method: 'PATCH', body: { callsign, path } });
@@ -433,7 +478,7 @@ export function createGame() {
     },
     actions: {
       api, boot, isCurrentHero, submitExpedition, persistDraft, clearDraft, refreshProgress, setMode, recordResponse,
-      openPage, loadPage, readHash, changeZoom, openDialog, closeDialog, selectHero, saveProfile,
+      openPage, loadPage, readHash, changeZoom, openDialog, closeDialog, selectHero, deleteHero, saveProfile,
       drinkPotion, startDiamond, setDiamond, toast,
     },
   };

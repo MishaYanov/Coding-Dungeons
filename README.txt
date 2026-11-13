@@ -33,10 +33,9 @@ notes. Compare your draft with the debrief, then mark
 Forge self-review in the Level checkpoint. The field kit includes examples
 and starters you can try with Node.js, the TypeScript compiler, or Go.
 
-For automated Rust grading, start Docker Desktop in Linux container mode
-or start a local Linux Docker engine, then obtain the compiler image.
-
-  docker pull rust:1.99.1-slim-bookworm
+For automated Rust and Go grading in the browser development build, stage
+the Windows runtimes as described in native/README.md and set
+DUNGEONS_NATIVE_RUNNER_DIR to the staged standalone-runner directory.
 
 Reload the reader to refresh the runner status. The book, choices, and
 draft saving work while the Rust runner is offline.
@@ -47,8 +46,8 @@ the tests. Compiler diagnostics, failed assertions, and pass counts appear
 beside the code. A successful run awards Forge for that level. Other code
 cards are scratchpads. On a Rust level without tests, use Forge self-review.
 
-Each grading attempt runs in a short-lived local Docker container with
-networking disabled and bounded resources. The app listens on loopback.
+The Rust and Go runner uses Windows AppContainer and executes the
+compiled Wasm with bounded resources. The app listens on loopback.
 The GM is designed for personal practice on this device. Written answers
 are saved with reference feedback for your own review.
 

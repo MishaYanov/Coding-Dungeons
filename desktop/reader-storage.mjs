@@ -30,6 +30,7 @@ export function openReaderStorage(directory) {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `);
   const restore = db.prepare('INSERT INTO reader_values (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING');
+  const remove = db.prepare('DELETE FROM reader_values WHERE key IN (?, ?)');
   return {
     get(key) {
       if (typeof key !== 'string' || !readerKey.test(key)) return null;
@@ -43,6 +44,15 @@ export function openReaderStorage(directory) {
       if (!validValue(key, value)) return false;
       try {
         write.run(key, value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    removeHero(id) {
+      if (!isReaderHeroId(id)) return false;
+      try {
+        remove.run(`ferrum-prompt-drafts-v2:${id}`, `ferrum-last-page-v2:${id}`);
         return true;
       } catch {
         return false;

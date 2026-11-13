@@ -43,7 +43,7 @@ async function verdict(path, index) {
   }
 }
 
-test('the real Wasmtime worker distinguishes return, early exit, and fuel exhaustion', { skip: !worker }, async t => {
+test('the real Wasmtime worker distinguishes return, early exit, hardware traps, and fuel exhaustion', { skip: !worker }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'coding-dungeons-wasm-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const passing = join(directory, 'return.wasm');
@@ -53,6 +53,9 @@ test('the real Wasmtime worker distinguishes return, early exit, and fuel exhaus
   const exiting = join(directory, 'exit.wasm');
   await writeFile(exiting, fixture([0x41, 0, 0x10, 0, 0x41, 1], true));
   assert.equal(await verdict(exiting, 0), 10);
+  const trapping = join(directory, 'trap.wasm');
+  await writeFile(trapping, fixture([0x00]));
+  assert.equal(await verdict(trapping, 0), 10);
   const spinning = join(directory, 'spin.wasm');
   await writeFile(spinning, fixture([0x03, 0x40, 0x0c, 0, 0x0b, 0x41, 1]));
   assert.equal(await verdict(spinning, 0), 11);

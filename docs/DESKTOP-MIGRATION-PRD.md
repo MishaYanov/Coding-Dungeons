@@ -13,7 +13,7 @@ The first desktop release uses **React with TypeScript and Vite** for the reader
 
 ## Starting point
 
-The current app has 84 levels across four worlds. JavaScript, TypeScript, and Go have 14 each. Rust has 42. The built content includes 718 book page images, four PDFs, and four field-kit ZIPs. A local Node server serves the reader and stores progress in separate SQLite databases per world. The existing Canvas renderer animates the creatures, and the Rust grader runs in an optional local Linux Docker engine. [Project README](../README.md) · [Book assets and build](BOOK-BUILD.md) · [Grader implementation](../lib/grader.mjs)
+The current app has 84 levels across four worlds. JavaScript, TypeScript, and Go have 14 each. Rust has 42. The built content includes 718 book page images, four PDFs, and four field-kit ZIPs. A local Node server serves the reader and stores progress in separate SQLite databases per world. The Canvas renderer animates the creatures. Rust grading uses the Windows sandbox. [Project README](../README.md) · [Book assets and build](BOOK-BUILD.md) · [Grader implementation](../lib/standalone-runner.mjs)
 
 ## Framework choice
 

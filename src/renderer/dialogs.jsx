@@ -103,17 +103,21 @@ function WorldPicker({ game, actions }) {
   );
 }
 
-function HeroSlot({ slot, hero, paths, busy, load }) {
+function HeroSlot({ slot, hero, paths, busy, load, confirmDelete }) {
   const name = slot.name || 'Explorer';
   const active = slot.id === hero?.id;
   const pathLabel = paths.find(({ id }) => id === slot.path)?.name || 'Open expedition';
   const survival = slot.combat?.oneLife ? (slot.combat.fallen ? 'One Life · Fallen' : 'One Life') : '';
   const labels = ['Page ' + (pageNumber(slot.lastPage) || 1), pathLabel, survival, active && 'Current hero'];
   return (
-    <button type="button" className="button hero-slot" data-hero-id={slot.id} disabled={busy || active} onClick={() => load(slot.id)}>
-      <span className="profile-mark" aria-hidden="true">{[...name][0].toUpperCase()}</span>
-      <span className="hero-slot-copy"><strong>{name}</strong><span className="hero-slot-meta">{labels.filter(Boolean).join(' · ')}</span></span>
-    </button>
+    <div className="hero-slot-row">
+      <button type="button" className="button hero-slot" data-hero-id={slot.id} disabled={busy || active} onClick={() => load(slot.id)}>
+        <span className="profile-mark" aria-hidden="true">{[...name][0].toUpperCase()}</span>
+        <span className="hero-slot-copy"><strong>{name}</strong><span className="hero-slot-meta">{labels.filter(Boolean).join(' · ')}</span></span>
+      </button>
+      <button type="button" className="button button-quiet hero-delete" aria-label={`Delete hero ${name}`}
+        disabled={busy} onClick={() => confirmDelete(slot)}>Delete</button>
+    </div>
   );
 }
 
@@ -128,6 +132,8 @@ function HeroPicker({ game, actions }) {
   const [oneLife, setOneLife] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState({ copy: '', error: false });
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
   const nameInput = useRef(null);
   const { api } = actions;
 
@@ -160,6 +166,31 @@ function HeroPicker({ game, actions }) {
     }
   }
 
+  function confirmDelete(slot) {
+    setDeleteError('');
+    setDeleteTarget(slot);
+  }
+
+  async function deleteSelectedHero() {
+    if (busy || !deleteTarget) return;
+    setBusy(true);
+    setDeleteError('');
+    try {
+      const { deleted, readerDataCleared } = await actions.deleteHero(deleteTarget.id);
+      setHeroes((slots) => slots.filter(({ id }) => id !== deleteTarget.id));
+      setDeleteTarget(null);
+      const copy = deleted ? `Deleted ${deleteTarget.name}.` : `${deleteTarget.name} was already removed.`;
+      setFeedback({
+        copy: readerDataCleared ? copy : `${copy} Local drafts could not be cleared.`,
+        error: !readerDataCleared,
+      });
+    } catch (error) {
+      setDeleteError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function createHero(event) {
     event.preventDefault();
     if (!heroes && !loadError) return;
@@ -173,7 +204,7 @@ function HeroPicker({ game, actions }) {
     void select('/api/heroes', { name: trimmed, path, oneLife }, preferredPage);
   }
 
-  return (
+  return (<>
     <Modal id="hero" title="Choose your hero" caption={'World ' + world.number + ' · ' + world.name} className="hero-dialog"
       emblem description="hero-summary" closeLabel="Close hero selection" closeId="close-heroes" blocked={busy}
       close={hero ? actions.closeDialog : undefined}>
@@ -188,7 +219,8 @@ function HeroPicker({ game, actions }) {
                 setRetry((count) => count + 1);
               }}>Try again</button></> : !heroes ? <p className="muted">Loading saved heroes…</p> :
                 !heroes.length ? <p className="muted">Your saved heroes will appear here.</p> : heroes.map((slot) =>
-                  <HeroSlot key={slot.id} slot={slot} hero={hero} paths={paths} busy={busy} load={(id) => select('/api/heroes/load', { id })} />)}
+                  <HeroSlot key={slot.id} slot={slot} hero={hero} paths={paths} busy={busy}
+                    load={(id) => select('/api/heroes/load', { id })} confirmDelete={confirmDelete} />)}
             </div>
           </section>
           <form id="hero-form" className="hero-section" aria-labelledby="hero-create-title" onSubmit={createHero}>
@@ -215,7 +247,22 @@ function HeroPicker({ game, actions }) {
         </div>
       </div>
     </Modal>
-  );
+    {deleteTarget && <Modal id="delete-hero" title="Delete hero?" caption={world.name} className="profile-dialog"
+      description="delete-hero-description" blocked={busy} close={() => setDeleteTarget(null)} closeLabel="Close delete confirmation">
+      <div className="dialog-content hero-delete-confirmation">
+        <p id="delete-hero-description">
+          Permanently delete <strong>{deleteTarget.name}</strong> and their saved progress, answers, and drafts in this world?
+        </p>
+        <div className="form-actions">
+          <button type="button" className="button" disabled={busy} onClick={() => setDeleteTarget(null)}>Cancel</button>
+          <button type="button" className="button hero-delete" disabled={busy} onClick={deleteSelectedHero}>
+            {busy ? 'Deleting…' : 'Delete hero'}
+          </button>
+        </div>
+        {deleteError && <p className="inline-status" role="alert" data-error="true">{deleteError}</p>}
+      </div>
+    </Modal>}
+  </>);
 }
 
 function HeroProfile({ game, actions }) {
