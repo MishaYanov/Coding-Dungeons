@@ -59,6 +59,8 @@ npm run test:book
 
 The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go reference checks use Go 1.27.4. See the [standalone app PRD](docs/CODING-DUNGEONS-PRD.md) for the release test matrix.
 
+The GitHub Actions **Verify** workflow runs on pushes to `main` and on pull requests. After the workflow is on GitHub's default branch, you can also start it from **Actions → Verify → Run workflow**. It checks npm advisories, runs the app and book tests, and smoke-tests an unpacked Windows build.
+
 On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1` and follow the [native runner build instructions](native/README.md) if `desktop/runtime` is missing. Keep those staged files for later builds. Install dependencies with `npm.cmd ci` on a fresh checkout.
 
 For the desktop smoke test, set `FERRUM_DESKTOP_TEST_PACKAGE=1` before running `npm.cmd run desktop:package` and `npm.cmd run test:desktop`. With the full runtime staged, set `FERRUM_DESKTOP_REQUIRE_NATIVE=1` and `FERRUM_DESKTOP_REQUIRE_GM=1` to exercise all four runners and the offline GM. Clear the test-package variable before making an installer.
