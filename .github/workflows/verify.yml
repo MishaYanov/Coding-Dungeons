@@ -54,6 +54,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:browser
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run mobile:stage-rust
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:FERRUM_MOBILE_REQUIRE_RUST = '1'
+          npm run test:mobile:rust
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:mobile
       - name: Test packaged Windows desktop
         env:

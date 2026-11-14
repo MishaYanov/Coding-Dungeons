@@ -87,7 +87,7 @@ For a physical phone, serve `dist/mobile/` at the root of an HTTPS origin. Open 
 | --- | --- |
 | JavaScript | QuickJS runs the supplied tests inside a Web Worker. |
 | TypeScript | The pinned TypeScript compiler checks the submission and type contracts. QuickJS runs the emitted JavaScript against the suite. |
-| Rust | The book, written prompts, and code drafts work on the phone. Automated Rust tests use the Windows edition's bundled compiler. |
+| Rust | With the optional experimental pack, Rust 1.96.0-dev compiles submissions and tests locally to WebAssembly. Each test uses a fresh WASI instance. The book and desktop target remain Rust 1.99.1; newer features may be unavailable on mobile. Without the pack, books, prompts and drafts remain available. |
 | Go | With the optional pack, the pinned Go 1.27.4 compiler and linker run as WebAssembly in a worker. The linked program runs against the suite with a fresh WASI instance for each test. |
 
 On the build machine, install Go 1.27.4 or point the `GO` environment variable at that release's executable. Stage the Go pack before building the mobile edition.
@@ -99,9 +99,18 @@ npm.cmd run mobile:build
 
 The Go compiler pack adds about 92 MiB before HTTP compression. In the build that includes it, **Download World 4** saves the complete pack alongside the book. Go challenges use the bundled standard-library subset. The mobile GM reviews written responses with authored rules. Submissions and feedback stay on the device.
 
-For offline Rust grading, the mobile edition needs a browser-hosted `rustc`, linker, and matching WASIp1 standard library. The Windows edition's compiler targets WASIp1 output. A compiler that itself runs in the browser is a separate toolchain build. Before including it as a World 3 download, verify the Rust fixtures with that toolchain on Android and iPhone and measure peak memory against the app's 2 GB target. [Rust platform support](https://doc.rust-lang.org/stable/rustc/platform-support.html) · [Rubrc's browser-hosted Rust toolchain](https://github.com/oligamiq/rubrc#architecture)
+Stage the experimental browser Rust toolchain before building:
+
+```powershell
+npm.cmd run mobile:stage-rust
+npm.cmd run mobile:build
+```
+
+The staging command downloads checksum-pinned compiler artifacts from GitHub on the build machine. The pack adds about 152 MiB before HTTP compression. **Download World 3** then saves that pack and the book for offline use. Learner code stays on the device. No Cargo packages, compiler updates or remote grading services are fetched at runtime. See [mobile Rust implementation and limitations](docs/MOBILE-RUST.md), including compiler compatibility and memory measurements. This experimental pack is not a guarantee of support on 2 GB phones or iPhone.
 
 Run `npm.cmd run test:mobile` for the phone-size Chromium regression test. It uses the real browser grader, service worker, and IndexedDB.
+
+Run `npm.cmd run test:mobile:rust` for all Rust exercise references and starters plus compiler and sandbox checks. Set `FERRUM_MOBILE_REQUIRE_RUST=1` to require the staged pack rather than explicitly skip when it is missing.
 
 To run the same test in emulator Chrome, finish Chrome's welcome screens first and set `FERRUM_ADB` to the adb path above and `FERRUM_ANDROID_EMULATOR` to the emulator ID shown by `adb devices`. The test uses a temporary local port and save origin.
 

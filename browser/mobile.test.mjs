@@ -10,6 +10,7 @@ import {preview} from 'vite';
 import exercises from '../data/workbench/javascript.mjs';
 import typeScriptExercises from '../data/workbench/typescript.mjs';
 import goExercises from '../data/workbench/go.mjs';
+import {definitions, riddles} from '../lib/diamond-content.mjs';
 import {diamondName, diamondSolution, goblinName} from './diamond-fixture.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -20,6 +21,15 @@ async function firstQuest(world) {
   return quest;
 }
 const execute = promisify(execFile);
+
+async function rustPack() {
+  try {
+    return JSON.parse(await readFile(join(project, 'dist/mobile/runtime/rust/manifest.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
 
 async function chromeOptions() {
   if (process.env.FERRUM_BROWSER) return {executablePath:process.env.FERRUM_BROWSER};
@@ -38,7 +48,16 @@ async function chromeOptions() {
 async function play(t) {
   const server = await preview({configFile:join(project, 'vite.config.mjs'), mode:'mobile',
     preview:{port:0, host:'127.0.0.1', strictPort:true}});
-  t.after(() => new Promise(resolve => { server.httpServer.close(resolve); server.httpServer.closeAllConnections(); }));
+  const cleanup = [() => new Promise(resolve => { server.httpServer.close(resolve); server.httpServer.closeAllConnections(); })];
+  // Node runs after hooks FIFO. Release resources in reverse acquisition order:
+  // owned tab, CDP connection, ADB forwards, then server. Keep existing tabs open.
+  t.after(async () => {
+    const failures = [];
+    while (cleanup.length) {
+      try { await cleanup.pop()(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Mobile test cleanup failed.');
+  });
   const {port} = server.httpServer.address();
   let origin = 'http://127.0.0.1:' + port;
   let context;
@@ -48,27 +67,31 @@ async function play(t) {
     const adb = process.env.FERRUM_ADB || 'adb';
     const target = args => execute(adb, ['-s', serial, ...args], {timeout:10_000});
     await target(['reverse', 'tcp:' + port, 'tcp:' + port]);
-    t.after(() => target(['reverse', '--remove', 'tcp:' + port]));
+    cleanup.push(() => target(['reverse', '--remove', 'tcp:' + port]));
     origin = 'http://localhost:' + port;
-    await target(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', 'about:blank', 'com.android.chrome']);
     const {stdout} = await target(['forward', 'tcp:0', 'localabstract:chrome_devtools_remote']);
     const debugPort = stdout.trim();
     assert.match(debugPort, /^\d+$/);
-    t.after(() => target(['forward', '--remove', 'tcp:' + debugPort]));
-    const browser = await chromium.connectOverCDP('http://127.0.0.1:' + debugPort, {timeout:15_000});
+    cleanup.push(() => target(['forward', '--remove', 'tcp:' + debugPort]));
+    const endpoint = 'http://127.0.0.1:' + debugPort;
+    const listening = await fetch(endpoint + '/json/version', {signal:AbortSignal.timeout(1_000)})
+      .then(async response => { await response.body?.cancel(); return response.ok; }, () => false);
+    if (!listening) await target(['shell', 'am', 'start', '-a', 'android.intent.action.MAIN',
+      '-c', 'android.intent.category.LAUNCHER', '-p', 'com.android.chrome']);
+    const browser = await chromium.connectOverCDP(endpoint, {timeout:15_000});
     [context] = browser.contexts();
-    t.after(async () => {
+    cleanup.push(async () => {
       await context.setOffline(false).catch(() => {});
       await browser.close();
     });
   } else {
     const browser = await chromium.launch(await chromeOptions());
-    t.after(() => browser.close());
+    cleanup.push(() => browser.close());
     context = await browser.newContext({...devices['Pixel 7'], reducedMotion:'reduce'});
   }
-  if (!serial) t.after(() => context.close());
+  if (!serial) cleanup.push(() => context.close());
   const page = await context.newPage();
-  if (serial) t.after(() => page.close().catch(() => {}));
+  if (serial) cleanup.push(() => page.close());
   page.setDefaultTimeout(12_000);
   const errors = [];
   const apiRequests = [];
@@ -105,6 +128,25 @@ async function hero(page, name, oneLife = false) {
 
 function tap(locator) {
   return process.env.FERRUM_ANDROID_EMULATOR ? locator.click() : locator.tap();
+}
+
+async function findDiamond(page) {
+  const world = page.getByRole('tab', {name:'World', exact:true});
+  if (await world.getAttribute('aria-selected') !== 'true') await tap(world);
+  let visible = false;
+  for (let number = 1; number <= 8 && !visible; number++) {
+    await jump(page, number);
+    await bookPage(page, number);
+    try {
+      await page.getByRole('button', {name:diamondName}).waitFor({timeout:350});
+      visible = true;
+    } catch (error) {
+      if (error.name !== 'TimeoutError') throw error;
+    }
+  }
+  assert.equal(visible, true);
+  await tap(page.getByRole('button', {name:diamondName}));
+  await page.getByRole('heading', {name:goblinName}).waitFor();
 }
 
 test('a phone downloads World 1, grades fights offline, and preserves hero state and drafts', {timeout:120_000}, async t => {
@@ -205,20 +247,7 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   await tap(restored.getByRole('tab', {name:'World', exact:true}));
   assert.equal(await book.getAttribute('aria-selected'), 'false');
 
-  let diamondVisible = false;
-  for (let number = 1; number <= 8 && !diamondVisible; number++) {
-    await jump(restored, number);
-    await bookPage(restored, number);
-    try {
-      await restored.getByRole('button', {name:diamondName}).waitFor({timeout:350});
-      diamondVisible = true;
-    } catch (error) {
-      if (error.name !== 'TimeoutError') throw error;
-    }
-  }
-  assert.equal(diamondVisible, true);
-  await tap(restored.getByRole('button', {name:diamondName}));
-  await restored.getByRole('heading', {name:goblinName}).waitFor();
+  await findDiamond(restored);
   assert.equal(await restored.getByRole('tab', {name:'GM', exact:true}).getAttribute('aria-selected'), 'true');
   const fight = restored.locator('.diamond-encounter');
   await fight.getByRole('textbox', {name:'Goblin code'}).fill(diamondSolution);
@@ -228,10 +257,11 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   await fight.getByText('Goblin defeated', {exact:true}).waitFor();
 });
 
-test('mobile worlds keep their own saves, offline books, and code grading capability', {timeout:240_000}, async t => {
+test('mobile worlds keep their own saves, offline books, and code grading capability', {timeout:360_000}, async t => {
   const {page, context, origin} = await play(t);
   const worlds = [['javascript','JavaScript'], ['typescript','TypeScript'], ['rust','Rust'], ['go','Go']];
   const goBundled = await access(join(project, 'dist/mobile/runtime/go/manifest.json')).then(() => true, () => false);
+  const rustBundled = await rustPack();
   const heroPicker = page.getByRole('dialog', {name:'Choose your hero'});
   await tap(heroPicker.getByRole('button', {name:'Change world'}));
   const worldPicker = page.getByRole('dialog', {name:'Choose a world'});
@@ -270,6 +300,10 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
     await context.setOffline(false);
     await page.goto(origin + '?world=' + world);
     assert.equal(await heroPicker.getByRole('button', {name:/Type Mage/}).count(), 0);
+    if (world === 'rust' && rustBundled) {
+      await heroPicker.getByText(`Includes the experimental Rust ${rustBundled.rustVersion} Workbench. After downloading World 3, code tests run offline.`,
+        {exact:true}).waitFor();
+    }
     await download(number);
     await context.setOffline(true);
     await hero(page, language + ' Warden', true);
@@ -279,7 +313,32 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
     await tap(gm);
     const code = page.getByRole('textbox', {name:language + ' code', exact:true});
     const submit = page.getByRole('button', {name:'Submit solution', exact:true});
-    if (world === 'go' && goBundled) {
+    if (world === 'rust' && rustBundled) {
+      await page.getByText('Rust runner ready', {exact:true}).waitFor();
+      assert.match(await page.locator('#runner-status').getAttribute('title'), /Experimental Rust/);
+      assert.ok((await page.locator('#runner-status').getAttribute('title')).includes(rustBundled.rustVersion));
+      const [exercise] = JSON.parse(await readFile(join(project, 'data/exercises.json'), 'utf8'));
+      await code.fill(exercise.solution);
+      await tap(page.getByRole('button', {name:'Run Examples', exact:true}));
+      await page.getByText('Examples passed', {exact:true}).waitFor({timeout:90_000});
+      await page.getByText('100 / 100 HP', {exact:true}).waitFor();
+      await tap(submit);
+      await page.locator('.creature-encounter[data-state="defeated"]').waitFor({timeout:90_000});
+      await page.reload();
+      await bookPage(page, mission.bossPage);
+      if (!await code.isVisible()) await tap(gm);
+      await page.locator('.creature-encounter[data-state="defeated"]').waitFor();
+      await findDiamond(page);
+      const fight = page.locator('.diamond-encounter');
+      await fight.getByRole('textbox', {name:'Goblin code'}).fill(definitions.rust.reference);
+      await tap(fight.getByRole('button', {name:'Submit code', exact:true}));
+      const answer = riddles.rust.options.find(option => option.id === riddles.rust.answer);
+      await fight.getByRole('radio', {name:answer.label, exact:true}).waitFor({timeout:90_000});
+      await fight.getByRole('radio', {name:answer.label, exact:true}).check();
+      await tap(fight.getByRole('button', {name:'Submit answer', exact:true}));
+      await fight.getByText('Goblin defeated', {exact:true}).waitFor();
+      await page.getByText('100 / 100 HP', {exact:true}).waitFor();
+    } else if (world === 'go' && goBundled) {
       await page.getByText('Go runner ready', {exact:true}).waitFor();
       await code.fill(goExercises[0].reference);
       await tap(submit);

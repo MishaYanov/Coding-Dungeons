@@ -1,0 +1,29 @@
+Coding Dungeons experimental mobile Rust Workbench
+
+Compiler: rustc 1.96.0-dev, Cranelift 0.130.0, integrated riwl WASM linker.
+This browser compiler is distinct from the desktop/book Rust 1.99.1 toolchain.
+It is an experimental, checksum-pinned third-party build, not an official rustup distribution.
+
+Artifacts: https://github.com/AngelOnFira/wasm-rustc/releases/tag/artifacts-test-7
+Compiler port: https://github.com/AngelOnFira/rust/tree/riw-wasm20
+Original compiler port: https://github.com/bjorn3/rust/tree/compile_rustc_for_wasm20
+Browser integration reference: https://github.com/AngelOnFira/weblings
+Rust: https://github.com/rust-lang/rust
+Cranelift: https://github.com/bytecodealliance/wasmtime
+Waffle: https://github.com/bytecodealliance/waffle
+
+The included LICENSE-APACHE, LICENSE-MIT and COPYRIGHT are from the compiler fork.
+They preserve the Rust project's licensing and third-party copyright notice.
+LICENSE-Weblings preserves the MIT notice for the browser integration reference.
+
+The compiler and matching WASI libraries are downloaded only by the developer's
+explicit staging command. The shipped app uses the pinned local files and does
+not fetch compiler tools or source packages from GitHub or crates.io at runtime.
+After the World 3 download completes, supported challenge grading works offline.
+The compiler has no access to device files: its work and library directories are
+virtual memory. Submitted programs receive no preopened directories or network
+capabilities. Timeouts and memory limits remain necessary; no sandbox guarantees
+protection from every browser or compiler vulnerability.
+
+Correctness and resource results, supported features and known limitations are
+documented in docs/MOBILE-RUST.md in the project source.

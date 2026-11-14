@@ -1,6 +1,7 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {mobileBackupLimit} from '../../lib/mobile/input.mjs';
 import {getMobileEngine} from './mobile-engine.mjs';
+import rustInfo from 'virtual:mobile-rust-info';
 import './mobile-controls.css';
 
 const backupSizeMessage = 'The backup exceeds the 16 MiB transfer limit.';
@@ -151,6 +152,9 @@ export function MobileControls({game}) {
         onClick={download} disabled={starting || Boolean(busy)}>
         {busy === 'download' ? `Downloading ${worldLabel}…` : `Download ${worldLabel}`}
       </button>}
+      {world.id === 'rust' && rustInfo && <p className="fine-print">
+        Includes the experimental Rust {rustInfo.version} Workbench. After downloading World 3, code tests run offline.
+      </p>}
       <details>
         <summary>Save backup</summary>
         <div>

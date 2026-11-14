@@ -46,9 +46,9 @@ function fixture(options = {}) {
   const grade = async request => {
     calls.push(request);
     const pass = request.source !== 'wrong';
+    const ids = request.caseIds ?? [...request.tests, ...(request.typeTests ?? [])].map(test => test.id);
     return {status:pass ? 'passed' : 'failed', diagnostics:[],
-      tests:[...request.tests, ...(request.typeTests ?? [])]
-        .map(test => ({id:test.id, durationMs:1, status:pass ? 'passed' : 'failed'}))};
+      tests:ids.map(id => ({id, durationMs:1, status:pass ? 'passed' : 'failed'}))};
   };
   const repository = options.repository ?? memoryRepository();
   const storage = options.storage ?? memoryStorage();
@@ -363,6 +363,134 @@ test('an opted-in Go runner receives authored code checks and can award Forge', 
     body:{stageId:'choice', optionId:'shared', submissionId:'go-riddle'}});
   assert.equal(riddle.diamonds, 3);
   assert.equal(riddle.combat.potions, 3);
+});
+
+test('an opted-in Rust runner selects case IDs for examples and full boss submissions', async () => {
+  const {api, calls} = fixture({worldId:'rust', rustRunnerAvailable:true, rustRunnerVersion:'1.96.0-dev'});
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Ferrum Explorer', oneLife:true}});
+  const {exerciseMap, pages} = localCatalog('rust', identity);
+  const page = pages.find(page => page.prompts.some(prompt => exerciseMap.has(prompt.exerciseId)));
+  const prompt = page.prompts.find(prompt => exerciseMap.has(prompt.exerciseId));
+  const exercise = exerciseMap.get(prompt.exerciseId);
+  const {runner, runnerDetail, capabilities} = await api('/api/status');
+  assert.equal(runner, 'available');
+  assert.match(runnerDetail, /^Experimental Rust 1\.96\.0-dev workbench\./);
+  assert.match(runnerDetail, /Newer language features may be unavailable/);
+  assert.equal(capabilities.nativeRunner, true);
+  await api(`/api/workbench/${exercise.level}/mode`, {method:'PATCH', hero, body:{mode:'hard'}});
+  const body = {page:page.page, promptId:prompt.id, exerciseId:exercise.id, code:'correct'};
+  const examples = await api('/api/grade', {method:'POST', hero, body:{...body, purpose:'examples'}});
+  assert.equal(examples.verdict, 'pass');
+  assert.equal(calls[0].language, 'rust');
+  assert.equal(calls[0].exercise.tests, exercise.tests);
+  assert.deepEqual(calls[0].caseIds, [exercise.testNames[0]]);
+  assert.equal(calls[0].tests, undefined);
+  assert.equal((await api('/api/progress', {hero})).attempts.length, 0);
+  const submitted = await api('/api/grade', {method:'POST', hero, body:{...body, submissionId:'rust-boss'}});
+  assert.equal(submitted.verdict, 'pass');
+  assert.equal(submitted.hardClear, true);
+  assert.equal(submitted.combat.potions, 2);
+  assert.deepEqual(calls[1].caseIds, exercise.testNames);
+  assert.equal(submitted.passed, exercise.testNames.length);
+  assert.deepEqual(submitted.cases.map(test => test.id), [exercise.testNames[0]]);
+  const progress = await api('/api/progress', {hero});
+  assert.equal(progress.levels.find(level => level.level === exercise.level).forge, true);
+  assert.equal(progress.attempts.length, 1);
+  assert.equal((await api('/api/grade', {method:'POST', hero, body:{...body, submissionId:'rust-boss'}})).newClear, false);
+  assert.equal(calls.length, 2);
+  assert.equal((await fixture({worldId:'rust', rustRunnerAvailable:'true'}).api('/api/status')).runner, 'unavailable');
+});
+
+test('Rust goblin examples are practice and full code and choice victories settle once', async () => {
+  const {api, calls} = fixture({worldId:'rust', rustRunnerAvailable:true});
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Sack Hunter', oneLife:true}});
+  const post = (path, body) => api(path, {method:'POST', hero, body});
+  const reveals = await Promise.all(Array.from({length:8}, (_, index) => api(`/api/diamond?page=${index + 1}`, {hero})));
+  await post('/api/diamond/start', {page:reveals.findIndex(view => view.sparkle) + 1});
+  const examples = await post('/api/diamond/submit', {stageId:'code', code:'wrong', purpose:'examples'});
+  assert.equal(examples.result.verdict, 'fail');
+  assert.equal(examples.combat.hp, 100);
+  assert.deepEqual(calls[0].caseIds, ['mixed_bag']);
+  assert.deepEqual(examples.completed, []);
+  const wrong = await post('/api/diamond/submit', {stageId:'code', code:'wrong', submissionId:'bad-lock'});
+  assert.equal(wrong.result.verdict, 'fail');
+  assert.equal(wrong.combat.hp, 95);
+  const passed = await post('/api/diamond/submit', {stageId:'code', code:'correct', submissionId:'lock'});
+  assert.equal(passed.result.verdict, 'pass');
+  assert.deepEqual(passed.completed, ['code']);
+  assert.deepEqual(calls[2].caseIds, ['mixed_bag', 'no_diamonds', 'larger_bag']);
+  assert.equal(typeof calls[2].exercise.tests, 'string');
+  const choice = {stageId:'choice', optionId:'shared', submissionId:'riddle'};
+  const reward = await post('/api/diamond/submit', choice);
+  assert.equal(reward.diamonds, 3);
+  assert.equal(reward.combat.potions, 2);
+  assert.equal((await post('/api/diamond/submit', choice)).combat.potions, 2);
+});
+
+test('Rust infrastructure failures preserve drafts, HP and retryable submission IDs', async () => {
+  for (const status of ['runner_error', 'canceled', 'busy']) {
+    let calls = 0;
+    const {api, repository} = fixture({worldId:'rust', rustRunnerAvailable:true, grade:async request => {
+      calls++;
+      return calls === 1 ? {status, tests:[], diagnostics:[{message:'The Rust compiler could not run.'}]}
+        : {status:'passed', tests:request.caseIds.map(id => ({id, status:'passed', durationMs:1})), diagnostics:[]};
+    }});
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Retry Explorer', oneLife:true}});
+    const {exercises:[exercise]} = await api('/api/campaign');
+    const page = await api(`/api/pages/${exercise.page}`);
+    const promptId = page.prompts.find(prompt => prompt.exerciseId === exercise.id).id;
+    const body = {page:exercise.page, promptId, exerciseId:exercise.id, code:'saved code', submissionId:'retry'};
+    const result = await api('/api/grade', {method:'POST', hero, body});
+    assert.equal(result.verdict, status === 'runner_error' ? 'error' : status);
+    const progress = await api('/api/progress', {hero});
+    assert.equal(progress.combat.hp, 100);
+    assert.equal(progress.combat.potions, 1);
+    assert.deepEqual(progress.attempts, []);
+    assert.equal(progress.responses.find(response => response.promptId === promptId).value, body.code);
+    assert.deepEqual(repository.get(hero.id).receipts, []);
+    assert.equal((await api('/api/grade', {method:'POST', hero, body})).verdict, 'pass');
+    assert.equal(calls, 2);
+  }
+});
+
+test('canceling Rust boss and goblin runs saves code without consuming the attempt or damaging the hero', async () => {
+  for (const goblin of [false, true]) {
+    const controller = new AbortController();
+    let calls = 0;
+    const {api, repository} = fixture({worldId:'rust', rustRunnerAvailable:true, grade:async request => {
+      calls++;
+      if (calls === 1) {
+        assert.equal(request.signal, controller.signal);
+        controller.abort();
+        return {status:'canceled', tests:[], diagnostics:[]};
+      }
+      return {status:'passed', tests:request.caseIds.map(id => ({id, status:'passed', durationMs:1})), diagnostics:[]};
+    }});
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Patient Explorer', oneLife:true}});
+    let route, body;
+    if (goblin) {
+      const reveals = await Promise.all(Array.from({length:8}, (_, index) => api(`/api/diamond?page=${index + 1}`, {hero})));
+      await api('/api/diamond/start', {method:'POST', hero, body:{page:reveals.findIndex(view => view.sparkle) + 1}});
+      route = '/api/diamond/submit';
+      body = {stageId:'code', code:'draft to retry', submissionId:'retry'};
+    } else {
+      const {exercises:[exercise]} = await api('/api/campaign');
+      const page = await api(`/api/pages/${exercise.page}`);
+      route = '/api/grade';
+      body = {page:exercise.page, promptId:page.prompts.find(prompt => prompt.exerciseId === exercise.id).id,
+        exerciseId:exercise.id, code:'draft to retry', submissionId:'retry'};
+    }
+    await assert.rejects(api(route, {method:'POST', hero, body, signal:controller.signal}), {name:'AbortError'});
+    const record = repository.get(hero.id);
+    assert.equal(record.hp, 100);
+    assert.equal(record.potions, 1);
+    assert.deepEqual(record.receipts, []);
+    assert.deepEqual(record.attempts, []);
+    assert.equal(goblin ? record.diamond.draft : Object.values(record.responses)[0].value, body.code);
+    const retried = await api(route, {method:'POST', hero, body});
+    assert.equal(goblin ? retried.result.verdict : retried.verdict, 'pass');
+    assert.equal(calls, 2);
+  }
 });
 
 test('mobile written review matches rubrics to their world', () => {
