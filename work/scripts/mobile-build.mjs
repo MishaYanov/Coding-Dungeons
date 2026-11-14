@@ -1,10 +1,20 @@
 import {createHash} from 'node:crypto';
 import {copyFile, mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
+import {createRequire} from 'node:module';
 import {dirname, join, relative, resolve, sep} from 'node:path';
 
 const project = new URL('../../', import.meta.url);
 const worldIds = ['javascript', 'typescript', 'rust', 'go'];
 const goPack = new URL('out/mobile-go-pack/', project);
+const require = createRequire(import.meta.url);
+const notices = {
+  'react.txt':['react/package.json', 'LICENSE'],
+  'react-dom.txt':['react-dom/package.json', 'LICENSE'],
+  'scheduler.txt':['scheduler/package.json', 'LICENSE'],
+  'typescript.txt':['typescript/package.json', 'LICENSE.txt'],
+  'quickjs.txt':['@jitl/quickjs-wasmfile-release-sync/package.json', 'LICENSE'],
+  'quickjs-emscripten-core.txt':['quickjs-emscripten-core', '../LICENSE'],
+};
 
 async function goFiles() {
   const manifest = await readFile(new URL('manifest.json', goPack), 'utf8').catch(error => {
@@ -75,11 +85,21 @@ export function mobileBuild() {
         await mkdir(dirname(file), {recursive:true});
         await copyFile(source, file);
       }
+      const dependencyNotices = {...notices};
+      if (runtime.length) dependencyNotices['browser-wasi-shim.txt'] = ['@bjorn3/browser_wasi_shim', '../LICENSE-MIT'];
+      const licenseDirectory = join(output, 'licenses');
+      await mkdir(licenseDirectory, {recursive:true});
+      await copyFile(new URL('LICENSE', project), join(licenseDirectory, 'coding-dungeons.txt'));
+      for (const [name, [dependency, license]] of Object.entries(dependencyNotices)) {
+        const source = dirname(require.resolve(dependency));
+        await copyFile(join(source, license), join(licenseDirectory, name));
+      }
 
       const assets = (await readdir(join(output, 'assets'), {recursive:true, withFileTypes:true}))
         .filter(entry => entry.isFile())
         .map(entry => relative(output, join(entry.parentPath, entry.name)).split(sep).join('/')).sort();
-      const shellFiles = ['index.html', 'styles.css', ...mobileFiles, ...assets];
+      const shellFiles = ['index.html', 'styles.css', ...mobileFiles, ...assets,
+        'licenses/coding-dungeons.txt', ...Object.keys(dependencyNotices).map(name => 'licenses/' + name)];
       const worker = await readFile(new URL('src/mobile/service-worker.js', project), 'utf8');
       const worlds = await Promise.all(books.map(async (files, index) => [worldIds[index], {
         number:index + 1, version:await contentVersion(output, files), files:files.map(path => '/' + path),

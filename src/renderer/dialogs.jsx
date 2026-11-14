@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { characterProgress, SKILL_LEVEL_CAP } from '../../public/progression.mjs';
 
+const mobile = import.meta.env.MODE === 'mobile';
 const pathTopics = new Map([
   ['architect', 'Borrowing and lifetimes, traits and generics, dynamic dispatch, error design, and evolving library APIs.'],
   ['warden', 'Threads, locks and channels, atomic ordering, futures and pinning, cancellation, and graceful shutdown.'],
@@ -150,7 +151,7 @@ function HeroPicker({ game, actions, mobileControls: MobileControls }) {
   }, [api, retry, world.id]);
 
   useLayoutEffect(() => {
-    if (heroes?.length === 0 && !busy) nameInput.current?.focus();
+    if (!mobile && heroes?.length === 0 && !busy) nameInput.current?.focus();
   }, [heroes, busy]);
 
   async function select(endpoint, body, preferredPage) {
@@ -204,12 +205,16 @@ function HeroPicker({ game, actions, mobileControls: MobileControls }) {
     void select('/api/heroes', { name: trimmed, path, oneLife }, preferredPage);
   }
 
+  const changeWorld = <button className="button button-quiet" id="hero-worlds" type="button"
+    disabled={busy} onClick={() => actions.openDialog('world')}>Change world</button>;
+
   return (<>
     <Modal id="hero" title="Choose your hero" caption={'World ' + world.number + ' · ' + world.name} className="hero-dialog"
       emblem description="hero-summary" closeLabel="Close hero selection" closeId="close-heroes" blocked={busy}
       close={hero ? actions.closeDialog : undefined}>
       <div className="dialog-content hero-content">
         <p id="hero-summary" className="muted">Create a hero or return to a saved expedition. Each hero keeps their own page, answers, and quest log.</p>
+        {mobile && <div className="hero-world-action">{changeWorld}</div>}
         {!hero && MobileControls && <MobileControls game={game} actions={actions} />}
         <div className="hero-columns">
           <section className="hero-section" aria-labelledby="hero-load-title">
@@ -242,7 +247,7 @@ function HeroPicker({ game, actions, mobileControls: MobileControls }) {
         </div>
         <div className="hero-footer">
           <p className="inline-status" id="hero-feedback" role="status" data-error={feedback.error}>{feedback.copy}</p>
-          <button className="button button-quiet" id="hero-worlds" type="button" disabled={busy} onClick={() => actions.openDialog('world')}>Change world</button>
+          {!mobile && changeWorld}
           {hero && <button className="button button-quiet" id="edit-active-hero" type="button" disabled={busy}
             onClick={() => actions.openDialog('profile')}>Edit current hero</button>}
         </div>

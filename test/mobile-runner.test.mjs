@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runBrowserWorkbench } from '../lib/mobile/runner.mjs';
+import { capWasmMemory } from '../lib/mobile/wasm-memory.mjs';
 
 const request = {
   language:'javascript',
@@ -57,4 +58,16 @@ test('the mobile runner rejects unsupported languages and oversized UTF-8 source
     { ...request, tests:new Array(33).fill(request.tests[0]) },
   ]) assert.equal((await runBrowserWorkbench(invalid, unexpected)).status, 'runner_error');
   assert.equal((await runBrowserWorkbench({ ...request, signal:AbortSignal.abort() }, unexpected)).status, 'canceled');
+});
+test('the Go worker caps an exported memory before running a guest', async () => {
+  const module = Uint8Array.of(
+    0, 97, 115, 109, 1, 0, 0, 0, // module header
+    5, 3, 1, 0, 1, // one memory, minimum one page, no maximum
+    7, 10, 1, 6, 109, 101, 109, 111, 114, 121, 2, 0, // export memory
+  );
+  const {instance} = await WebAssembly.instantiate(capWasmMemory(module, 2));
+  assert.equal(instance.exports.memory.grow(1), 1);
+  assert.throws(() => instance.exports.memory.grow(1), RangeError);
+  assert.throws(() => capWasmMemory(module, 0), /Invalid WASM memory limit/);
+  assert.throws(() => capWasmMemory(module.subarray(0, 12), 2), /Incomplete WASM section/);
 });

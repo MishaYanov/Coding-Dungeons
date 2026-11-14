@@ -99,6 +99,8 @@ npm.cmd run mobile:build
 
 The Go compiler pack adds about 92 MiB before HTTP compression. In the build that includes it, **Download World 4** saves the complete pack alongside the book. Go challenges use the bundled standard-library subset. The mobile GM reviews written responses with authored rules. Submissions and feedback stay on the device.
 
+For offline Rust grading, the mobile edition needs a browser-hosted `rustc`, linker, and matching WASIp1 standard library. The Windows edition's compiler targets WASIp1 output. A compiler that itself runs in the browser is a separate toolchain build. Before including it as a World 3 download, verify the Rust fixtures with that toolchain on Android and iPhone and measure peak memory against the app's 2 GB target. [Rust platform support](https://doc.rust-lang.org/stable/rustc/platform-support.html) · [Rubrc's browser-hosted Rust toolchain](https://github.com/oligamiq/rubrc#architecture)
+
 Run `npm.cmd run test:mobile` for the phone-size Chromium regression test. It uses the real browser grader, service worker, and IndexedDB.
 
 To run the same test in emulator Chrome, finish Chrome's welcome screens first and set `FERRUM_ADB` to the adb path above and `FERRUM_ANDROID_EMULATOR` to the emulator ID shown by `adb devices`. The test uses a temporary local port and save origin.
