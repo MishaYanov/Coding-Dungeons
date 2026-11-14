@@ -736,4 +736,51 @@ dialog::backdrop { background: #050a10b8; }
   .reader-controls { gap: 4px; }
   .jump-form input { width: 44px; }
 }
+
+.mobile-app { max-width: 960px; margin-inline: auto; }
+.mobile-app .workspace { display: block; min-height: 0; height: auto; }
+.mobile-app .app-header { flex-wrap: wrap; }
+.mobile-app .app-nav { flex-wrap: wrap; justify-content: start; }
+.mobile-app :is(button.nav-button, button.icon-button, button.fit-button, .button, .choice-option, .special-option) {
+  min-height: 44px;
+}
+.mobile-app :is(button.icon-button, button.fit-button, .gm-mushroom-help) { min-width: 44px; }
+.mobile-app .gm-mushroom-help { min-height: 44px; }
+.mobile-app :is(textarea, .jump-form input, .control-label input, .control-label select) { font-size: 1rem; }
+.mobile-app .reader-panel { border-right: 0; }
+.mobile-app .reader-toolbar { justify-content: space-between; }
+.mobile-app .reader-caption { display: grid; }
+.mobile-app .reader-viewport { flex: none; padding: 12px max(9px, env(safe-area-inset-right)) 20px max(9px, env(safe-area-inset-left)); }
+.mobile-app .guide-scroll { overflow: visible; }
+.mobile-reader-nav {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: grid;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--navy);
+}
+.mobile-tabs, .mobile-page-controls { display: flex; justify-content: center; align-items: center; gap: 6px; }
+.mobile-tabs button {
+  flex: 1 1 0;
+  min-height: 44px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-weight: 650;
+}
+.mobile-tabs button[aria-selected="true"] {
+  border-color: var(--copper);
+  color: var(--copper);
+  background: #352a27;
+}
+.mobile-page-controls .jump-form { gap: 5px; }
+.mobile-page-controls .jump-form input { width: 54px; min-height: 44px; }
+.mobile-page-controls .jump-form button { padding-inline: 9px; }
+.code-indentation { display: flex; align-items: center; gap: 9px; }
+.mobile-app :is(.guide-panel, .field-card, .code-editor) { scroll-margin-top: 110px; }
+
 @media (prefers-reduced-motion: reduce) { .loading-mark { animation: none; } }

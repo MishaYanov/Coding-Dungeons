@@ -61,6 +61,34 @@ The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go re
 
 The GitHub Actions **Verify** workflow runs on pushes to `main` and on pull requests. After the workflow is on GitHub's default branch, you can also start it from **Actions → Verify → Run workflow**. It checks npm advisories, runs the app and book tests, and smoke-tests an unpacked Windows build.
 
+### Mobile World 1
+
+The mobile build is an installable web app with the 47-page JavaScript campaign, local code grading, and rule-based written feedback. Heroes, progress, and drafts stay on the device. Use **Save backup** to export World 1 and import it into an empty mobile save. The Windows app has its own saves.
+
+```powershell
+npm.cmd ci
+npm.cmd run mobile:build
+npm.cmd run mobile:preview
+```
+
+Open `http://127.0.0.1:4174/` in a PC browser. For Android Studio, start an Android virtual device, keep the preview running, and run the following in a second PowerShell window.
+
+```powershell
+$adb = Join-Path $env:LOCALAPPDATA 'Android/Sdk/platform-tools/adb.exe'
+& $adb -e reverse tcp:4174 tcp:4174
+& $adb -e shell am start -a android.intent.action.VIEW -d http://localhost:4174/
+```
+
+In Android Chrome, choose **Download World 1** and wait for **World 1 ready offline**. Chrome's menu can add the app to the home screen. Use **Book** to turn pages and **GM** to submit answers. Once the download finishes, disconnect and reopen the same address to test offline play.
+
+For a physical phone, serve `dist/mobile/` at the root of an HTTPS origin. Android Chrome and iPhone Safari can add it to the home screen. Download World 1 on the phone before going offline. Browser storage can be cleared by the user or the operating system, so export a backup if you want to keep your hero.
+
+Run `npm.cmd run test:mobile` for the phone-size Chromium regression test. It uses the real browser grader, service worker, and IndexedDB.
+
+To run the same test in emulator Chrome, finish Chrome's welcome screens first and set `FERRUM_ADB` to the adb path above and `FERRUM_ANDROID_EMULATOR` to the emulator ID shown by `adb devices`. The test uses a temporary local port and save origin.
+
+### Windows build
+
 On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1` and follow the [native runner build instructions](native/README.md) if `desktop/runtime` is missing. Keep those staged files for later builds. Install dependencies with `npm.cmd ci` on a fresh checkout.
 
 For the desktop smoke test, set `FERRUM_DESKTOP_TEST_PACKAGE=1` before running `npm.cmd run desktop:package` and `npm.cmd run test:desktop`. With the full runtime staged, set `FERRUM_DESKTOP_REQUIRE_NATIVE=1` and `FERRUM_DESKTOP_REQUIRE_GM=1` to exercise all four runners and the offline GM. Clear the test-package variable before making an installer.

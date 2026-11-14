@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
+import { CodeIndentation, useCodeIndentation } from './code-editor.mjs';
 
 const presentations = {
   refactoring: {
@@ -52,7 +52,8 @@ function SideQuestStage({ stage, draft, saveDraft, pending, blocked, fallen, una
   const [value, setValue] = useState(code ? draft ?? stage.starter ?? '' : '');
   const indentationId = useId();
   const optionName = useId();
-  const indentation = useCodeIndentation((next) => {
+  const editor = useRef(null);
+  const { editorProps, indent } = useCodeIndentation((next) => {
     setValue(next);
     saveDraft(next);
   });
@@ -69,10 +70,10 @@ function SideQuestStage({ stage, draft, saveDraft, pending, blocked, fallen, una
       <legend>{stage.prompt}</legend>
       {code ? <>
         {stage.signature && <pre className="signature">{stage.signature}</pre>}
-        <textarea className="code-editor" aria-label={presentation.codeLabel} aria-describedby={indentationId}
+        <textarea ref={editor} className="code-editor" aria-label={presentation.codeLabel} aria-describedby={indentationId}
           rows={12} maxLength={49152} value={value} required spellCheck={false}
-          autoCapitalize="off" autoComplete="off" autoCorrect="off" {...indentation} />
-        <p id={indentationId} className="fine-print">{indentationHelp}</p>
+          autoCapitalize="off" autoComplete="off" autoCorrect="off" {...editorProps} />
+        <CodeIndentation editor={editor} indent={indent} helpId={indentationId} disabled={pending} />
         {stage.testNames?.length > 0 && <details className="details-block">
           <summary>What the runner checks</summary>
           <ul>{stage.testNames.map((name) => <li key={name}>{name}</li>)}</ul>

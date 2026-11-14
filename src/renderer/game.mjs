@@ -1,6 +1,7 @@
 const draftKey = 'ferrum-prompt-drafts-v2';
 const lastPageKey = 'ferrum-last-page-v2';
 const selectedHeroKey = 'ferrum-selected-hero-v1';
+const mobile = import.meta.env?.MODE === 'mobile';
 const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|refactoring$|system-design$|rate-limiter$)/;
 const emptyProgress = () => ({
   levels: new Map(), responses: new Map(), attempts: [], workbenchModes: new Map(),
@@ -60,8 +61,9 @@ function selectedKey(world) {
 
 function rememberHero(world, id) {
   try {
-    if (id) sessionStorage.setItem(selectedKey(world), id);
-    else sessionStorage.removeItem(selectedKey(world));
+    const storage = mobile ? localStorage : sessionStorage;
+    if (id) storage.setItem(selectedKey(world), id);
+    else storage.removeItem(selectedKey(world));
   } catch {
     // The current hero still works if session storage is disabled.
   }
@@ -69,7 +71,7 @@ function rememberHero(world, id) {
 
 function savedHero(world) {
   try {
-    return sessionStorage.getItem(selectedKey(world));
+    return (mobile ? localStorage : sessionStorage).getItem(selectedKey(world));
   } catch {
     return null;
   }
@@ -101,6 +103,10 @@ export function createGame() {
   };
 
   async function api(path, { method = 'GET', body, hero = game.hero, signal } = {}) {
+    if (mobile) {
+      const {getMobileEngine} = await import('./mobile-engine.mjs');
+      return (await getMobileEngine()).api(path, {method, body, hero, signal});
+    }
     const headers = { Accept: 'application/json' };
     if (game.world) headers['X-Ferrum-World'] = game.world.id;
     if (method !== 'GET') {
@@ -439,7 +445,7 @@ export function createGame() {
     booted = true;
     try {
       const { worlds = [] } = await api('/api/worlds');
-      const selection = new URLSearchParams(location.search).get('world') || (hashPage() ? 'rust' : '');
+      const selection = mobile ? 'javascript' : new URLSearchParams(location.search).get('world') || (hashPage() ? 'rust' : '');
       const world = worlds.find((candidate) => candidate.id === selection) || null;
       update({ worlds, world });
       if (!world) {

@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { mountCreature } from '../../public/creatures.mjs';
-import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
+import { CodeIndentation, useCodeIndentation } from './code-editor.mjs';
 import { WorkbenchReport } from './guide.jsx';
 export { diamondPosition } from './diamond-placement.mjs';
 
@@ -188,7 +188,8 @@ export function DiamondGem({ position, onClick, disabled }) {
 function DiamondStage({ stage, draft, saveDraft, unavailable, busy, disabled, focusTarget, submit, error }) {
   const code = stage.kind === 'code';
   const [value, setValue] = useState(code ? draft ?? stage.starter ?? '' : '');
-  const indentation = useCodeIndentation((next) => {
+  const editor = useRef(null);
+  const { editorProps, indent } = useCodeIndentation((next) => {
     setValue(next);
     saveDraft(next);
   });
@@ -203,10 +204,10 @@ function DiamondStage({ stage, draft, saveDraft, unavailable, busy, disabled, fo
       <legend>{stage.prompt}</legend>
       {code ? <>
         {stage.signature && <pre className="signature">{stage.signature}</pre>}
-        <textarea className="code-editor" aria-label="Goblin code" aria-describedby="goblin-indent-help"
+        <textarea ref={editor} className="code-editor" aria-label="Goblin code" aria-describedby="goblin-indent-help"
           rows={9} maxLength={49152} value={value} required spellCheck={false} autoCapitalize="off" autoComplete="off"
-          {...indentation} />
-        <p id="goblin-indent-help" className="fine-print">{indentationHelp}</p>
+          {...editorProps} />
+        <CodeIndentation editor={editor} indent={indent} helpId="goblin-indent-help" disabled={busy} />
       </> : stage.options.map((option) => <label className="special-option" key={option.id}>
         <input type="radio" name="goblin-choice" required value={option.id} checked={value === option.id}
           onChange={() => setValue(option.id)} /><span>{option.label ?? option.text}</span>

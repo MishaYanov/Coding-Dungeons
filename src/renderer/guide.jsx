@@ -1,9 +1,10 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { creatureName, mountCreature } from '../../public/creatures.mjs';
-import { indentationHelp, useCodeIndentation } from './code-editor.mjs';
+import { CodeIndentation, useCodeIndentation } from './code-editor.mjs';
 import { SideQuest } from './side-quest.jsx';
 
 const promptLabels = { choice: 'CHOICE', text: 'WRITTEN RESPONSE', code: 'CODE WORKBENCH' };
+const mobile = import.meta.env.MODE === 'mobile';
 const hintLabels = { hint1: 'Hint one', hint2: 'Hint two', debrief: 'Debrief' };
 const rustZones = [
   { name: 'Borrowed Citadel', first: 1, last: 8 },
@@ -125,7 +126,8 @@ function AnswerFeedback({ response, data, prompt, game, actions }) {
     const feedback = !hard || !assessment ? assessment?.feedback
       : scored ? 'Hard Mode review complete.' : assessment.status === 'unavailable'
         ? 'The review is unavailable. Your answer is saved.' : 'The GM could not verify this answer.';
-    const remark = text(gmRemarks[scored && assessment.score === 100 ? 'full' : assessment?.status]);
+    const remark = !mobile && text(gmRemarks[scored && assessment.score === 100 ? 'full' : assessment?.status]);
+    const scoreLabel = mobile ? 'Rule-based estimate' : 'GM estimate';
     async function reveal() {
       setBusy(true);
       try {
@@ -140,7 +142,7 @@ function AnswerFeedback({ response, data, prompt, game, actions }) {
       }
     }
     return <div className="prompt-feedback" aria-live="polite" data-verdict="saved">
-      <strong className="feedback-heading">{scored ? `GM estimate · ${assessment.score}% of rubric points` : 'Response saved'}</strong>
+      <strong className="feedback-heading">{scored ? `${scoreLabel} · ${assessment.score}% of rubric points` : 'Response saved'}</strong>
       {remark && <p className="gm-remark"><q>{remark}</q></p>}
       {text(feedback) && <p>{feedback}</p>}
       {canReveal && (example === null
@@ -276,7 +278,7 @@ function Prompt({ data, prompt, index, game, actions }) {
     setValue(next);
     setMessage(actions.persistDraft(key, next) ? 'Draft kept on this device' : 'Draft kept in this tab');
   }
-  const indentation = useCodeIndentation(updateValue);
+  const { editorProps, indent } = useCodeIndentation(updateValue);
 
   async function save(purpose) {
     const practice = purpose === 'examples';
@@ -292,7 +294,8 @@ function Prompt({ data, prompt, index, game, actions }) {
     operation.current = true;
     setBusy(true);
     if (!draft) actions.persistDraft(key, value);
-    setMessage(draft ? 'Saving…' : runnable ? 'Compiling and testing…' : prompt.assessment ? 'The GM is consulting the mushrooms…' : 'Saving response…');
+    const reviewMessage = mobile ? 'Checking the rubric…' : 'The GM is consulting the mushrooms…';
+    setMessage(draft ? 'Saving…' : runnable ? 'Compiling and testing…' : prompt.assessment ? reviewMessage : 'Saving response…');
     const current = () => actions.isCurrentHero ? actions.isCurrentHero(hero) : mounted.current;
     let controller;
     try {
@@ -351,7 +354,9 @@ function Prompt({ data, prompt, index, game, actions }) {
     }}>
     <div className="prompt-heading"><h2 id={titleId}>{title}</h2><span className="prompt-type">{promptLabels[prompt.type]}</span></div>
     {text(prompt.body) && <p className="prompt-copy">{prompt.body}</p>}
-    {prompt.assessment && <MushroomJuiceNote id={`${titleId}-gm-help`} />}
+    {prompt.assessment && (mobile
+      ? <p className="fine-print">This review checks your wording against an authored rubric. It can miss a correct explanation.</p>
+      : <MushroomJuiceNote id={`${titleId}-gm-help`} />)}
     {prompt.assessment && game.combat?.oneLife && <p className="fine-print">Written feedback does not affect HP.</p>}
     {text(exercise?.description) && exercise.description !== prompt.body && <p className="prompt-copy">{exercise.description}</p>}
     {text(exercise?.signature) && <pre className="signature">{exercise.signature}</pre>}
@@ -373,8 +378,8 @@ function Prompt({ data, prompt, index, game, actions }) {
       placeholder={code ? `Write your ${game.world.name} solution here` : 'Explain your reasoning and the rule you rely on.'}
       spellCheck={!code} autoCapitalize={code ? 'off' : undefined} autoComplete={code ? 'off' : undefined}
       autoCorrect={code ? 'off' : undefined} disabled={busy} value={value}
-      {...(code ? indentation : { onChange: (event) => updateValue(event.target.value) })} />}
-    {code && <p id={indentationId} className="fine-print">{indentationHelp}</p>}
+      {...(code ? editorProps : { onChange: (event) => updateValue(event.target.value) })} />}
+    {code && <CodeIndentation editor={input} indent={indent} helpId={indentationId} disabled={busy} />}
     {runnable && prompt.suggestion && !hard && <CodeSuggestion {...{ data, prompt, input, game, actions, updateValue }} disabled={busy} />}
     <ReviewList title="Review criteria" items={list(prompt.criteria).filter(text)} />
     <ReviewList title={`What the runner checks · ${testNames.length}`} items={testNames} />

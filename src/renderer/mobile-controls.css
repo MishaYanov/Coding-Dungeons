@@ -1,0 +1,34 @@
+.mobile-offline {
+  align-items: center;
+  background: var(--panel, #192733);
+  border-block-end: 1px solid var(--line, #3e4f61);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 4px 12px;
+}
+
+.mobile-offline > span, .mobile-offline summary {
+  font-size: .82rem;
+}
+
+.mobile-offline summary {
+  align-content: center;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.mobile-offline .button {
+  min-height: 44px;
+}
+
+.mobile-offline details > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mobile-offline > p {
+  flex-basis: 100%;
+  margin: 0 0 6px;
+}

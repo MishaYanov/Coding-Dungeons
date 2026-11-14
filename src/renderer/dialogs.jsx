@@ -121,7 +121,7 @@ function HeroSlot({ slot, hero, paths, busy, load, confirmDelete }) {
   );
 }
 
-function HeroPicker({ game, actions }) {
+function HeroPicker({ game, actions, mobileControls: MobileControls }) {
   const { hero, world, campaign } = game;
   const paths = campaign.paths ?? [];
   const [heroes, setHeroes] = useState(null);
@@ -210,6 +210,7 @@ function HeroPicker({ game, actions }) {
       close={hero ? actions.closeDialog : undefined}>
       <div className="dialog-content hero-content">
         <p id="hero-summary" className="muted">Create a hero or return to a saved expedition. Each hero keeps their own page, answers, and quest log.</p>
+        {!hero && MobileControls && <MobileControls game={game} actions={actions} />}
         <div className="hero-columns">
           <section className="hero-section" aria-labelledby="hero-load-title">
             <h3 id="hero-load-title">Load a hero</h3>
@@ -581,9 +582,9 @@ function TrialBoard({ game, actions }) {
   );
 }
 
-export function Dialogs({ game, actions }) {
+export function Dialogs({ game, actions, mobileControls }) {
   if (game.dialog === 'world') return <WorldPicker game={game} actions={actions} />;
-  if (game.dialog === 'hero' && game.world) return <HeroPicker game={game} actions={actions} />;
+  if (game.dialog === 'hero' && game.world) return <HeroPicker game={game} actions={actions} mobileControls={mobileControls} />;
   if (!game.hero) return null;
   switch (game.dialog) {
     case 'map': return <WorldMap game={game} actions={actions} />;

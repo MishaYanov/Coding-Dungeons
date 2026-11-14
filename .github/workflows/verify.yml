@@ -53,6 +53,8 @@ jobs:
           $env:FERRUM_BROWSER = node -p "require('playwright-core').chromium.executablePath()"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:browser
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:mobile
       - name: Test packaged Windows desktop
         env:
           FERRUM_DESKTOP_TEST_PACKAGE: "1"
