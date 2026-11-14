@@ -50,7 +50,8 @@ async function play(t) {
     preview:{port:0, host:'127.0.0.1', strictPort:true}});
   const cleanup = [() => new Promise(resolve => { server.httpServer.close(resolve); server.httpServer.closeAllConnections(); })];
   // Node runs after hooks FIFO. Release resources in reverse acquisition order:
-  // owned tab, CDP connection, ADB forwards, then server. Keep existing tabs open.
+  // owned tab and origin data, CDP connection, ADB forwards, then server.
+  // Keep existing tabs and other origins' data open and intact.
   t.after(async () => {
     const failures = [];
     while (cleanup.length) {
@@ -91,7 +92,20 @@ async function play(t) {
   }
   if (!serial) cleanup.push(() => context.close());
   const page = await context.newPage();
-  if (serial) cleanup.push(() => page.close());
+  if (serial) cleanup.push(async () => {
+    let session;
+    try {
+      // Unload the app and its workers before clearing its exact origin. Android
+      // Chrome needs a page-target session for this Storage command.
+      await page.goto('about:blank');
+      session = await context.newCDPSession(page);
+      // Cookies span ports, so preserve them and all other origins' app storage.
+      await session.send('Storage.clearDataForOrigin', {origin,
+        storageTypes:'service_workers,cache_storage,indexeddb,local_storage'});
+    } finally {
+      try { await session?.detach(); } finally { await page.close(); }
+    }
+  });
   page.setDefaultTimeout(12_000);
   const errors = [];
   const apiRequests = [];
@@ -302,7 +316,8 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
     assert.equal(await heroPicker.getByRole('button', {name:/Type Mage/}).count(), 0);
     if (world === 'rust' && rustBundled) {
       await heroPicker.getByText(`Includes the experimental Rust ${rustBundled.rustVersion} Workbench. After downloading World 3, code tests run offline.`,
-        {exact:true}).waitFor();
+        {exact:false}).waitFor();
+      await heroPicker.getByText('2 GB phones are not yet verified.', {exact:false}).waitFor();
     }
     await download(number);
     await context.setOffline(true);

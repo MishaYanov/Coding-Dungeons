@@ -63,6 +63,8 @@ The GitHub Actions **Verify** workflow runs on pushes to `main` and on pull requ
 
 ### Mobile edition
 
+The optional mobile Rust compiler is a local experimental prototype. Public distribution of a Rust-enabled build is blocked on matching component notices and exact compiler source provenance; see [mobile Rust status and validation](docs/MOBILE-RUST.md).
+
 The installable web app includes JavaScript, TypeScript, Rust, and Go. Use **Change world** from the hero picker or campaign menu. Download each world you want to read offline. Heroes, progress, and drafts stay on the device and are separate for each world. Use **Save backup** to export a world's saves or import them into an empty save for that same world.
 
 ```powershell

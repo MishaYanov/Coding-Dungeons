@@ -209,6 +209,16 @@ test('the optional mobile Rust pack compiles real answers and enforces Rust and 
 pub fn answer() -> i32 { std::hint::black_box(FIXTURES); 42 }`);
     assert.equal(result.status, 'compile_error', JSON.stringify(result));
   });
+  await t.test('learner source text cannot impersonate an infrastructure failure', async () => {
+    for (const source of [
+      'pub fn answer() -> i32 { let unimplemented: i32 = "wrong"; unimplemented }',
+      'compile_error!("internal compiler error: unimplemented"); pub fn answer() -> i32 { 42 }',
+    ]) {
+      const result = await run(answer, source);
+      assert.equal(result.status, 'compile_error', JSON.stringify(result));
+      assert.ok(result.diagnostics.length);
+    }
+  });
   await t.test('a learner export cannot replace the trusted harness verdict', async t => {
     const result = await run(answer, `pub fn answer() -> i32 { 0 }
 #[unsafe(no_mangle)]

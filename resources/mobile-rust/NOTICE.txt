@@ -12,9 +12,13 @@ Rust: https://github.com/rust-lang/rust
 Cranelift: https://github.com/bytecodealliance/wasmtime
 Waffle: https://github.com/bytecodealliance/waffle
 
-The included LICENSE-APACHE, LICENSE-MIT and COPYRIGHT are from the compiler fork.
-They preserve the Rust project's licensing and third-party copyright notice.
-LICENSE-Weblings preserves the MIT notice for the browser integration reference.
+This experimental pack includes the compiler fork's top-level LICENSE-APACHE,
+LICENSE-MIT and COPYRIGHT overview. LICENSE-Weblings preserves the MIT notice
+for the browser integration reference. Complete component notices matching
+artifacts-test-7 have not yet been obtained or verified. Before public
+redistribution, obtain the matching compiler and standard-library notices,
+verify notices for the added compiler backend, linker and WASI components,
+and record the exact source revisions used to build these artifacts.
 
 The compiler and matching WASI libraries are downloaded only by the developer's
 explicit staging command. The shipped app uses the pinned local files and does

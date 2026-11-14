@@ -154,6 +154,7 @@ export function MobileControls({game}) {
       </button>}
       {world.id === 'rust' && rustInfo && <p className="fine-print">
         Includes the experimental Rust {rustInfo.version} Workbench. After downloading World 3, code tests run offline.
+        {' '}The workbench adds about 152 MiB. Some Rust features are unavailable; 2 GB phones are not yet verified.
       </p>}
       <details>
         <summary>Save backup</summary>
