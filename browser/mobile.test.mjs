@@ -109,12 +109,45 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   await context.setOffline(true);
   await hero(page, 'Pocket Warden', true);
   await bookPage(page, 1);
-  await tap(page.getByRole('button', {name:'Next page', exact:true}));
+  const header = page.getByRole('banner');
+  const book = header.getByRole('tab', {name:'World', exact:true});
+  const gm = header.getByRole('tab', {name:'GM', exact:true});
+  const more = header.getByRole('button', {name:'More options', exact:true});
+  const bottom = page.getByRole('navigation', {name:'Book pages', exact:true});
+  await more.waitFor();
+  assert.equal(await book.getAttribute('aria-selected'), 'true');
+  assert.equal(await more.getAttribute('aria-expanded'), 'false');
+  assert.equal(await header.getByRole('button', {name:'World map', exact:true}).count(), 0);
+  const bars = await page.evaluate(() => {
+    const bounds = selector => document.querySelector(selector).getBoundingClientRect();
+    return {header:bounds('.compact-header').top, bottom:bounds('.mobile-page-controls').bottom,
+      viewport:window.innerHeight, tabTop:bounds('#mobile-book-tab').top,
+      menuTop:bounds('.options-trigger').top, width:document.documentElement.scrollWidth, screen:window.innerWidth};
+  });
+  assert.equal(bars.header, 0);
+  assert.ok(Math.abs(bars.bottom - bars.viewport) < 2);
+  assert.equal(bars.tabTop, bars.menuTop);
+  assert.ok(bars.width <= bars.screen);
+  await tap(more);
+  const options = page.locator('#campaign-options');
+  await options.getByRole('button', {name:'World map', exact:true}).waitFor();
+  await options.getByRole('button', {name:'Download World 1', exact:true}).waitFor({state:'hidden'});
+  await options.getByText('World 1 ready offline', {exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  await options.waitFor({state:'hidden'});
+  assert.equal(await more.getAttribute('aria-expanded'), 'false');
+  await tap(more);
+  await tap(book);
+  await options.waitFor({state:'hidden'});
+  await tap(more);
+  await tap(options.getByRole('button', {name:'World map', exact:true}));
+  const map = page.getByRole('dialog', {name:'World map', exact:true});
+  await map.waitFor();
+  await tap(map.getByRole('button', {name:'Close world map'}));
+  await tap(bottom.getByRole('button', {name:'Next page', exact:true}));
   await bookPage(page, 2);
   await jump(page, quest.bossPage);
   await bookPage(page, quest.bossPage);
-  const gm = page.getByRole('tab', {name:'GM', exact:true});
-  const book = page.getByRole('tab', {name:'Book', exact:true});
   await tap(gm);
   const editor = page.getByRole('textbox', {name:'JavaScript code', exact:true});
   const source = 'function makeBadge(value) {\nreturn null;\n}';
@@ -151,7 +184,7 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   await restored.locator('.creature-encounter[data-state="defeated"]').waitFor();
   await restored.getByText('Hard Clear', {exact:true}).waitFor();
   assert.equal(await restored.getByRole('textbox', {name:'JavaScript code', exact:true}).inputValue(), unsent);
-  await tap(restored.getByRole('tab', {name:'Book', exact:true}));
+  await tap(restored.getByRole('tab', {name:'World', exact:true}));
   assert.equal(await book.getAttribute('aria-selected'), 'false');
 
   let diamondVisible = false;

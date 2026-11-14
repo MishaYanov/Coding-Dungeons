@@ -149,6 +149,7 @@ svg { display: block; flex-shrink: 0; }
 .reader-caption { display: grid; gap: 3px; min-width: 0; flex: 1; }
 .reader-location { font-size: .82rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .reader-controls, .jump-form { display: flex; align-items: center; gap: 6px; }
+.zoom-controls { display: flex; align-items: center; gap: 6px; }
 .reader-controls { flex-shrink: 0; }
 .keyboard-tip { display: flex; align-items: center; gap: 4px; color: var(--muted); white-space: nowrap; font-size: .67rem; }
 .keyboard-tip kbd { min-width: 17px; padding: 2px 3px; text-align: center; color: var(--copper); background: #192733; border: 1px solid var(--line); border-radius: 4px; font: inherit; font-weight: 720; }
@@ -737,50 +738,84 @@ dialog::backdrop { background: #050a10b8; }
   .jump-form input { width: 44px; }
 }
 
-.mobile-app { max-width: 960px; margin-inline: auto; }
-.mobile-app .workspace { display: block; min-height: 0; height: auto; }
-.mobile-app .app-header { flex-wrap: wrap; }
-.mobile-app .app-nav { flex-wrap: wrap; justify-content: start; }
 .mobile-app :is(button.nav-button, button.icon-button, button.fit-button, .button, .choice-option, .special-option) {
   min-height: 44px;
 }
 .mobile-app :is(button.icon-button, button.fit-button, .gm-mushroom-help) { min-width: 44px; }
 .mobile-app .gm-mushroom-help { min-height: 44px; }
 .mobile-app :is(textarea, .jump-form input, .control-label input, .control-label select) { font-size: 1rem; }
-.mobile-app .reader-panel { border-right: 0; }
-.mobile-app .reader-toolbar { justify-content: space-between; }
-.mobile-app .reader-caption { display: grid; }
-.mobile-app .reader-viewport { flex: none; padding: 12px max(9px, env(safe-area-inset-right)) 20px max(9px, env(safe-area-inset-left)); }
-.mobile-app .guide-scroll { overflow: visible; }
-.mobile-reader-nav {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  display: grid;
-  gap: 6px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
-  background: var(--navy);
-}
-.mobile-tabs, .mobile-page-controls { display: flex; justify-content: center; align-items: center; gap: 6px; }
-.mobile-tabs button {
-  flex: 1 1 0;
-  min-height: 44px;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-weight: 650;
-}
-.mobile-tabs button[aria-selected="true"] {
-  border-color: var(--copper);
-  color: var(--copper);
-  background: #352a27;
-}
-.mobile-page-controls .jump-form { gap: 5px; }
-.mobile-page-controls .jump-form input { width: 54px; min-height: 44px; }
-.mobile-page-controls .jump-form button { padding-inline: 9px; }
 .code-indentation { display: flex; align-items: center; gap: 9px; }
-.mobile-app :is(.guide-panel, .field-card, .code-editor) { scroll-margin-top: 110px; }
+
+@media (max-width: 800px) {
+  .compact-layout { --page-bar: calc(61px + env(safe-area-inset-bottom)); padding-bottom: var(--page-bar); }
+  .compact-header {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    padding: max(6px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 6px max(10px, env(safe-area-inset-left));
+  }
+  .compact-nav, .mobile-tabs, .mobile-page-controls { display: flex; align-items: center; gap: 5px; }
+  .compact-nav { flex: 0 0 auto; }
+  .compact-header .identity > div { min-width: 0; }
+  .compact-header .brand-word { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-tabs button, .options-trigger {
+    min-width: 44px;
+    min-height: 44px;
+    padding-inline: 10px;
+  }
+  .mobile-tabs button[aria-selected="true"] {
+    border-color: var(--copper);
+    color: var(--copper);
+    background: #352a27;
+  }
+  .options-trigger { padding-inline: 0; }
+  .compact-header .options-trigger svg { display: block; width: 20px; height: 20px; }
+  .campaign-options { position: relative; }
+  .campaign-options-panel {
+    position: absolute;
+    inset: calc(100% + 7px) 0 auto auto;
+    display: grid;
+    gap: 4px;
+    width: min(244px, calc(100vw - 24px));
+    max-height: min(32rem, calc(100dvh - var(--app-bar) - var(--page-bar) - 14px));
+    overflow: auto;
+    padding: 7px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--panel);
+    box-shadow: 0 9px 24px #0008;
+  }
+  .campaign-options-panel > .nav-button {
+    justify-content: flex-start;
+    min-height: 44px;
+    padding-inline: 10px;
+    text-align: start;
+  }
+  .campaign-options-panel :is(.zoom-controls, .mobile-offline) { padding: 6px 4px 2px; }
+  .campaign-options-panel .zoom-controls { border-top: 1px solid var(--line); }
+  .campaign-options-panel .zoom-controls button, .mobile-page-controls :is(button, input) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .compact-layout .reader-viewport {
+    padding-inline: max(9px, env(safe-area-inset-left)) max(9px, env(safe-area-inset-right));
+  }
+  .mobile-page-controls {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 2;
+    justify-content: center;
+    padding: 8px max(10px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: var(--navy);
+  }
+  .mobile-page-controls .jump-form { gap: 5px; }
+  .mobile-page-controls .jump-form input { width: 54px; font-size: 1rem; }
+  .mobile-page-controls .jump-form button { padding-inline: 9px; }
+  .compact-layout :is(.guide-panel, .field-card, .code-editor) {
+    scroll-margin-block: var(--app-bar) var(--page-bar);
+  }
+  .compact-layout .toast { bottom: calc(var(--page-bar) + 8px); }
+}
 
 @media (prefers-reduced-motion: reduce) { .loading-mark { animation: none; } }

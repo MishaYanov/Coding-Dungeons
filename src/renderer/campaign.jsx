@@ -7,11 +7,73 @@ import { DiamondEncounter, DiamondGem, SpecialEncounter, diamondPosition } from 
 const model = createGame();
 const { actions } = model;
 const mobile = import.meta.env.MODE === 'mobile';
+const phoneLayout = '(max-width: 800px)';
 
-function CampaignHeader({ game }) {
+function subscribeToPhoneLayout(notify) {
+  const query = window.matchMedia(phoneLayout);
+  query.addEventListener('change', notify);
+  return () => query.removeEventListener('change', notify);
+}
+
+function CampaignActions({ profile, onSelect, compact }) {
+  return <>
+    <button className="nav-button" id="open-worlds" type="button" onClick={() => onSelect('world')}>
+      {compact ? 'Change world' : 'Worlds'}
+    </button>
+    <button className="nav-button" id="open-map" type="button" onClick={() => onSelect('map')}>
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15" strokeLinejoin="round" /></svg>
+      <span>World map</span>
+    </button>
+    <button className="nav-button" id="open-trials" type="button" aria-haspopup="dialog" onClick={() => onSelect('trial')}>Trials</button>
+    <button className="nav-button" id="open-log" type="button" onClick={() => onSelect('log')}>
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v16H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm-2 15a2 2 0 0 1 2-2h13M8 7h7m-7 4h7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      <span>Character sheet</span>
+    </button>
+    <button className="nav-button" id="open-heroes" type="button" onClick={() => onSelect('hero')}>Switch hero</button>
+    <button className={compact ? 'nav-button' : 'profile-button'} id="open-profile" type="button"
+      aria-label="Edit explorer profile" title={compact ? undefined : `Edit ${profile.callsign}`} onClick={() => onSelect('profile')}>
+      {compact ? 'Edit profile' : <><span className="profile-mark" aria-hidden="true">F</span><span id="header-callsign">{profile.callsign}</span></>}
+    </button>
+  </>;
+}
+
+function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, onZoom }) {
   const { world, profile } = game;
+  const [open, setOpen] = useState(false);
+  const menu = useRef(null);
+  const trigger = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function dismissOutside(event) {
+      if (!menu.current?.contains(event.target)) setOpen(false);
+    }
+    function escape(event) {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      setOpen(false);
+      trigger.current?.focus();
+    }
+    document.addEventListener('pointerdown', dismissOutside);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', dismissOutside);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!compact || game.dialog) setOpen(false);
+  }, [compact, game.dialog]);
+
+  function selectDialog(name) {
+    setOpen(false);
+    trigger.current?.focus();
+    actions.openDialog(name);
+  }
+
   return (
-    <header className="app-header">
+    <header className={compact ? 'app-header compact-header' : 'app-header'}>
       <div className="identity">
         <span className="brand-icon" aria-hidden="true">
           <svg viewBox="0 0 40 40" fill="none" width="40" height="40">
@@ -24,23 +86,30 @@ function CampaignHeader({ game }) {
           <p className="brand-caption" id="world-caption">{world ? `World ${world.number} · ${world.name}` : 'Campaign worlds'}</p>
         </div>
       </div>
-      <nav className="app-nav" aria-label="Campaign">
-        <button className="nav-button" id="open-worlds" type="button" onClick={() => actions.openDialog('world')}>Worlds</button>
-        <button className="nav-button" id="open-map" type="button" onClick={() => actions.openDialog('map')}>
-          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15" strokeLinejoin="round" /></svg>
-          <span>World map</span>
-        </button>
-        <button className="nav-button" id="open-trials" type="button" aria-haspopup="dialog" onClick={() => actions.openDialog('trial')}>Trials</button>
-        <button className="nav-button" id="open-log" type="button" onClick={() => actions.openDialog('log')}>
-          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v16H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm-2 15a2 2 0 0 1 2-2h13M8 7h7m-7 4h7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          <span>Character sheet</span>
-        </button>
-        <button className="nav-button" id="open-heroes" type="button" onClick={() => actions.openDialog('hero')}>Switch hero</button>
-        <button className="profile-button" id="open-profile" type="button" aria-label="Edit explorer profile"
-          title={`Edit ${profile.callsign}`} onClick={() => actions.openDialog('profile')}>
-          <span className="profile-mark" aria-hidden="true">F</span><span id="header-callsign">{profile.callsign}</span>
-        </button>
-      </nav>
+      {compact ? <nav className="compact-nav" aria-label="Campaign">
+        {tabs}
+        <div ref={menu} className="campaign-options" onBlur={(event) => {
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+        }}>
+          <button ref={trigger} className="nav-button options-trigger" type="button" aria-label="More options"
+            aria-expanded={open} aria-controls="campaign-options" onClick={() => setOpen(!open)}>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+              <circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" />
+            </svg>
+          </button>
+          <div id="campaign-options" className="campaign-options-panel" hidden={!open}>
+            <CampaignActions profile={profile} onSelect={selectDialog} compact />
+            {game.hero && <ZoomControls zoom={game.zoom} onZoom={(zoom) => {
+              setOpen(false);
+              trigger.current?.focus();
+              onZoom(zoom);
+            }} />}
+            {MobileControls && game.hero && <MobileControls game={game} actions={actions} />}
+          </div>
+        </div>
+      </nav> : <nav className="app-nav" aria-label="Campaign">
+        <CampaignActions profile={profile} onSelect={actions.openDialog} />
+      </nav>}
     </header>
   );
 }
@@ -111,7 +180,7 @@ function BookPage({ game, width, onDiamond }) {
   );
 }
 
-function PageControls({ game }) {
+function PageControls({ game, compact }) {
   const { page, total, hero, loading } = game;
   const [number, setNumber] = useState(1);
   const pageValue = page?.page ?? 1;
@@ -125,13 +194,13 @@ function PageControls({ game }) {
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m14 6-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" /></svg>
     </button>
     <form className="jump-form" id="page-jump" onSubmit={(event) => { event.preventDefault(); actions.openPage(number); }}>
-      <label className={mobile ? undefined : 'visually-hidden'} htmlFor="page-number">
-        {mobile ? 'Page' : 'Page number. Press Enter to open.'}
+      <label className={compact ? undefined : 'visually-hidden'} htmlFor="page-number">
+        {compact ? 'Page' : 'Page number. Press Enter to open.'}
       </label>
       <input id="page-number" type="number" inputMode="numeric" min="1" max={total ?? undefined} step="1"
         value={number} onChange={(event) => setNumber(event.target.value)} required disabled={!hero} />
       <span id="page-total">{total ? `/ ${total}` : '/ …'}</span>
-      {mobile && <button type="submit" className="button button-quiet" disabled={!hero}>Go</button>}
+      {compact && <button type="submit" className="button button-quiet" disabled={!hero}>Go</button>}
     </form>
     <button id="next-page" className="icon-button" type="button" aria-label="Next page"
       disabled={loading || !page || pageValue >= total} onClick={() => actions.openPage(pageValue + 1)}>
@@ -140,7 +209,15 @@ function PageControls({ game }) {
   </>;
 }
 
-function BookReader({ game, hidden, onDiamond }) {
+function ZoomControls({zoom, onZoom = actions.changeZoom}) {
+  return <div className="zoom-controls" role="group" aria-label="Book zoom">
+    <button id="zoom-out" className="icon-button" type="button" aria-label="Zoom out" disabled={zoom <= .65} onClick={() => onZoom(zoom - .15)}>−</button>
+    <button id="zoom-fit" className="fit-button" type="button" aria-label="Reset to fit width" onClick={() => onZoom(1)}>{zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`}</button>
+    <button id="zoom-in" className="icon-button" type="button" aria-label="Zoom in" disabled={zoom >= 1.85} onClick={() => onZoom(zoom + .15)}>+</button>
+  </div>;
+}
+
+function BookReader({ game, compact, hidden, onDiamond }) {
   const { page, hero, zoom, loading, pageError } = game;
   const [width, setWidth] = useState(720);
   const viewport = useRef(null);
@@ -166,8 +243,8 @@ function BookReader({ game, hidden, onDiamond }) {
   useLayoutEffect(() => {
     if (!page) return;
     viewport.current.scrollTo(0, 0);
-    if (!mobile && matchMedia('(max-width: 800px)').matches) window.scrollTo(0, 0);
-  }, [page]);
+    if (compact) window.scrollTo(0, 0);
+  }, [page, compact]);
   useLayoutEffect(() => {
     if (!hidden && hero && hero !== focusedHero.current && game.ready && !game.dialog && !game.switchingHero) {
       focusedHero.current = hero;
@@ -176,24 +253,22 @@ function BookReader({ game, hidden, onDiamond }) {
   }, [hidden, hero, game.ready, game.dialog, game.switchingHero]);
 
   return (
-    <section className="reader-panel" id={mobile ? 'book-panel' : undefined} hidden={hidden}
-      role={mobile ? 'tabpanel' : undefined} aria-labelledby={mobile ? 'mobile-book-tab' : undefined}
-      aria-label={mobile ? undefined : 'Book reader'}>
-      <div className="reader-toolbar">
+    <section className="reader-panel" id={compact ? 'book-panel' : undefined} hidden={hidden}
+      role={compact ? 'tabpanel' : undefined} aria-labelledby={compact ? 'mobile-book-tab' : undefined}
+      aria-label={compact ? undefined : 'Book reader'}>
+      {!compact && <div className="reader-toolbar">
         <div className="reader-caption">
           <span className="eyebrow">CAMPAIGN BOOK</span>
           <span className="reader-location" id="reader-location">{caption}</span>
         </div>
-        <div className="reader-controls" role={mobile ? 'group' : undefined} aria-label={mobile ? 'Book zoom' : undefined}>
-          {!mobile && <><PageControls game={game} /><span className="toolbar-divider" aria-hidden="true" /></>}
-          <button id="zoom-out" className="icon-button" type="button" aria-label="Zoom out" disabled={zoom <= .65} onClick={() => actions.changeZoom(zoom - .15)}>−</button>
-          <button id="zoom-fit" className="fit-button" type="button" aria-label="Reset to fit width" onClick={() => actions.changeZoom(1)}>{zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`}</button>
-          <button id="zoom-in" className="icon-button" type="button" aria-label="Zoom in" disabled={zoom >= 1.85} onClick={() => actions.changeZoom(zoom + .15)}>+</button>
+        <div className="reader-controls">
+          <PageControls game={game} /><span className="toolbar-divider" aria-hidden="true" />
+          <ZoomControls zoom={zoom} />
         </div>
-        {!mobile && <div className="keyboard-tip" aria-label="A and D, or left and right arrows, turn pages">
+        <div className="keyboard-tip" aria-label="A and D, or left and right arrows, turn pages">
           <kbd>A</kbd><kbd>D</kbd><span>or</span><kbd>←</kbd><kbd>→</kbd><span>turn pages</span>
-        </div>}
-      </div>
+        </div>
+      </div>}
       <div ref={viewport} className="reader-viewport" id="reader-viewport" tabIndex={0} aria-label="Book page view">
         {page && !loading && !pageError ? <BookPage key={pageValue} game={game} width={width} onDiamond={onDiamond} /> : (
           <div className="reader-placeholder" id="reader-placeholder" aria-live="polite">
@@ -228,7 +303,7 @@ function CombatStatus({ game }) {
   );
 }
 
-function GameMaster({ game, hidden, panelRef }) {
+function GameMaster({ game, compact, hidden, panelRef }) {
   const { world, campaign, runner, runnerDetail, storage, page, hero, profile } = game;
   const ready = runner.toLowerCase() === 'available';
   const guided = world && world.id !== 'rust' && !campaign.exercises?.length;
@@ -239,7 +314,7 @@ function GameMaster({ game, hidden, panelRef }) {
   const title = page?.title || (hero ? profile.callsign : 'Your expedition');
   return (
     <section className="guide-panel" id="guide-panel" ref={panelRef} hidden={hidden}
-      role={mobile ? 'tabpanel' : undefined} aria-labelledby={mobile ? 'mobile-gm-tab' : 'guide-title'} tabIndex={-1}>
+      role={compact ? 'tabpanel' : undefined} aria-labelledby={compact ? 'mobile-gm-tab' : 'guide-title'} tabIndex={-1}>
       <header className="guide-header">
         <div className="guide-identity">
           <span className="guide-icon" aria-hidden="true">
@@ -258,8 +333,8 @@ function GameMaster({ game, hidden, panelRef }) {
 
 export function CampaignReader({ mobileControls: MobileControls }) {
   const game = useSyncExternalStore(model.subscribe, model.getSnapshot);
+  const compact = useSyncExternalStore(subscribeToPhoneLayout, () => window.matchMedia(phoneLayout).matches);
   const [panel, setPanel] = useState('book');
-  const mobileNav = useRef(null);
   const bookTab = useRef(null);
   const gmTab = useRef(null);
   const guidePanel = useRef(null);
@@ -273,8 +348,7 @@ export function CampaignReader({ mobileControls: MobileControls }) {
 
   function showPanel(next) {
     setPanel(next);
-    const navigation = mobileNav.current;
-    if (navigation && window.scrollY > navigation.offsetTop) window.scrollTo(0, navigation.offsetTop);
+    if (next !== panel) window.scrollTo(0, 0);
   }
 
   function changeTabWithKey(event) {
@@ -287,7 +361,7 @@ export function CampaignReader({ mobileControls: MobileControls }) {
   }
 
   function openDiamond() {
-    if (mobile) showPanel('gm');
+    if (compact) showPanel('gm');
     void actions.startDiamond();
   }
   useEffect(() => {
@@ -297,7 +371,7 @@ export function CampaignReader({ mobileControls: MobileControls }) {
       const { page, loading, switchingHero, dialog, total } = model.getSnapshot();
       if (!page || loading || switchingHero || dialog || event.defaultPrevented || event.isComposing || event.keyCode === 229
         || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.target.isContentEditable
-        || event.target.closest?.('input, textarea, select, [role=textbox], [role=combobox], [role=radio], [role=slider]')) return;
+        || event.target.closest?.('input, textarea, select, [role=textbox], [role=combobox], [role=radio], [role=slider], .campaign-options')) return;
       const key = !event.code || event.code === 'Unidentified' ? event.key.toLowerCase() : '';
       const direction = event.key === 'ArrowLeft' || event.code === 'KeyA' || key === 'a' ? -1
         : event.key === 'ArrowRight' || event.code === 'KeyD' || key === 'd' ? 1 : 0;
@@ -319,8 +393,8 @@ export function CampaignReader({ mobileControls: MobileControls }) {
   }, [game.world]);
 
   return (
-    <div className={mobile ? 'mobile-app' : undefined}>
-      <a className="skip-link" href="#guide-panel" onClick={mobile ? (event) => {
+    <div className={[mobile && 'mobile-app', compact && 'compact-layout'].filter(Boolean).join(' ') || undefined}>
+      <a className="skip-link" href="#guide-panel" onClick={compact ? (event) => {
         event.preventDefault();
         if (panel === 'gm') guidePanel.current?.focus();
         else {
@@ -328,21 +402,20 @@ export function CampaignReader({ mobileControls: MobileControls }) {
           showPanel('gm');
         }
       } : undefined}>Skip to the field guide</a>
-      <CampaignHeader game={game} />
-      {mobile && MobileControls && game.hero && <MobileControls game={game} actions={actions} />}
-      {mobile && <div className="mobile-reader-nav" ref={mobileNav}>
-        <div className="mobile-tabs" role="tablist" aria-label="Reader panels" onKeyDown={changeTabWithKey}>
+      <CampaignHeader game={game} compact={compact} mobileControls={mobile ? MobileControls : undefined}
+        onZoom={(zoom) => { showPanel('book'); actions.changeZoom(zoom); }}
+        tabs={<div className="mobile-tabs" role="tablist" aria-label="Reader panels" onKeyDown={changeTabWithKey}>
           <button type="button" id="mobile-book-tab" ref={bookTab} role="tab" aria-controls="book-panel"
-            aria-selected={panel === 'book'} tabIndex={panel === 'book' ? 0 : -1} onClick={() => showPanel('book')}>Book</button>
+            aria-selected={panel === 'book'} tabIndex={panel === 'book' ? 0 : -1} onClick={() => showPanel('book')}>World</button>
           <button type="button" id="mobile-gm-tab" ref={gmTab} role="tab" aria-controls="guide-panel"
             aria-selected={panel === 'gm'} tabIndex={panel === 'gm' ? 0 : -1} onClick={() => showPanel('gm')}>GM</button>
-        </div>
-        <nav className="mobile-page-controls" aria-label="Book pages"><PageControls game={game} /></nav>
-      </div>}
+        </div>} />
+      {mobile && !compact && MobileControls && game.hero && <MobileControls game={game} actions={actions} />}
       <main className="workspace">
-        <BookReader game={game} hidden={mobile && panel !== 'book'} onDiamond={openDiamond} />
-        <GameMaster game={game} hidden={mobile && panel !== 'gm'} panelRef={guidePanel} />
+        <BookReader game={game} compact={compact} hidden={compact && panel !== 'book'} onDiamond={openDiamond} />
+        <GameMaster game={game} compact={compact} hidden={compact && panel !== 'gm'} panelRef={guidePanel} />
       </main>
+      {compact && game.hero && <nav className="mobile-page-controls" aria-label="Book pages"><PageControls game={game} compact /></nav>}
       <Dialogs game={game} actions={actions} mobileControls={mobile ? MobileControls : undefined} />
       <div id="toast" className="toast" role="status" aria-live="polite" hidden={!game.toast}>{game.toast}</div>
     </div>

@@ -79,7 +79,7 @@ $adb = Join-Path $env:LOCALAPPDATA 'Android/Sdk/platform-tools/adb.exe'
 & $adb -e shell am start -a android.intent.action.VIEW -d http://localhost:4174/
 ```
 
-In Android Chrome, choose **Download World 1** and wait for **World 1 ready offline**. Chrome's menu can add the app to the home screen. Use **Book** to turn pages and **GM** to submit answers. Once the download finishes, disconnect and reopen the same address to test offline play.
+In Android Chrome, choose **Download World 1** and wait for **World 1 ready offline**. Chrome's menu can add the app to the home screen. Use **World** to read and **GM** to submit answers. The bottom bar turns pages, and the three-dot menu holds the map, hero actions, zoom, and saves. Once the download finishes, disconnect and reopen the same address to test offline play.
 
 For a physical phone, serve `dist/mobile/` at the root of an HTTPS origin. Android Chrome and iPhone Safari can add it to the home screen. Download World 1 on the phone before going offline. Browser storage can be cleared by the user or the operating system, so export a backup if you want to keep your hero.
 

@@ -228,6 +228,31 @@ test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs',
   await openBookPage(page, 6);
 });
 
+test('reader navigation moves to the header and bottom bar at the phone breakpoint', async t => {
+  const page = await newPage(t, '', 'javascript');
+  await createHero(page, 'Layout Scout', 1);
+  const header = page.getByRole('banner');
+  const pages = page.getByRole('navigation', {name:'Book pages', exact:true});
+  await header.getByRole('button', {name:'Worlds', exact:true}).waitFor();
+  assert.equal(await pages.count(), 0);
+
+  await page.setViewportSize({width:800, height:800});
+  const world = header.getByRole('tab', {name:'World', exact:true});
+  const gm = header.getByRole('tab', {name:'GM', exact:true});
+  await world.waitFor();
+  await pages.getByRole('button', {name:'Next page', exact:true}).click();
+  await openBookPage(page, 2);
+  await world.focus();
+  await world.press('ArrowRight');
+  assert.equal(await gm.getAttribute('aria-selected'), 'true');
+  assert.equal(new URL(page.url()).hash, '#page=2');
+
+  await page.setViewportSize({width:801, height:800});
+  await header.getByRole('button', {name:'Worlds', exact:true}).waitFor();
+  assert.equal(await pages.count(), 0);
+  await openBookPage(page, 2);
+});
+
 test('hero deletion can be canceled, and confirmed deletion survives reload', async (t) => {
   const page = await newPage(t, '');
   await createHero(page, 'Keeper of the Archive', 1);
