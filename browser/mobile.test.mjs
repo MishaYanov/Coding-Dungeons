@@ -122,11 +122,13 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
     const bounds = selector => document.querySelector(selector).getBoundingClientRect();
     return {header:bounds('.compact-header').top, bottom:bounds('.mobile-page-controls').bottom,
       viewport:window.innerHeight, tabTop:bounds('#mobile-book-tab').top,
+      worldWidth:bounds('#mobile-book-tab').width, gmWidth:bounds('#mobile-gm-tab').width,
       menuTop:bounds('.options-trigger').top, width:document.documentElement.scrollWidth, screen:window.innerWidth};
   });
   assert.equal(bars.header, 0);
   assert.ok(Math.abs(bars.bottom - bars.viewport) < 2);
   assert.equal(bars.tabTop, bars.menuTop);
+  assert.equal(bars.worldWidth, bars.gmWidth);
   assert.ok(bars.width <= bars.screen);
   await tap(more);
   const options = page.locator('#campaign-options');

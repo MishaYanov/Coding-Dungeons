@@ -756,6 +756,7 @@ dialog::backdrop { background: #050a10b8; }
   }
   .compact-nav, .mobile-tabs, .mobile-page-controls { display: flex; align-items: center; gap: 5px; }
   .compact-nav { flex: 0 0 auto; }
+  .mobile-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
   .compact-header .identity > div { min-width: 0; }
   .compact-header .brand-word { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mobile-tabs button, .options-trigger {
