@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runBrowserWorkbench } from '../lib/mobile/runner.mjs';
+import { runGoWorkbench } from '../lib/mobile/go-runner.mjs';
 import { capWasmMemory } from '../lib/mobile/wasm-memory.mjs';
 
 const request = {
@@ -14,6 +15,31 @@ class TestWorker extends EventTarget {
   postMessage(job) { this.job = job; }
   terminate() { this.terminations += 1; }
 }
+
+test('the Go download and compile watchdog reports an infrastructure failure and releases the runner', async t => {
+  const previousWorker = globalThis.Worker;
+  const workers = [];
+  globalThis.Worker = class extends TestWorker {
+    constructor() { super(); workers.push(this); }
+  };
+  t.after(() => {
+    if (previousWorker === undefined) delete globalThis.Worker;
+    else globalThis.Worker = previousWorker;
+  });
+  t.mock.timers.enable({ apis:['setTimeout'] });
+  const job = { source:'package main\nfunc answer() int { return 42 }',
+    tests:[{ id:'answer', code:'if answer() != 42 { t.Error("wrong answer") }' }] };
+  const stalled = runGoWorkbench(job);
+  assert.equal((await runGoWorkbench(job)).status, 'busy');
+  t.mock.timers.tick(35_000);
+  assert.equal((await stalled).status, 'runner_error');
+  assert.equal(workers[0].terminations, 1);
+
+  const next = runGoWorkbench(job);
+  workers[1].dispatchEvent(new MessageEvent('message', { data:{ status:'passed' } }));
+  assert.equal((await next).status, 'passed');
+  assert.equal(workers[1].terminations, 1);
+});
 
 test('the mobile runner sends just the bounded job and closes the worker after a result', async () => {
   const worker = new TestWorker();

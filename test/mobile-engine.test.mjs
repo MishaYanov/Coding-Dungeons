@@ -163,6 +163,29 @@ test('World 1 boss examples are practice, submitting tests unlocks Forge, and Ha
   assert.ok((await send(`/api/levels/${exercise.level}/reveal/debrief`, {})).text);
 });
 
+test('a Go infrastructure failure preserves the draft and allows the same submission to retry', async () => {
+  let calls = 0;
+  const {api} = fixture({worldId:'go', goRunnerAvailable:true, grade:async request => {
+    calls++;
+    return calls === 1 ? {status:'runner_error', tests:[], diagnostics:['Compiler download timed out.']}
+      : {status:'passed', tests:request.tests.map(({id}) => ({id, status:'passed', durationMs:1})), diagnostics:[]};
+  }});
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Retry Hero', oneLife:true}});
+  const {exercises:[exercise]} = await api('/api/campaign');
+  const page = await api(`/api/pages/${exercise.page}`);
+  const promptId = page.prompts.find(prompt => prompt.exerciseId === exercise.id).id;
+  const body = {page:exercise.page, exerciseId:exercise.id, promptId, code:'saved code', submissionId:'retry'};
+  await api('/api/grade', {method:'POST', hero, body});
+  const progress = await api('/api/progress', {hero});
+  assert.equal(progress.combat.hp, 100);
+  assert.equal(progress.combat.potions, 1);
+  assert.deepEqual(progress.attempts, []);
+  assert.equal(progress.responses.find(response => response.promptId === promptId).value, body.code);
+  assert.equal((await api('/api/grade', {method:'POST', hero, body})).verdict, 'pass');
+  assert.equal(calls, 2);
+  assert.equal((await api('/api/progress', {hero})).attempts.length, 1);
+});
+
 test('mobile backups retain encounter progress and reader drafts and reject invalid or occupied restores', async () => {
   const original = fixture();
   const {sideQuestMap} = localCatalog('javascript', identity);
@@ -193,19 +216,36 @@ test('mobile backups retain encounter progress and reader drafts and reject inva
   await api(`/api/workbench/${exercise.level}/mode`, {method:'PATCH', hero, body:{mode:'hard'}});
   await post('/api/grade', {page:exercise.page, exerciseId:exercise.id, promptId,
     code:'correct', submissionId:'boss'});
+  await post('/api/trials/dispatch-floor-trial', {
+    answers:{'relay-order':'b','badge-identity':'c'}, submissionId:'trial',
+  });
   const draftKey = `ferrum-prompt-drafts-v2:${hero.id}`;
   const drafts = '{"4:boss-1":"draft","diamond-goblin:code":"diamond draft"}';
   storage.setItem(draftKey, drafts);
-  const backup = await original.exportBackup();
+  const backup = JSON.parse(JSON.stringify(await original.exportBackup()));
   const restored = fixture();
-  const invalid = structuredClone(backup);
-  invalid.heroes[0].hp = 1.5;
-  await assert.rejects(restored.importBackup(invalid), /valid JavaScript backup/);
-  assert.deepEqual(await restored.api('/api/heroes'), {heroes:[]});
+  const invalidBackups = [
+    record => { record.hp = 1.5; },
+    record => { record.attempts[0].groups = [null]; },
+    record => { record.attempts[0].cases[0].id = {}; },
+    record => { record.encounters['diamond-goblin'].code.output = {}; },
+    record => { record.receipts.find(receipt => receipt.id === 'boss').result.cases = [null]; },
+    record => { record.receipts.find(receipt => receipt.id === 'trial').result.feedback = [null]; },
+  ];
+  for (const invalidate of invalidBackups) {
+    const invalid = structuredClone(backup);
+    invalidate(invalid.heroes[0]);
+    await assert.rejects(restored.importBackup(invalid), /valid JavaScript backup/);
+    assert.deepEqual(await restored.api('/api/heroes'), {heroes:[]});
+    assert.equal(restored.storage.getItem(draftKey), null);
+  }
   assert.deepEqual(await restored.importBackup(backup), {imported:1, readerRestored:true});
   assert.deepEqual((await restored.api('/api/diamond?page=1', {hero})).completed, ['code','choice']);
   assert.deepEqual((await restored.api(path, {hero})).completed, [first.id]);
   assert.equal((await restored.api('/api/progress', {hero})).attempts[0].hardClear, true);
+  const restoredBackup = await restored.exportBackup();
+  assert.deepEqual(restoredBackup.heroes[0].attempts, backup.heroes[0].attempts);
+  assert.deepEqual(restoredBackup.heroes[0].receipts, backup.heroes[0].receipts);
   assert.equal(restored.storage.getItem(draftKey), drafts);
   await assert.rejects(restored.importBackup(backup), /empty world/);
   assert.deepEqual(await restored.api(`/api/heroes/${hero.id}`, {method:'DELETE'}), {deleted:true, clearReaderData:true});
