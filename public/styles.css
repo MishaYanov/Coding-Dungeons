@@ -771,30 +771,35 @@ dialog::backdrop { background: #050a10b8; }
   }
   .options-trigger { padding-inline: 0; }
   .compact-header .options-trigger svg { display: block; width: 20px; height: 20px; }
-  .campaign-options { position: relative; }
-  .campaign-options-panel {
-    position: absolute;
-    inset: calc(100% + 7px) 0 auto auto;
-    display: grid;
-    gap: 4px;
-    width: min(244px, calc(100vw - 24px));
-    max-height: min(32rem, calc(100dvh - var(--app-bar) - var(--page-bar) - 14px));
-    overflow: auto;
-    padding: 7px;
-    border: 1px solid var(--line);
-    border-radius: 9px;
-    background: var(--panel);
-    box-shadow: 0 9px 24px #0008;
+  body:has(.campaign-drawer[open]) { overflow: hidden; }
+  .campaign-drawer {
+    inset: 0;
+    width: 100%;
+    border: 0;
   }
-  .campaign-options-panel > .nav-button {
+  .campaign-drawer .dialog-header {
+    flex: 0 0 auto;
+    padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+  }
+  .campaign-drawer .dialog-header h2 { margin: 0; }
+  .campaign-drawer .close-button { min-width: 44px; min-height: 44px; }
+  .campaign-drawer-content {
+    display: grid;
+    align-content: start;
+    flex: 1;
+    gap: 8px;
+    overscroll-behavior: contain;
+    padding: 16px max(16px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  .campaign-drawer-content > .nav-button {
     justify-content: flex-start;
     min-height: 44px;
     padding-inline: 10px;
     text-align: start;
   }
-  .campaign-options-panel :is(.zoom-controls, .mobile-offline) { padding: 6px 4px 2px; }
-  .campaign-options-panel .zoom-controls { border-top: 1px solid var(--line); }
-  .campaign-options-panel .zoom-controls button, .mobile-page-controls :is(button, input) {
+  .campaign-drawer-content :is(.zoom-controls, .mobile-offline) { padding: 8px 4px; }
+  .campaign-drawer-content .zoom-controls { border-top: 1px solid var(--line); }
+  .campaign-drawer-content .zoom-controls button, .mobile-page-controls :is(button, input) {
     min-width: 44px;
     min-height: 44px;
   }

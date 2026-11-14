@@ -40,35 +40,20 @@ function CampaignActions({ profile, onSelect, compact }) {
 function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, onZoom }) {
   const { world, profile } = game;
   const [open, setOpen] = useState(false);
-  const menu = useRef(null);
-  const trigger = useRef(null);
+  const drawer = useRef(null);
+
+  function closeDrawer() {
+    drawer.current?.close();
+    setOpen(false);
+  }
 
   useEffect(() => {
-    if (!open) return;
-    function dismissOutside(event) {
-      if (!menu.current?.contains(event.target)) setOpen(false);
-    }
-    function escape(event) {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      event.preventDefault();
-      setOpen(false);
-      trigger.current?.focus();
-    }
-    document.addEventListener('pointerdown', dismissOutside);
-    document.addEventListener('keydown', escape);
-    return () => {
-      document.removeEventListener('pointerdown', dismissOutside);
-      document.removeEventListener('keydown', escape);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!compact || game.dialog) setOpen(false);
+    if (!compact) setOpen(false);
+    else if (game.dialog && drawer.current?.open) closeDrawer();
   }, [compact, game.dialog]);
 
   function selectDialog(name) {
-    setOpen(false);
-    trigger.current?.focus();
+    closeDrawer();
     actions.openDialog(name);
   }
 
@@ -88,25 +73,35 @@ function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, o
       </div>
       {compact ? <nav className="compact-nav" aria-label="Campaign">
         {tabs}
-        <div ref={menu} className="campaign-options" onBlur={(event) => {
-          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-        }}>
-          <button ref={trigger} className="nav-button options-trigger" type="button" aria-label="More options"
-            aria-expanded={open} aria-controls="campaign-options" onClick={() => setOpen(!open)}>
+          <button className="nav-button options-trigger" type="button" aria-label="More options" aria-haspopup="dialog"
+            aria-expanded={open} aria-controls="campaign-options" onClick={(event) => {
+              event.currentTarget.focus({preventScroll:true});
+              drawer.current.showModal();
+              setOpen(true);
+            }}>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
               <circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" />
             </svg>
           </button>
-          <div id="campaign-options" className="campaign-options-panel" hidden={!open}>
-            <CampaignActions profile={profile} onSelect={selectDialog} compact />
-            {game.hero && <ZoomControls zoom={game.zoom} onZoom={(zoom) => {
-              setOpen(false);
-              trigger.current?.focus();
-              onZoom(zoom);
-            }} />}
-            {MobileControls && game.hero && <MobileControls game={game} actions={actions} />}
-          </div>
-        </div>
+          <dialog ref={drawer} id="campaign-options" className="drawer campaign-drawer"
+            aria-labelledby="campaign-options-title" onCancel={(event) => {
+              event.preventDefault();
+              closeDrawer();
+            }}>
+            <header className="dialog-header">
+              <h2 id="campaign-options-title">Campaign menu</h2>
+              <button type="button" className="icon-button close-button" aria-label="Close campaign menu"
+                onClick={closeDrawer}>×</button>
+            </header>
+            <div className="dialog-content campaign-drawer-content">
+              <CampaignActions profile={profile} onSelect={selectDialog} compact />
+              {game.hero && <ZoomControls zoom={game.zoom} onZoom={(zoom) => {
+                closeDrawer();
+                onZoom(zoom);
+              }} />}
+              {MobileControls && game.hero && <MobileControls game={game} actions={actions} />}
+            </div>
+          </dialog>
       </nav> : <nav className="app-nav" aria-label="Campaign">
         <CampaignActions profile={profile} onSelect={actions.openDialog} />
       </nav>}
@@ -371,7 +366,8 @@ export function CampaignReader({ mobileControls: MobileControls }) {
       const { page, loading, switchingHero, dialog, total } = model.getSnapshot();
       if (!page || loading || switchingHero || dialog || event.defaultPrevented || event.isComposing || event.keyCode === 229
         || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.target.isContentEditable
-        || event.target.closest?.('input, textarea, select, [role=textbox], [role=combobox], [role=radio], [role=slider], .campaign-options')) return;
+        || document.querySelector('.campaign-drawer[open]')
+        || event.target.closest?.('input, textarea, select, [role=textbox], [role=combobox], [role=radio], [role=slider]')) return;
       const key = !event.code || event.code === 'Unidentified' ? event.key.toLowerCase() : '';
       const direction = event.key === 'ArrowLeft' || event.code === 'KeyA' || key === 'a' ? -1
         : event.key === 'ArrowRight' || event.code === 'KeyD' || key === 'd' ? 1 : 0;

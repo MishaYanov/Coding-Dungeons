@@ -131,15 +131,24 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   assert.equal(bars.worldWidth, bars.gmWidth);
   assert.ok(bars.width <= bars.screen);
   await tap(more);
-  const options = page.locator('#campaign-options');
+  const options = page.getByRole('dialog', {name:'Campaign menu', exact:true});
+  const closeMenu = options.getByRole('button', {name:'Close campaign menu'});
+  await options.waitFor();
+  assert.equal(await options.evaluate(dialog => {
+    const bounds = dialog.getBoundingClientRect();
+    return dialog.matches(':modal') && bounds.top === 0 && bounds.left === 0
+      && Math.abs(bounds.width - window.innerWidth) < 2 && Math.abs(bounds.height - window.innerHeight) < 2;
+  }), true);
+  assert.equal(await closeMenu.evaluate(button => document.activeElement === button), true);
   await options.getByRole('button', {name:'World map', exact:true}).waitFor();
   await options.getByRole('button', {name:'Download World 1', exact:true}).waitFor({state:'hidden'});
   await options.getByText('World 1 ready offline', {exact:true}).waitFor();
   await page.keyboard.press('Escape');
   await options.waitFor({state:'hidden'});
   assert.equal(await more.getAttribute('aria-expanded'), 'false');
+  assert.equal(await more.evaluate(button => document.activeElement === button), true);
   await tap(more);
-  await tap(book);
+  await tap(closeMenu);
   await options.waitFor({state:'hidden'});
   await tap(more);
   await tap(options.getByRole('button', {name:'World map', exact:true}));
