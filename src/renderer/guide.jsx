@@ -107,8 +107,9 @@ function MushroomJuiceNote({ id }) {
         onClick={() => setVisible(true)} onBlur={() => setVisible(false)}>?</button>
     </div>
     <p id={id} className="gm-mushroom-tooltip" role="tooltip" hidden={!visible}>
-      An offline language model reviews written answers. It can misread a correct answer or miss part of your reasoning.
-      Treat the score as an estimate.
+      {mobile ? 'The mobile GM checks your answer against an authored rubric.'
+        : 'An offline language model reviews written answers.'}
+      {' It can miss a correct explanation. Treat the score as an estimate.'}
     </p>
   </div>;
 }
@@ -354,9 +355,7 @@ function Prompt({ data, prompt, index, game, actions }) {
     }}>
     <div className="prompt-heading"><h2 id={titleId}>{title}</h2><span className="prompt-type">{promptLabels[prompt.type]}</span></div>
     {text(prompt.body) && <p className="prompt-copy">{prompt.body}</p>}
-    {prompt.assessment && (mobile
-      ? <p className="fine-print">This review checks your wording against an authored rubric. It can miss a correct explanation.</p>
-      : <MushroomJuiceNote id={`${titleId}-gm-help`} />)}
+    {prompt.assessment && <MushroomJuiceNote id={`${titleId}-gm-help`} />}
     {prompt.assessment && game.combat?.oneLife && <p className="fine-print">Written feedback does not affect HP.</p>}
     {text(exercise?.description) && exercise.description !== prompt.body && <p className="prompt-copy">{exercise.description}</p>}
     {text(exercise?.signature) && <pre className="signature">{exercise.signature}</pre>}

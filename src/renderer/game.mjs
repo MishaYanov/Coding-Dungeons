@@ -1,6 +1,9 @@
+import {mobileReaderKey} from '../../lib/mobile/input.mjs';
+
 const draftKey = 'ferrum-prompt-drafts-v2';
 const lastPageKey = 'ferrum-last-page-v2';
 const selectedHeroKey = 'ferrum-selected-hero-v1';
+const selectedWorldKey = 'ferrum-mobile-world-v1';
 const mobile = import.meta.env?.MODE === 'mobile';
 const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|refactoring$|system-design$|rate-limiter$)/;
 const emptyProgress = () => ({
@@ -35,20 +38,24 @@ function writeLocal(key, value) {
   }
 }
 
-function removeReaderData(id) {
+function readerKey(world, key, id) {
+  return mobile ? mobileReaderKey(world.id, key, id) : `${key}:${id}`;
+}
+
+function removeReaderData(world, id) {
   try {
     if (window.codingDungeonsStorage) return window.codingDungeonsStorage.removeHero(id);
-    localStorage.removeItem(`${draftKey}:${id}`);
-    localStorage.removeItem(`${lastPageKey}:${id}`);
+    localStorage.removeItem(readerKey(world, draftKey, id));
+    localStorage.removeItem(readerKey(world, lastPageKey, id));
     return true;
   } catch {
     return false;
   }
 }
 
-function readDrafts(hero) {
+function readDrafts(world, hero) {
   try {
-    const value = JSON.parse(readLocal(`${draftKey}:${hero.id}`) || '{}');
+    const value = JSON.parse(readLocal(readerKey(world, draftKey, hero.id)) || '{}');
     return new Map(Object.entries(value).filter(([, draft]) => typeof draft === 'string'));
   } catch {
     return new Map();
@@ -105,7 +112,7 @@ export function createGame() {
   async function api(path, { method = 'GET', body, hero = game.hero, signal } = {}) {
     if (mobile) {
       const {getMobileEngine} = await import('./mobile-engine.mjs');
-      return (await getMobileEngine()).api(path, {method, body, hero, signal});
+      return (await getMobileEngine(game.world?.id)).api(path, {method, body, hero, signal});
     }
     const headers = { Accept: 'application/json' };
     if (game.world) headers['X-Ferrum-World'] = game.world.id;
@@ -141,7 +148,7 @@ export function createGame() {
     if (!game.hero) return false;
     const drafts = new Map(game.drafts).set(key, value);
     update({ drafts });
-    return writeLocal(`${draftKey}:${game.hero.id}`, JSON.stringify(Object.fromEntries(drafts)));
+    return writeLocal(readerKey(game.world, draftKey, game.hero.id), JSON.stringify(Object.fromEntries(drafts)));
   }
 
   function clearDraft(key, submittedValue) {
@@ -149,7 +156,7 @@ export function createGame() {
     const drafts = new Map(game.drafts);
     drafts.delete(key);
     update({ drafts });
-    writeLocal(`${draftKey}:${game.hero.id}`, JSON.stringify(Object.fromEntries(drafts)));
+    writeLocal(readerKey(game.world, draftKey, game.hero.id), JSON.stringify(Object.fromEntries(drafts)));
   }
 
   function combatNotice(event) {
@@ -244,7 +251,7 @@ export function createGame() {
   }
 
   function saveReadingPosition(page, hero) {
-    writeLocal(`${lastPageKey}:${hero.id}`, String(page));
+    writeLocal(readerKey(game.world, lastPageKey, hero.id), String(page));
     positionWrites = positionWrites.then(async () => {
       if (isCurrentHero(hero) && game.profile.lastPage === page) return;
       try {
@@ -363,7 +370,7 @@ export function createGame() {
     combatVersion = 0;
     pendingCombat = null;
     update({
-      ...emptyProgress(), hero, drafts: readDrafts(hero), combat: hero.combat || null,
+      ...emptyProgress(), hero, drafts: readDrafts(game.world, hero), combat: hero.combat || null,
       combatNotice: '', potionBusy: false, diamond: null, diamonds: 0,
       diamondStarting: false, diamondFocus: false, page: null, pageError: null,
       profile: { callsign: hero.name || 'Explorer', path: hero.path === 'all' ? '' : hero.path || '',
@@ -373,7 +380,7 @@ export function createGame() {
     rememberHero(game.world, hero.id);
     await refreshProgress().catch(() => {});
     if (!isCurrentHero(hero)) return;
-    const rememberedPage = pageNumber(readLocal(`${lastPageKey}:${hero.id}`));
+    const rememberedPage = pageNumber(readLocal(readerKey(game.world, lastPageKey, hero.id)));
     const requested = preferredPage || rememberedPage || game.profile.lastPage || 1;
     const page = game.total ? Math.min(requested, game.total) : requested;
     history.replaceState(null, '', `#page=${page}`);
@@ -423,7 +430,7 @@ export function createGame() {
           loading: false, dialog: 'hero', toast: '', readerMessage: 'Choose a hero to open the campaign book.',
         });
       }
-      return { deleted, readerDataCleared: !clearReaderData || removeReaderData(id) };
+      return { deleted, readerDataCleared: !clearReaderData || removeReaderData(world, id) };
     } finally {
       update({ switchingHero: false });
     }
@@ -445,13 +452,18 @@ export function createGame() {
     booted = true;
     try {
       const { worlds = [] } = await api('/api/worlds');
-      const selection = mobile ? 'javascript' : new URLSearchParams(location.search).get('world') || (hashPage() ? 'rust' : '');
+      const requested = new URLSearchParams(location.search).get('world');
+      const saved = mobile && readLocal(selectedWorldKey);
+      const selection = requested || (mobile
+        ? (worlds.some(world => world.id === saved) ? saved : 'javascript')
+        : hashPage() ? 'rust' : '');
       const world = worlds.find((candidate) => candidate.id === selection) || null;
       update({ worlds, world });
       if (!world) {
         update({ dialog: 'world', loading: false, readerMessage: 'Choose a world to open its book.' });
         return;
       }
+      if (mobile) writeLocal(selectedWorldKey, world.id);
       const [campaign, status] = await Promise.allSettled([api('/api/campaign'), api('/api/status')]);
       update({
         campaign: campaign.value ?? {}, campaignError: campaign.reason?.message ?? '',
@@ -459,10 +471,10 @@ export function createGame() {
         runnerDetail: status.value?.runnerDetail ?? '', storage: status.value?.storage ?? '',
       });
       if (manualHeroSelection) return;
-      const saved = savedHero(world);
-      if (saved) {
+      const previousHero = savedHero(world);
+      if (previousHero) {
         try {
-          const { hero } = await api('/api/heroes/load', { method: 'POST', body: { id: saved } });
+          const { hero } = await api('/api/heroes/load', { method: 'POST', body: { id: previousHero } });
           if (!manualHeroSelection) await activateHero(hero, hashPage());
           return;
         } catch {

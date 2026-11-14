@@ -61,9 +61,9 @@ The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go re
 
 The GitHub Actions **Verify** workflow runs on pushes to `main` and on pull requests. After the workflow is on GitHub's default branch, you can also start it from **Actions → Verify → Run workflow**. It checks npm advisories, runs the app and book tests, and smoke-tests an unpacked Windows build.
 
-### Mobile World 1
+### Mobile edition
 
-The mobile build is an installable web app with the 47-page JavaScript campaign, local code grading, and rule-based written feedback. Heroes, progress, and drafts stay on the device. Use **Save backup** to export World 1 and import it into an empty mobile save. The Windows app has its own saves.
+The installable web app includes JavaScript, TypeScript, Rust, and Go. Use **Change world** from the hero picker or campaign menu. Download each world you want to read offline. Heroes, progress, and drafts stay on the device and are separate for each world. Use **Save backup** to export a world's saves or import them into an empty save for that same world.
 
 ```powershell
 npm.cmd ci
@@ -81,7 +81,23 @@ $adb = Join-Path $env:LOCALAPPDATA 'Android/Sdk/platform-tools/adb.exe'
 
 In Android Chrome, choose **Download World 1** and wait for **World 1 ready offline**. Chrome's menu can add the app to the home screen. Use **World** to read and **GM** to submit answers. The bottom bar turns pages, and the three-dot menu holds the map, hero actions, zoom, and saves. Once the download finishes, disconnect and reopen the same address to test offline play.
 
-For a physical phone, serve `dist/mobile/` at the root of an HTTPS origin. Android Chrome and iPhone Safari can add it to the home screen. Download World 1 on the phone before going offline. Browser storage can be cleared by the user or the operating system, so export a backup if you want to keep your hero.
+For a physical phone, serve `dist/mobile/` at the root of an HTTPS origin. Open the installed Home Screen app before downloading worlds or creating heroes, especially on iPhone where the installed app has its own storage. Download each world before going offline. Browser storage can be cleared by the user or the operating system, so export a backup if you want to keep your hero. To pick up a new build, close the installed app and any open tabs at that address, then reopen it online.
+
+| Mobile workbench | How it runs |
+| --- | --- |
+| JavaScript | QuickJS runs the supplied tests inside a Web Worker. |
+| TypeScript | The pinned TypeScript compiler checks the submission and type contracts. QuickJS runs the emitted JavaScript against the suite. |
+| Rust | The book, written prompts, and code drafts work on the phone. Automated Rust tests use the Windows edition's bundled compiler. |
+| Go | With the optional pack, the pinned Go 1.27.4 compiler and linker run as WebAssembly in a worker. The linked program runs against the suite with a fresh WASI instance for each test. |
+
+On the build machine, install Go 1.27.4 or point the `GO` environment variable at that release's executable. Stage the Go pack before building the mobile edition.
+
+```powershell
+npm.cmd run mobile:stage-go
+npm.cmd run mobile:build
+```
+
+The Go compiler pack adds about 92 MiB before HTTP compression. In the build that includes it, **Download World 4** saves the complete pack alongside the book. Go challenges use the bundled standard-library subset. The mobile GM reviews written responses with authored rules. Submissions and feedback stay on the device.
 
 Run `npm.cmd run test:mobile` for the phone-size Chromium regression test. It uses the real browser grader, service worker, and IndexedDB.
 

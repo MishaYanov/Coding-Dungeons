@@ -8,10 +8,17 @@ import {promisify} from 'node:util';
 import {chromium, devices} from 'playwright-core';
 import {preview} from 'vite';
 import exercises from '../data/workbench/javascript.mjs';
+import typeScriptExercises from '../data/workbench/typescript.mjs';
+import goExercises from '../data/workbench/go.mjs';
 import {diamondName, diamondSolution, goblinName} from './diamond-fixture.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const {quests:[quest]} = JSON.parse(await readFile(join(project, 'data/worlds/javascript/campaign.json'), 'utf8'));
+async function firstQuest(world) {
+  const path = world === 'rust' ? 'data/campaign.json' : `data/worlds/${world}/campaign.json`;
+  const {quests:[quest]} = JSON.parse((await readFile(join(project, path), 'utf8')).replace(/^\uFEFF/, ''));
+  return quest;
+}
 const execute = promisify(execFile);
 
 async function chromeOptions() {
@@ -219,4 +226,83 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   await fight.getByRole('radio', {name:'values.slice()', exact:true}).check();
   await tap(fight.getByRole('button', {name:'Submit answer', exact:true}));
   await fight.getByText('Goblin defeated', {exact:true}).waitFor();
+});
+
+test('mobile worlds keep their own saves, offline books, and code grading capability', {timeout:240_000}, async t => {
+  const {page, context, origin} = await play(t);
+  const worlds = [['javascript','JavaScript'], ['typescript','TypeScript'], ['rust','Rust'], ['go','Go']];
+  const goBundled = await access(join(project, 'dist/mobile/runtime/go/manifest.json')).then(() => true, () => false);
+  const heroPicker = page.getByRole('dialog', {name:'Choose your hero'});
+  await tap(heroPicker.getByRole('button', {name:'Change world'}));
+  const worldPicker = page.getByRole('dialog', {name:'Choose a world'});
+  for (const [index, [id, name]] of worlds.entries()) {
+    const world = worldPicker.getByRole('link', {name:new RegExp(`^World ${index + 1} ${name}\\b`)});
+    await world.waitFor();
+    assert.equal(await world.getAttribute('href'), '?world=' + id);
+  }
+
+  async function download(number) {
+    await tap(heroPicker.getByRole('button', {name:`Download World ${number}`, exact:true}));
+    await heroPicker.getByText(`World ${number} ready offline`, {exact:true}).waitFor({timeout:90_000});
+  }
+
+  await tap(worldPicker.locator('[data-world="typescript"]'));
+  await download(2);
+  const typeQuest = await firstQuest('typescript');
+  const gm = page.getByRole('tab', {name:'GM', exact:true});
+  await context.setOffline(true);
+  await hero(page, 'Type Mage', true);
+  await jump(page, typeQuest.bossPage);
+  await bookPage(page, typeQuest.bossPage);
+  await tap(gm);
+  const typeCode = page.getByRole('textbox', {name:'TypeScript code', exact:true});
+  const looseType = typeScriptExercises[0].reference.replace('crateCount: number', 'crateCount: any');
+  await typeCode.fill(looseType);
+  await tap(page.getByRole('button', {name:'Run Examples', exact:true}));
+  await page.getByText('Examples passed', {exact:true}).waitFor();
+  await tap(page.getByRole('button', {name:'Submit solution', exact:true}));
+  await page.getByText('95 / 100 HP', {exact:true}).waitFor();
+  await typeCode.fill(typeScriptExercises[0].reference);
+  await tap(page.getByRole('button', {name:'Submit solution', exact:true}));
+  await page.locator('.creature-encounter[data-state="defeated"]').waitFor();
+
+  for (const [world, language, number] of [['rust','Rust',3], ['go','Go',4]]) {
+    await context.setOffline(false);
+    await page.goto(origin + '?world=' + world);
+    assert.equal(await heroPicker.getByRole('button', {name:/Type Mage/}).count(), 0);
+    await download(number);
+    await context.setOffline(true);
+    await hero(page, language + ' Warden', true);
+    const mission = await firstQuest(world);
+    await jump(page, mission.bossPage);
+    await bookPage(page, mission.bossPage);
+    await tap(gm);
+    const code = page.getByRole('textbox', {name:language + ' code', exact:true});
+    const submit = page.getByRole('button', {name:'Submit solution', exact:true});
+    if (world === 'go' && goBundled) {
+      await page.getByText('Go runner ready', {exact:true}).waitFor();
+      await code.fill(goExercises[0].reference);
+      await tap(submit);
+      await page.locator('.creature-encounter[data-state="defeated"]').waitFor({timeout:45_000});
+    } else {
+      await page.getByText(`${language} runner unavailable on mobile`, {exact:true}).waitFor();
+      assert.equal(await submit.isDisabled(), true);
+      await code.fill('// Saved while the compiler is unavailable');
+      await tap(page.getByRole('button', {name:'Save draft', exact:true}));
+      await page.reload();
+      await bookPage(page, mission.bossPage);
+      if (!await code.isVisible()) await tap(gm);
+      assert.equal(await code.inputValue(), '// Saved while the compiler is unavailable');
+      await page.getByText('100 / 100 HP', {exact:true}).waitFor();
+    }
+  }
+
+  // Downloading either of the other worlds preserves World 2 and its previous clear.
+  await page.goto(origin + '?world=typescript');
+  await bookPage(page, typeQuest.bossPage);
+  await tap(gm);
+  await page.locator('.creature-encounter[data-state="defeated"]').waitFor();
+  await page.goto(origin);
+  await bookPage(page, typeQuest.bossPage);
+  assert.equal(await page.locator('#world-caption').textContent(), 'World 2 · TypeScript');
 });

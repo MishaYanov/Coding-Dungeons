@@ -24,6 +24,17 @@ test('the mobile runner sends just the bounded job and closes the worker after a
   assert.equal(worker.terminations, 1);
 });
 
+test('the mobile runner passes TypeScript contracts alongside runnable fixtures', async () => {
+  const worker = new TestWorker();
+  const typeTests = [{ id:'contract', code:'const value: number = answer();' }];
+  const pending = runBrowserWorkbench({ ...request, language:'typescript', typeTests }, () => worker);
+  assert.equal(worker.job.language, 'typescript');
+  assert.deepEqual(worker.job.typeTests, typeTests);
+  assert.deepEqual(worker.job.tests, request.tests);
+  worker.dispatchEvent(new MessageEvent('message', { data:{ status:'passed' } }));
+  assert.equal((await pending).status, 'passed');
+});
+
 test('the mobile runner closes a worker if the route cancels or the worker misses its deadline', async () => {
   const worker = new TestWorker();
   const controller = new AbortController();
@@ -41,7 +52,7 @@ test('the mobile runner closes a worker if the route cancels or the worker misse
 test('the mobile runner rejects unsupported languages and oversized UTF-8 sources before spawning', async () => {
   const unexpected = () => assert.fail('An invalid request must not start a worker.');
   for (const invalid of [
-    { ...request, language:'typescript' },
+    { ...request, language:'rust' },
     { ...request, source:'🚧'.repeat(13_000) },
     { ...request, tests:new Array(33).fill(request.tests[0]) },
   ]) assert.equal((await runBrowserWorkbench(invalid, unexpected)).status, 'runner_error');

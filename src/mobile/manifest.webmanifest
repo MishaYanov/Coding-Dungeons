@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Coding Dungeons",
   "short_name": "Coding Dungeons",
-  "description": "An offline JavaScript adventure with a campaign book and code battles.",
+  "description": "Explore four programming worlds with campaign books, code battles, and offline hero saves.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

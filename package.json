@@ -22,6 +22,7 @@
     "test:mobile": "npm run mobile:build && node --test browser/mobile.test.mjs",
     "test:book": "python work/scripts/check_examples.py && python work/scripts/run_case_studies.py",
     "mobile:build": "vite build --mode mobile",
+    "mobile:stage-go": "node work/scripts/mobile-go-pack.mjs",
     "mobile:preview": "vite preview --mode mobile --host 127.0.0.1 --port 4174 --strictPort",
     "desktop:bundle": "vite build",
     "desktop:start": "npm run desktop:bundle && electron .",
@@ -43,6 +44,7 @@
     }
   },
   "devDependencies": {
+    "@bjorn3/browser_wasi_shim": "0.4.2",
     "@electron-forge/cli": "8.0.1",
     "@electron-forge/maker-squirrel": "8.0.1",
     "@electron/fuses": "2.1.2",

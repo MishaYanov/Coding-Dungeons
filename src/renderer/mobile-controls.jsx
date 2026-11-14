@@ -16,7 +16,7 @@ function registerOfflineWorker() {
   return workerRegistration;
 }
 
-async function requestWorker(type) {
+async function requestWorker(type, world) {
   const registration = await registerOfflineWorker();
   const active = navigator.serviceWorker.controller ?? registration.active;
   const worker = active?.state === 'activated' ? active : (await navigator.serviceWorker.ready).active;
@@ -25,19 +25,21 @@ async function requestWorker(type) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       port1.close();
-      reject(new Error('World 1 could not finish downloading. Please try again.'));
-    }, 120_000);
+      reject(new Error(`World ${world.number} could not finish downloading. Please try again.`));
+    }, type === 'download-world' ? 600_000 : 30_000);
     port1.onmessage = ({data}) => {
       clearTimeout(timer);
       port1.close();
       if (data.error) reject(new Error(data.error));
       else resolve(data.ready);
     };
-    worker.postMessage({type}, [port2]);
+    worker.postMessage({type, world:world.id}, [port2]);
   });
 }
 
 export function MobileControls({game}) {
+  const world = game.world;
+  const worldLabel = 'World ' + world.number;
   const [ready, setReady] = useState(false);
   const [starting, setStarting] = useState(true);
   const [busy, setBusy] = useState('');
@@ -63,7 +65,7 @@ export function MobileControls({game}) {
     }
     let current = true;
     const check = () => {
-      void requestWorker('world-status').then(value => {
+      void requestWorker('world-status', world).then(value => {
         if (current) setReady(value);
       }).catch(() => {
         if (current) setMessage('Offline downloads could not start. Reload or try again.');
@@ -77,14 +79,14 @@ export function MobileControls({game}) {
       current = false;
       navigator.serviceWorker.removeEventListener('controllerchange', check);
     };
-  }, []);
+  }, [world]);
 
   async function download() {
     if (busy) return;
     setBusy('download');
     setMessage('');
     try {
-      if (!await requestWorker('download-world')) throw new Error('World 1 did not finish downloading.');
+      if (!await requestWorker('download-world', world)) throw new Error(`${worldLabel} did not finish downloading.`);
       setReady(true);
     } catch (error) {
       setMessage(error.message);
@@ -98,12 +100,12 @@ export function MobileControls({game}) {
     setBusy('export');
     setMessage('');
     try {
-      const backup = await (await getMobileEngine()).exportBackup();
+      const backup = await (await getMobileEngine(world.id)).exportBackup();
       const blob = new Blob([JSON.stringify(backup)], {type:'application/json'});
       if (blob.size > mobileBackupLimit) throw new Error(backupSizeMessage);
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'coding-dungeons-world-1-backup.json';
+      link.download = `coding-dungeons-world-${world.number}-backup.json`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 30_000);
       setMessage('Backup downloaded.');
@@ -126,9 +128,9 @@ export function MobileControls({game}) {
       try {
         backup = JSON.parse(await file.text());
       } catch {
-        throw new Error('Choose a Coding Dungeons World 1 JSON backup.');
+        throw new Error(`Choose a Coding Dungeons ${worldLabel} JSON backup.`);
       }
-      const {readerRestored} = await (await getMobileEngine()).importBackup(backup);
+      const {readerRestored} = await (await getMobileEngine(world.id)).importBackup(backup);
       if (!readerRestored) {
         try {
           sessionStorage.setItem(backupNotice, '1');
@@ -145,16 +147,16 @@ export function MobileControls({game}) {
 
   return (
     <section className="mobile-offline" aria-label="Offline world and backups">
-      {ready ? <span role="status">World 1 ready offline</span> : <button type="button" className="button button-quiet"
+      {ready ? <span role="status">{worldLabel} ready offline</span> : <button type="button" className="button button-quiet"
         onClick={download} disabled={starting || Boolean(busy)}>
-        {busy === 'download' ? 'Downloading World 1…' : 'Download World 1'}
+        {busy === 'download' ? `Downloading ${worldLabel}…` : `Download ${worldLabel}`}
       </button>}
       <details>
         <summary>Save backup</summary>
         <div>
           <button type="button" className="button button-quiet" disabled={Boolean(busy)} onClick={exportBackup}>Export backup</button>
           {!game.hero && <button type="button" className="button button-quiet" disabled={Boolean(busy)}
-            onClick={() => fileInput.current?.click()}>Import into empty World 1</button>}
+            onClick={() => fileInput.current?.click()}>Import into empty {worldLabel}</button>}
           <input ref={fileInput} type="file" hidden accept=".json,application/json" onChange={importBackup} />
         </div>
       </details>
