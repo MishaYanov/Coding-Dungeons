@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import {quickjsSecurityCases} from '../test/fixtures/quickjs-security.mjs';
+import {diamondPages, diamondName, diamondSolution} from './diamond-fixture.mjs';
 
 const project = resolve(process.argv[2] ?? process.cwd());
 const executable = join(project, 'out', 'Coding Dungeons-win32-x64', 'Coding Dungeons.exe');
@@ -82,6 +83,33 @@ async function firstChallenge(page, id, language, number) {
   await page.locator('.creature-encounter[data-state="defeated"]').waitFor();
   console.log(`Passed: ${language} full Workbench suite, Forge and reload`);
   if (id === 'javascript' || id === 'typescript') console.log(`Passed: ${language} packaged QuickJS security regressions`);
+  if (id === 'javascript') await dismissGoblin(page);
+}
+
+async function dismissGoblin(page) {
+  phase = 'completed goblin dismissal';
+  const discovery = (await diamondPages(page, 8)).find(view => view.sparkle);
+  assert.ok(discovery, 'The first block must contain a hidden diamond.');
+  const input = page.locator('#page-number');
+  await input.fill(String(discovery.number));
+  await input.press('Enter');
+  await page.getByRole('button', {name:diamondName}).click();
+  const fight = page.locator('.diamond-encounter');
+  await fight.getByRole('textbox', {name:'Goblin code'}).fill(diamondSolution);
+  await fight.getByRole('button', {name:'Submit code', exact:true}).click();
+  await fight.getByRole('radio', {name:'values.slice()', exact:true}).check();
+  await fight.getByRole('button', {name:'Submit answer', exact:true}).click();
+  await fight.getByText('Goblin defeated', {exact:true}).waitFor();
+  await fight.getByRole('button', {name:'Continue adventure', exact:true}).click();
+  await fight.waitFor({state:'hidden'});
+  await page.reload();
+  await page.locator('#page-frame:not([hidden]) img').waitFor();
+  await fight.waitFor({state:'hidden'});
+  await page.getByRole('button', {name:'Character sheet', exact:true}).click();
+  const sheet = page.getByRole('dialog', {name:'Character sheet', exact:true});
+  await sheet.getByText('Diamonds collected · 3', {exact:true}).waitFor();
+  await sheet.getByRole('button', {name:'Close character sheet', exact:true}).click();
+  console.log('Passed: packaged goblin dismissal, reload and retained diamonds');
 }
 
 async function closeOwnedChild() {

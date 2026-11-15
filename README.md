@@ -8,7 +8,7 @@ In a code editor, **Tab** inserts four spaces. Press **Escape**, then **Tab** to
 
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
-Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world.
+Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world. After victory, choose **Continue adventure** to dismiss the result. Turning a page or reopening the game also hides the completed encounter while keeping your rewards; unfinished fights remain available.
 
 Choose **One Life** when creating a hero to start with 100 HP and one healing potion. A wrong multiple-choice answer, failed trial, or rejected full code submission costs 5 HP. Written GM reviews, practice runs, saved drafts, and runner outages are safe. Open **Trials** to attempt your world's two-question challenge. The first trial clear, Forge clear, or special encounter win earns a potion. Each potion restores up to 20 HP. A hero who reaches zero HP can still read and save drafts. Create or load another hero to submit again.
 
@@ -124,7 +124,7 @@ The private Android APK bundles all four books and their Workbench runtimes. Ins
 
 The wrapper uses Android System WebView and requests neither Internet nor storage permissions. Heroes and drafts stay in the app's private storage. **Save backup** uses Android's document picker to export a world or import into an empty world. Export important saves before uninstalling or clearing app storage; browser/PWA saves and APK saves are separate. The app targets Android 8.0 and later with a compatible WebView. Support on 2 GB phones is not verified.
 
-Version 1.0.16 is a private local build. Its experimental Rust compiler has the same compatibility and redistribution limits as the browser edition: public distribution remains blocked pending complete component notices and verified source provenance. See [mobile Rust limitations](docs/MOBILE-RUST.md).
+Version 1.0.17 is a private local build. Its experimental Rust compiler has the same compatibility and redistribution limits as the browser edition: public distribution remains blocked pending complete component notices and verified source provenance. See [mobile Rust limitations](docs/MOBILE-RUST.md).
 
 On Windows, install Android Studio with SDK Platform 37.0 and Build-Tools 36.0.0. The build script uses Android Studio's bundled JDK and the default SDK location; set `JAVA_HOME` and `ANDROID_HOME` if yours differ. Stage both compiler packs, then build:
 
