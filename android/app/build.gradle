@@ -1,0 +1,70 @@
+import groovy.json.JsonSlurper
+
+plugins { id 'com.android.application' }
+
+def appVersion = new JsonSlurper().parse(rootProject.file('../package.json')).version
+def versionParts = appVersion.tokenize('.').collect { it.toInteger() }
+def signingProperties = new Properties()
+def signingFile = rootProject.file('.signing/local.properties')
+if (signingFile.isFile()) signingFile.withInputStream { signingProperties.load(it) }
+def signingValue = { name -> System.getenv(name) ?: signingProperties.getProperty(name) }
+def signingNames = ['DUNGEONS_ANDROID_KEYSTORE', 'DUNGEONS_ANDROID_STORE_PASSWORD',
+                    'DUNGEONS_ANDROID_KEY_ALIAS', 'DUNGEONS_ANDROID_KEY_PASSWORD']
+def hasReleaseKey = signingNames.every { signingValue(it)?.trim() }
+
+android {
+    namespace 'com.codingdungeons.app'
+    compileSdk 37
+    buildToolsVersion '36.0.0'
+    defaultConfig {
+        applicationId 'com.codingdungeons.app'
+        minSdk 26
+        targetSdk 37
+        versionCode versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]
+        versionName appVersion
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    buildFeatures { buildConfig true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    if (hasReleaseKey) {
+        signingConfigs {
+            release {
+                storeFile rootProject.file(signingValue('DUNGEONS_ANDROID_KEYSTORE'))
+                storePassword signingValue('DUNGEONS_ANDROID_STORE_PASSWORD')
+                keyAlias signingValue('DUNGEONS_ANDROID_KEY_ALIAS')
+                keyPassword signingValue('DUNGEONS_ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug { applicationIdSuffix '.test'; versionNameSuffix '-test' }
+        release {
+            debuggable false
+            minifyEnabled false
+            if (hasReleaseKey) signingConfig signingConfigs.release
+        }
+    }
+    sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/assets').get().asFile)
+    androidResources { noCompress += ['wasm', 'bundle', 'a', 'rlib', 'rmeta', 'pdf', 'zip', 'webp'] }
+}
+
+def syncGameAssets = tasks.register('syncGameAssets', Sync) {
+    from rootProject.file('../dist/mobile')
+    into layout.buildDirectory.dir('generated/assets/game')
+    doFirst {
+        if (!rootProject.file('../dist/mobile/index.html').isFile()) {
+            throw new GradleException('Build the game first: npm run mobile:build')
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn syncGameAssets }
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.18.0'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test:rules:1.7.0'
+}

@@ -1,5 +1,6 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {mobileBackupLimit} from '../../lib/mobile/input.mjs';
+import {isAndroidShell, saveAndroidBackup} from '../../lib/mobile/android-shell.mjs';
 import {getMobileEngine} from './mobile-engine.mjs';
 import rustInfo from 'virtual:mobile-rust-info';
 import './mobile-controls.css';
@@ -41,11 +42,22 @@ async function requestWorker(type, world) {
 export function MobileControls({game}) {
   const world = game.world;
   const worldLabel = 'World ' + world.number;
+  const androidShell = isAndroidShell();
   const [ready, setReady] = useState(false);
   const [starting, setStarting] = useState(true);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const fileInput = useRef(null);
+  const lifetime = useRef(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => {
+      controller.abort();
+      lifetime.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -59,6 +71,10 @@ export function MobileControls({game}) {
   }, []);
 
   useEffect(() => {
+    if (androidShell) {
+      setStarting(false);
+      return;
+    }
     if (!navigator.serviceWorker) {
       setMessage('Offline downloads require HTTPS or localhost.');
       setStarting(false);
@@ -80,7 +96,7 @@ export function MobileControls({game}) {
       current = false;
       navigator.serviceWorker.removeEventListener('controllerchange', check);
     };
-  }, [world]);
+  }, [world, androidShell]);
 
   async function download() {
     if (busy) return;
@@ -98,22 +114,32 @@ export function MobileControls({game}) {
 
   async function exportBackup() {
     if (busy) return;
+    const signal = lifetime.current?.signal;
     setBusy('export');
     setMessage('');
     try {
       const backup = await (await getMobileEngine(world.id)).exportBackup();
-      const blob = new Blob([JSON.stringify(backup)], {type:'application/json'});
+      signal?.throwIfAborted();
+      const text = JSON.stringify(backup);
+      const filename = `coding-dungeons-world-${world.number}-backup.json`;
+      if (androidShell) {
+        const status = await saveAndroidBackup({filename, text, signal});
+        signal?.throwIfAborted();
+        setMessage(status === 'saved' ? 'Backup saved.' : 'Backup save canceled.');
+        return;
+      }
+      const blob = new Blob([text], {type:'application/json'});
       if (blob.size > mobileBackupLimit) throw new Error(backupSizeMessage);
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = `coding-dungeons-world-${world.number}-backup.json`;
+      link.download = filename;
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 30_000);
       setMessage('Backup downloaded.');
     } catch (error) {
-      setMessage(error.message);
+      if (!signal?.aborted) setMessage(error.message);
     } finally {
-      setBusy('');
+      if (!signal?.aborted) setBusy('');
     }
   }
 
@@ -148,13 +174,15 @@ export function MobileControls({game}) {
 
   return (
     <section className="mobile-offline" aria-label="Offline world and backups">
-      {ready ? <span role="status">{worldLabel} ready offline</span> : <button type="button" className="button button-quiet"
+      {androidShell ? <span role="status">{worldLabel} included offline</span> : ready ? <span role="status">{worldLabel} ready offline</span> : <button type="button" className="button button-quiet"
         onClick={download} disabled={starting || Boolean(busy)}>
         {busy === 'download' ? `Downloading ${worldLabel}…` : `Download ${worldLabel}`}
       </button>}
       {world.id === 'rust' && rustInfo && <p className="fine-print">
-        Includes the experimental Rust {rustInfo.version} Workbench. After downloading World 3, code tests run offline.
-        {' '}The workbench adds about 152 MiB. Some Rust features are unavailable; 2 GB phones are not yet verified.
+        Includes the experimental Rust {rustInfo.version} Workbench.
+        {' '}{androidShell ? 'Code tests run offline using the workbench included in the app.' : 'After downloading World 3, code tests run offline.'}
+        {' '}{androidShell ? 'The bundled workbench uses about 152 MiB.' : 'The workbench adds about 152 MiB.'}
+        {' '}Some Rust features are unavailable; 2 GB phones are not yet verified.
       </p>}
       <details>
         <summary>Save backup</summary>

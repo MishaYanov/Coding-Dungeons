@@ -21,6 +21,11 @@ outputs/
 /dist/
 /out/
 /desktop/runtime/
+/android/.gradle/
+/android/local.properties
+/android/**/build/
+*.jks
+*.keystore
 /.npm-cache/
 /debug.log
 work/checks/

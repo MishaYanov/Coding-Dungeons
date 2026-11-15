@@ -1,6 +1,6 @@
 {
   "name": "coding-dungeons",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "productName": "Coding Dungeons",
   "description": "Four offline programming worlds with books, challenges, and hero progression.",
   "author": "Coding Dungeons contributors",
@@ -28,6 +28,9 @@
     "mobile:stage-go": "node work/scripts/mobile-go-pack.mjs",
     "mobile:stage-rust": "node work/scripts/mobile-rust-pack.mjs",
     "mobile:preview": "vite preview --mode mobile --host 127.0.0.1 --port 4174 --strictPort",
+    "android:build": "pwsh -NoProfile -File work/scripts/build-android.ps1",
+    "android:build:test": "pwsh -NoProfile -File work/scripts/build-android.ps1 -Variant debug",
+    "test:android": "node --test browser/android-app.test.mjs",
     "desktop:bundle": "vite build",
     "desktop:start": "npm run desktop:bundle && electron .",
     "desktop:package": "npm run desktop:bundle && electron-forge package --platform=win32 --arch=x64",

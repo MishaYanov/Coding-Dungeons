@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Fixture provider belongs only to the instrumentation APK, never the game APK. -->
+        <provider
+            android:name="com.codingdungeons.app.ExchangeFixtureProvider"
+            android:authorities="com.codingdungeons.test.documentexchange"
+            android:exported="true"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>

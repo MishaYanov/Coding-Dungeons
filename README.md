@@ -116,6 +116,44 @@ Run `npm.cmd run test:mobile:rust` for all Rust exercise references and starters
 
 To run the same test in emulator Chrome, finish Chrome's welcome screens first and set `FERRUM_ADB` to the adb path above and `FERRUM_ANDROID_EMULATOR` to the emulator ID shown by `adb devices`. The test uses a temporary local port and save origin.
 
+### Android app
+
+The private Android APK bundles all four books and their Workbench runtimes. Install it and open **Coding Dungeons**, then choose a world and create a hero. Worlds show **included offline**: no server, world download, or Internet connection is needed to read or submit code. The Android GM uses the mobile edition's authored rules. External documentation links can open your browser, which may need an Internet connection.
+
+The wrapper uses Android System WebView and requests neither Internet nor storage permissions. Heroes and drafts stay in the app's private storage. **Save backup** uses Android's document picker to export a world or import into an empty world. Export important saves before uninstalling or clearing app storage; browser/PWA saves and APK saves are separate. The app targets Android 8.0 and later with a compatible WebView. Support on 2 GB phones is not verified.
+
+Version 1.0.15 is a private local build. Its experimental Rust compiler has the same compatibility and redistribution limits as the browser edition: public distribution remains blocked pending complete component notices and verified source provenance. See [mobile Rust limitations](docs/MOBILE-RUST.md).
+
+On Windows, install Android Studio with SDK Platform 37.0 and Build-Tools 36.0.0. The build script uses Android Studio's bundled JDK and the default SDK location; set `JAVA_HOME` and `ANDROID_HOME` if yours differ. Stage both compiler packs, then build:
+
+```powershell
+npm.cmd run mobile:stage-go
+npm.cmd run mobile:stage-rust
+npm.cmd run android:build
+```
+
+The command rebuilds the mobile assets, runs Android unit tests and lint, and creates `android/app/build/outputs/apk/release/app-release.apk`. Initial dependency and compiler downloads require Internet on the build machine. The local signing key lives outside the repository at `%LOCALAPPDATA%\CodingDungeonsBuild\android\local-release.p12`, with password metadata protected by Windows DPAPI for the current account. Preserve that signing identity for future updates; it is not a disposable build output. Install later versions over the existing app using the same key to retain saves.
+
+For emulator tests, build and install the separate debug package, then run the actual WebView journeys:
+
+```powershell
+$env:FERRUM_ADB = Join-Path $env:LOCALAPPDATA 'Android/Sdk/platform-tools/adb.exe'
+$env:FERRUM_ANDROID_EMULATOR = 'emulator-5554' # Use the serial from adb devices.
+npm.cmd run android:build:test
+& $env:FERRUM_ADB -s $env:FERRUM_ANDROID_EMULATOR install -r android/app/build/outputs/apk/debug/app-debug.apk
+npm.cmd run test:android
+```
+
+The test package is `com.codingdungeons.app.test`, separate from the normal app. Tests exercise all four packaged worlds, correct and wrong submissions, HP, saved progress, and request boundaries. They stop only that test app and remove their own debugger forwarding port; they do not clear saves or use a host web server.
+
+The native document tests use a provider included only in the instrumentation APK. They exercise saved bytes, cancellation, retries, concurrent operations, oversized imports, read-only snapshots, and actual WebView file-input reads. Run them on an emulator with:
+
+```powershell
+$env:JAVA_HOME = Join-Path $env:ProgramFiles 'Android/Android Studio/jbr'
+$env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android/Sdk'
+& ./android/gradlew.bat -p android :app:connectedDebugAndroidTest
+```
+
 ### Windows build
 
 On Windows x64, stage the local model with `pwsh -File desktop/stage-gm-runtime.ps1` and follow the [native runner build instructions](native/README.md) if `desktop/runtime` is missing. Keep those staged files for later builds. Install dependencies with `npm.cmd ci` on a fresh checkout.

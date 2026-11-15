@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Coding Dungeons</string>
+    <string name="webview_required">Update Android System WebView to play Coding Dungeons. This app needs a current WebView for its offline compiler and secure backup dialog.</string>
+</resources>
