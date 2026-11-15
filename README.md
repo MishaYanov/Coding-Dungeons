@@ -10,6 +10,8 @@ The World Map also links to special encounters. Break the Ironbound Scarab's thr
 
 Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world. After victory, choose **Continue adventure** to dismiss the result. Turning a page or reopening the game also hides the completed encounter while keeping your rewards; unfinished fights remain available.
 
+Visit the **Merchant** from the campaign menu or the goblin victory screen. Healing potions for One Life heroes, the Emerald Cloak skin, and the Gemkeeper title each cost one diamond. Buy a Vault Key for two diamonds to open your world's optional two-question challenge. Vault attempts cost no HP and can be retried. Your balance, equipped cosmetics, and vault clear are saved separately for each hero and world.
+
 Choose **One Life** when creating a hero to start with 100 HP and one healing potion. A wrong multiple-choice answer, failed trial, or rejected full code submission costs 5 HP. Written GM reviews, practice runs, saved drafts, and runner outages are safe. Open **Trials** to attempt your world's two-question challenge. The first trial clear, Forge clear, or special encounter win earns a potion. Each potion restores up to 20 HP. A hero who reaches zero HP can still read and save drafts. Create or load another hero to submit again.
 
 | World | Levels | What you practice |

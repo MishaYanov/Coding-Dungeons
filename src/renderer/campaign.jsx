@@ -15,7 +15,7 @@ function subscribeToPhoneLayout(notify) {
   return () => query.removeEventListener('change', notify);
 }
 
-function CampaignActions({ profile, onSelect, compact }) {
+function CampaignActions({ profile, merchant, onSelect, compact }) {
   return <>
     <button className="nav-button" id="open-worlds" type="button" onClick={() => onSelect('world')}>
       {compact ? 'Change world' : 'Worlds'}
@@ -25,6 +25,7 @@ function CampaignActions({ profile, onSelect, compact }) {
       <span>World map</span>
     </button>
     <button className="nav-button" id="open-trials" type="button" aria-haspopup="dialog" onClick={() => onSelect('trial')}>Trials</button>
+    <button className="nav-button" id="open-merchant" type="button" aria-haspopup="dialog" onClick={() => onSelect('merchant')}>Merchant</button>
     <button className="nav-button" id="open-log" type="button" onClick={() => onSelect('log')}>
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v16H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm-2 15a2 2 0 0 1 2-2h13M8 7h7m-7 4h7" strokeLinecap="round" strokeLinejoin="round" /></svg>
       <span>Character sheet</span>
@@ -32,7 +33,10 @@ function CampaignActions({ profile, onSelect, compact }) {
     <button className="nav-button" id="open-heroes" type="button" onClick={() => onSelect('hero')}>Switch hero</button>
     <button className={compact ? 'nav-button' : 'profile-button'} id="open-profile" type="button"
       aria-label="Edit explorer profile" title={compact ? undefined : `Edit ${profile.callsign}`} onClick={() => onSelect('profile')}>
-      {compact ? 'Edit profile' : <><span className="profile-mark" aria-hidden="true">F</span><span id="header-callsign">{profile.callsign}</span></>}
+      {compact ? 'Edit profile' : <>
+        <span className="profile-mark" data-hero-skin={merchant?.equipped.skin || undefined} aria-hidden="true">F</span>
+        <span id="header-callsign">{profile.callsign}{merchant?.equipped.title === 'gemkeeper' && ' · Gemkeeper'}</span>
+      </>}
     </button>
   </>;
 }
@@ -94,7 +98,7 @@ function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, o
                 onClick={closeDrawer}>×</button>
             </header>
             <div className="dialog-content campaign-drawer-content">
-              <CampaignActions profile={profile} onSelect={selectDialog} compact />
+              <CampaignActions profile={profile} merchant={game.merchant} onSelect={selectDialog} compact />
               {game.hero && <ZoomControls zoom={game.zoom} onZoom={(zoom) => {
                 closeDrawer();
                 onZoom(zoom);
@@ -103,7 +107,7 @@ function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, o
             </div>
           </dialog>
       </nav> : <nav className="app-nav" aria-label="Campaign">
-        <CampaignActions profile={profile} onSelect={actions.openDialog} />
+        <CampaignActions profile={profile} merchant={game.merchant} onSelect={actions.openDialog} />
       </nav>}
     </header>
   );

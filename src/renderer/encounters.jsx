@@ -319,6 +319,11 @@ function DiamondBattle({ game, actions }) {
             actions.dismissDiamond();
             guide?.focus({ preventScroll: true });
           }}>Continue adventure</button>
+          {' '}
+          <button type="button" className="button button-quiet" onClick={() => {
+            actions.dismissDiamond();
+            actions.openDialog('merchant');
+          }}>Visit merchant</button>
         </> : <DiamondStage key={current.id} stage={current} draft={game.drafts.get(diamondDraftKey) ?? (view.draft || undefined)}
           saveDraft={(value) => actions.persistDraft(diamondDraftKey, value)} unavailable={unavailable} busy={busy}
           disabled={disabled} focusTarget={focusTarget} submit={submit} error={error} />}

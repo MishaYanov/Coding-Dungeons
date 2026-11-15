@@ -5,10 +5,11 @@ const lastPageKey = 'ferrum-last-page-v2';
 const selectedHeroKey = 'ferrum-selected-hero-v1';
 const selectedWorldKey = 'ferrum-mobile-world-v1';
 const mobile = import.meta.env?.MODE === 'mobile';
-const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|refactoring$|system-design$|rate-limiter$)/;
+const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|merchant(?:\/|$)|refactoring$|system-design$|rate-limiter$)/;
 const emptyProgress = () => ({
   levels: new Map(), responses: new Map(), attempts: [], workbenchModes: new Map(),
   hardClears: new Set(), hardExerciseClears: new Set(), exerciseClears: null, progressError: '', forgeAnimation: null,
+  merchant: null,
 });
 
 export function pageNumber(value) {
@@ -105,6 +106,7 @@ export function createGame() {
   let pageRequest = 0;
   let progressRequest = 0;
   let combatVersion = 0;
+  let merchantVersion = 0;
   let pendingCombat;
   let toastTimer;
   let positionWrites = Promise.resolve();
@@ -183,16 +185,39 @@ export function createGame() {
     try {
       const result = await api(path, {
         ...options, hero, method: 'POST',
-        body: { ...options.body, submissionId: crypto.randomUUID() },
+        body: { ...options.body, submissionId: options.body?.submissionId ?? crypto.randomUUID() },
       });
       if (isCurrentHero(hero)) {
         combatVersion++;
+        if (result.merchant) {
+          merchantVersion++;
+          update({ merchant: result.merchant });
+        }
         if (result.combat) update({ combat: result.combat, combatNotice: combatNotice(result.combatEvent) });
       }
       return result;
     } finally {
       if (pendingCombat === request) pendingCombat = null;
     }
+  }
+
+  async function refreshMerchant() {
+    const hero = game.hero;
+    if (!hero || game.switchingHero) return;
+    const version = ++merchantVersion;
+    const merchant = await api('/api/merchant', { hero });
+    if (isCurrentHero(hero) && version === merchantVersion) update({ merchant });
+  }
+
+  async function equipMerchant(itemId, equipped) {
+    const hero = game.hero;
+    if (!hero || game.switchingHero) return;
+    const result = await api('/api/merchant/equip', { hero, method: 'POST', body: { itemId, equipped } });
+    if (isCurrentHero(hero)) {
+      merchantVersion++;
+      update({ merchant: result.merchant });
+    }
+    return result;
   }
 
   async function drinkPotion() {
@@ -213,6 +238,7 @@ export function createGame() {
     if (!hero) return;
     const request = ++progressRequest;
     const healthVersion = combatVersion;
+    const shopVersion = merchantVersion;
     try {
       const progress = await api('/api/progress', { hero });
       if (!isCurrentHero(hero) || request !== progressRequest) return;
@@ -228,6 +254,7 @@ export function createGame() {
         hardExerciseClears: new Set(progress.workbench?.hardExerciseClears ?? []),
         exerciseClears: Array.isArray(progress.workbench?.clears) ? new Set(progress.workbench.clears) : null,
         ...(healthVersion === combatVersion && progress.combat ? { combat: progress.combat } : {}),
+        ...(shopVersion === merchantVersion && progress.merchant ? { merchant: progress.merchant } : {}),
         progressError: '',
         forgeAnimation: animateForgeLevel,
       });
@@ -273,7 +300,9 @@ export function createGame() {
     // transition from an unfinished fight, not to every subsequent book page.
     const victory = isDiamondComplete(diamond) && Boolean(game.diamondVictory
       || game.diamond?.encounter?.id === diamond.encounter.id && !isDiamondComplete(game.diamond));
+    const earnedMore = (diamond?.diamonds ?? 0) > game.diamonds;
     update({ diamond, diamonds: diamond?.diamonds ?? 0, diamondVictory: victory });
+    if (earnedMore && game.merchant?.earned !== diamond.diamonds) void refreshMerchant().catch(() => {});
   }
 
   function dismissDiamond() {
@@ -512,7 +541,7 @@ export function createGame() {
     actions: {
       api, boot, isCurrentHero, submitExpedition, persistDraft, clearDraft, refreshProgress, setMode, recordResponse,
       openPage, loadPage, readHash, changeZoom, openDialog, closeDialog, selectHero, deleteHero, saveProfile,
-      drinkPotion, startDiamond, setDiamond, dismissDiamond, toast,
+      drinkPotion, startDiamond, setDiamond, dismissDiamond, refreshMerchant, equipMerchant, toast,
     },
   };
 }

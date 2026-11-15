@@ -281,6 +281,26 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   await bookPage(restored, victoryPage);
   await tap(restored.getByRole('tab', {name:'GM', exact:true}));
   await fight.waitFor({state:'hidden'});
+
+  await tap(restored.getByRole('button', {name:'More options', exact:true}));
+  await tap(restored.getByRole('dialog', {name:'Campaign menu'}).getByRole('button', {name:'Merchant', exact:true}));
+  const shop = restored.getByRole('dialog', {name:'Diamond merchant'});
+  await shop.getByText('3 diamonds available', {exact:true}).waitFor();
+  await shop.getByText('2 potions in your pack', {exact:true}).waitFor();
+  await tap(shop.getByRole('button', {name:'Buy Healing potion · 1 diamond', exact:true}));
+  await shop.getByText('3 potions in your pack', {exact:true}).waitFor();
+  await tap(shop.getByRole('button', {name:'Buy Gemkeeper · 1 diamond', exact:true}));
+  await tap(shop.getByRole('button', {name:'Equip Gemkeeper', exact:true}));
+  await shop.getByRole('button', {name:'Unequip Gemkeeper', exact:true}).waitFor();
+  await shop.getByText('1 diamond available', {exact:true}).waitFor();
+  await tap(shop.getByRole('button', {name:'Close diamond merchant', exact:true}));
+  await restored.reload();
+  await bookPage(restored, victoryPage);
+  await tap(restored.getByRole('button', {name:'More options', exact:true}));
+  await tap(restored.getByRole('dialog', {name:'Campaign menu'}).getByRole('button', {name:'Character sheet', exact:true}));
+  const sheet = restored.getByRole('dialog', {name:'Character sheet'});
+  await sheet.getByText('Gemkeeper', {exact:true}).waitFor();
+  await sheet.getByText('Diamonds to spend · 1', {exact:true}).waitFor();
 });
 
 test('mobile worlds keep their own saves, offline books, and code grading capability', {timeout:360_000}, async t => {
