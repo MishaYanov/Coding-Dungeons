@@ -77,15 +77,18 @@ def page_blocks(page):
         code_baseline = None
         line = plain_line(glyphs)
         is_heading = 'Calibri-Bold' in font and size >= 11.4
+        families = {char['fontname'].split('+')[-1].split('-')[0] for char in glyphs}
+        # An inline Consolas fragment can start a wrapped body line.
+        family = next((body for body in ('Georgia', 'Calibri') if body in families), font.split('-')[0])
         if is_heading:
             blocks.append(['h', line])
         elif (blocks and blocks[-1][0] == 'p' and previous_y is not None
-              and 11 < previous_y - y < 15.2 and font.split('-')[0] == prose_font):
+              and 11 < previous_y - y < 15.2 and family == prose_font):
             blocks[-1][1] += ' ' + line
         else:
             blocks.append(['p', line])
         previous_y = y
-        prose_font = font.split('-')[0]
+        prose_font = family
     flush_code()
     return blocks
 

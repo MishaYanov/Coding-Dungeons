@@ -330,6 +330,7 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
   async function download(number) {
     await tap(heroPicker.getByRole('button', {name:`Download World ${number}`, exact:true}));
     await heroPicker.getByText(`World ${number} ready offline`, {exact:true}).waitFor({timeout:90_000});
+    await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
   }
 
   await tap(worldPicker.locator('[data-world="typescript"]'));
