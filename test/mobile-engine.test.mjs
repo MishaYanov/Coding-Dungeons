@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import test from 'node:test';
 import rubrics from '../data/gm-rubrics.json' with {type:'json'};
 import { createMobileEngine } from '../lib/mobile/engine.mjs';
@@ -270,6 +271,23 @@ test('TypeScript examples skip type contracts while a full offline submission in
   assert.equal(submitted.verdict, 'pass');
   assert.ok(submitted.groups.some(item => item.group === 'Type contract'));
   assert.equal(submitted.combat.potions, 2);
+});
+
+test('mobile backups retain valid drafts above the former 2 MiB per-hero export limit', async () => {
+  const original = fixture();
+  const {hero} = await original.api('/api/heroes', {method:'POST', body:{name:'Draft Keeper'}});
+  const key = mobileReaderKey('javascript', 'ferrum-prompt-drafts-v2', hero.id);
+  const drafts = Object.fromEntries(Array.from({length:47}, (_, index) => [
+    `${index + 1}:notes`, 'x'.repeat(48 * 1024),
+  ]));
+  original.storage.setItem(key, JSON.stringify(drafts));
+  const backup = await original.exportBackup();
+  const restored = fixture();
+  assert.deepEqual(await restored.importBackup(backup), {imported:1, readerRestored:true});
+  const hash = value => value && createHash('sha256').update(value).digest('hex');
+  assert.equal(hash(restored.storage.getItem(key)), hash(JSON.stringify(drafts)));
+  original.storage.setItem(key, '{damaged');
+  await assert.rejects(original.exportBackup(), /Unsent drafts for Draft Keeper could not be included/);
 });
 
 test('Rust and Go retain drafts and backups when code grading is unavailable', async () => {
