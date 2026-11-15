@@ -10,7 +10,9 @@ test('the desktop package copies only the application and excludes local credent
   const ignore = forgeConfig.packagerConfig.ignore;
   for (const path of ['', '/server.mjs', '/desktop/preload.cjs', '/lib/standalone-runner.mjs',
     '/data/worlds/go/pages.json', '/dist/renderer/book/javascript/pages/1.webp', '/dist/renderer/book/ferrum-expedition.pdf',
-    '/dist/renderer/assets/index-Ab23.js', '/node_modules/quickjs-emscripten/dist/index.js']) {
+    '/dist/renderer/assets/index-Ab23.js', '/lib/quickjs-runtime.mjs',
+    '/node_modules/quickjs-emscripten-core/dist/index.js',
+    '/node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm']) {
     assert.equal(ignore(path), false, path);
   }
   for (const path of ['/local-backup.txt', '/.env', '/state/ferrum.sqlite', '/dist/renderer/assets/private.key', '/infra/run-suite.sh',

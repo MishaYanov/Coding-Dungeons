@@ -13,6 +13,7 @@ import systemDesign from '../data/workbench/system-design.mjs';
 import rateLimiter from '../data/workbench/rate-limiter.mjs';
 import { definitions } from '../lib/diamond-content.mjs';
 import { mobileTypeScript } from '../work/scripts/mobile-typescript.mjs';
+import { quickjsSecurityCases, quickjsSecurityJob } from '../test/fixtures/quickjs-security.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const output = join(project, 'out');
@@ -32,13 +33,13 @@ async function browserOptions() {
   return {};
 }
 
-async function openProbe(t) {
+async function openProbe(t, {includeGo = true} = {}) {
   const goFiles = await readdir(goPack).catch(error => {
     if (error.code !== 'ENOENT') throw error;
     return [];
   });
-  const goReady = goFiles.includes('manifest.json');
-  if (process.env.FERRUM_MOBILE_REQUIRE_GO === '1') {
+  const goReady = includeGo && goFiles.includes('manifest.json');
+  if (includeGo && process.env.FERRUM_MOBILE_REQUIRE_GO === '1') {
     assert.ok(goReady, 'Stage the required Go compiler pack with npm run mobile:stage-go.');
   }
 
@@ -112,6 +113,16 @@ function reportTiming(t, values) {
   values.sort((a, b) => a - b);
   t.diagnostic(`${values.length} offline runs, median ${Math.round(values[Math.floor(values.length / 2)])} ms, max ${Math.round(values.at(-1))} ms.`);
 }
+
+test('offline browser JavaScript and TypeScript workers reject the QuickJS buffer over-read regression', {timeout:60_000}, async t => {
+  const {page} = await openProbe(t, {includeGo:false});
+  for (const language of ['javascript', 'typescript']) {
+    const result = await page.evaluate(request => window.grade(request), quickjsSecurityJob(language));
+    assert.equal(result.status, 'passed', language + ': the bundled worker must use the corrected interpreter.');
+    assert.deepEqual(result.tests.map(({id, status}) => ({id, status})),
+      quickjsSecurityCases.map(({id}) => ({id, status:'passed'})));
+  }
+});
 
 test('browser runtimes grade every bundled reference and reject its starter offline', { timeout:210_000 }, async t => {
   const {page, goReady} = await openProbe(t);

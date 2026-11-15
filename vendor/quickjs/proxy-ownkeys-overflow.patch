@@ -1,0 +1,21 @@
+From: Coding Dungeons maintainers
+Subject: Bound Proxy ownKeys enumeration allocation before multiplication
+
+Local defensive fix for https://github.com/bellard/quickjs/issues/535.
+The array-like result can advertise a large length without allocating its
+elements. On WASM32 the multiplication otherwise wraps to a small allocation.
+Leave tab NULL on rejection so the existing failure cleanup is safe.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -48962,6 +48962,10 @@
+     if (js_get_length32(ctx, &len, prop_array))
+         goto fail;
+     if (len > 0) {
++        if (len > SIZE_MAX / sizeof(tab[0])) {
++            JS_ThrowOutOfMemory(ctx);
++            goto fail;
++        }
+         tab = js_mallocz(ctx, sizeof(tab[0]) * len);
+         if (!tab)
+             goto fail;

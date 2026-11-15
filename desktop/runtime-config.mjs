@@ -54,7 +54,8 @@ export function discoverRuntime(directory, packageAvailable = hasPackage) {
   const weights = resolvePackagedFile(directory, 'gm-model.gguf');
   const model = cli && weights ? {cli, weights} : undefined;
   const native = nativeRuntime(join(directory, 'standalone-runner'));
-  const javascript = packageAvailable('quickjs-emscripten');
+  const javascript = packageAvailable('quickjs-emscripten-core')
+    && packageAvailable('@jitl/quickjs-wasmfile-release-sync');
   return {
     model,
     nativeRunner: native?.directory,

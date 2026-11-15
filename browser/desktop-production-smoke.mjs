@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import {quickjsSecurityCases} from '../test/fixtures/quickjs-security.mjs';
 
 const project = resolve(process.argv[2] ?? process.cwd());
 const executable = join(project, 'out', 'Coding Dungeons-win32-x64', 'Coding Dungeons.exe');
@@ -65,7 +66,12 @@ async function firstChallenge(page, id, language, number) {
   await pageInput.fill(String(bossPage));
   await pageInput.press('Enter');
   const codeBox = page.getByRole('textbox', {name:`${language} code`});
-  await codeBox.fill(first.reference ?? first.solution);
+  let answer = first.reference ?? first.solution;
+  if (id === 'javascript' || id === 'typescript') {
+    answer += '\n' + quickjsSecurityCases.map(({expression}) =>
+      `if (!${expression}) throw new Error('QuickJS security regression');`).join('\n');
+  }
+  await codeBox.fill(answer);
   const submit = page.getByRole('button', {name:'Submit solution', exact:true});
   await submit.click({timeout:15_000});
   await page.getByText('Tests passed', {exact:true}).waitFor({timeout:45_000});
@@ -73,6 +79,7 @@ async function firstChallenge(page, id, language, number) {
   await page.reload();
   await page.locator('.creature-encounter[data-state="defeated"]').waitFor();
   console.log(`Passed: ${language} full Workbench suite, Forge and reload`);
+  if (id === 'javascript' || id === 'typescript') console.log(`Passed: ${language} packaged QuickJS security regressions`);
 }
 
 async function closeOwnedChild() {

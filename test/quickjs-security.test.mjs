@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {getQuickJS} from 'quickjs-emscripten';
+import {getQuickJS} from '../lib/quickjs-runtime.mjs';
 import {runWorkbench} from '../lib/workbench-runner.mjs';
 import {quickjsSecurityCases, quickjsSecurityJob} from './fixtures/quickjs-security.mjs';
 
-for (const {id, title, expression} of quickjsSecurityCases) {
+for (const {id, title, expression} of quickjsSecurityCases.filter(item => !item.workerOnly)) {
   test('QuickJS security: ' + title, {timeout:5_000}, async () => {
     const QuickJS = await getQuickJS();
     const runtime = QuickJS.newRuntime();

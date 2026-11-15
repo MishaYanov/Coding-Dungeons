@@ -108,13 +108,76 @@ export const quickjsSecurityCases = [
   },
 ];
 
+// These constructor and allocation checks execute only in a disposable worker.
+// They never read or write through a view whose buffer was invalidated.
+quickjsSecurityCases.push(
+  {
+    id:'constructor-rechecks-resized-buffer', workerOnly:true,
+    title:'constructor prototype lookup cannot retain stale buffer bounds',
+    expression:`(() => {
+      for (const offset of [0, 8]) {
+        const buffer = new ArrayBuffer(16, {maxByteLength:16});
+        const constructor = new Proxy(function () {}, {get(target, name, receiver) {
+          if (name === 'prototype') { buffer.resize(4); return Uint8Array.prototype; }
+          return Reflect.get(target, name, receiver);
+        }});
+        try { Reflect.construct(Uint8Array, [buffer, offset, 8], constructor); return false; }
+        catch (error) { if (!(error instanceof RangeError)) return false; }
+      }
+      return true;
+    })()`,
+  },
+  {
+    id:'constructor-conversion-order', workerOnly:true,
+    title:'constructor resolves its prototype before converting buffer offsets',
+    expression:`(() => {
+      const order = [];
+      const buffer = new ArrayBuffer(16, {maxByteLength:32});
+      const constructor = new Proxy(function () {}, {get(target, name, receiver) {
+        if (name === 'prototype') { order.push('prototype'); return Uint16Array.prototype; }
+        return Reflect.get(target, name, receiver);
+      }});
+      const offset = {valueOf() { order.push('offset'); return 2; }};
+      const length = {valueOf() { order.push('length'); return 3; }};
+      const view = Reflect.construct(Uint16Array, [buffer, offset, length], constructor);
+      return order.join(',') === 'prototype,offset,length' && view.length === 3
+        && view.byteOffset === 2 && view.buffer === buffer;
+    })()`,
+  },
+  {
+    id:'proxy-enumeration-size-limit', workerOnly:true,
+    title:'oversized proxy enumeration is rejected before reading any key',
+    expression:`(() => {
+      for (const length of [0x20000000, 0x20000001, 0x40000001, 0xffffffff]) {
+        let readKey = false;
+        const keys = {length, get 0() { readKey = true; throw new Error('Unexpected key read'); }};
+        try { Reflect.ownKeys(new Proxy({}, {ownKeys() { return keys; }})); return false; }
+        catch (error) { if (readKey || error.name !== 'InternalError') return false; }
+      }
+      return true;
+    })()`,
+  },
+  {
+    id:'ordinary-proxy-enumeration', workerOnly:true,
+    title:'ordinary proxy keys retain order and invariant checks',
+    expression:`(() => {
+      const key = Symbol('key');
+      const proxy = new Proxy({a:1, b:2, [key]:3}, {ownKeys() { return ['b', key, 'a']; }});
+      const keys = Reflect.ownKeys(proxy);
+      if (keys.length !== 3 || keys[0] !== 'b' || keys[1] !== key || keys[2] !== 'a') return false;
+      try { Reflect.ownKeys(new Proxy({}, {ownKeys() { return ['a', 'a']; }})); return false; }
+      catch (error) { return error instanceof TypeError; }
+    })()`,
+  },
+);
+
 export function quickjsSecurityJob(language = 'javascript') {
   return {
     language,
     source:'function securityFixtureIsLoaded() { return true; }',
     tests:quickjsSecurityCases.map(({id, expression}) => ({
       id,
-      code:`assert(securityFixtureIsLoaded()); assert(${expression}, 'TypedArray replacement must not read removed buffer contents.');`,
+      code:`assert(securityFixtureIsLoaded()); assert(${expression}, 'The interpreter must preserve memory bounds and language semantics.');`,
     })),
     limits:{memoryBytes:8 * 1024 * 1024, timeoutMs:1_000, totalMs:10_000},
   };

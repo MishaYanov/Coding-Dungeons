@@ -1,6 +1,6 @@
 {
   "name": "coding-dungeons",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "productName": "Coding Dungeons",
   "description": "Four offline programming worlds with books, challenges, and hero progression.",
   "author": "Coding Dungeons contributors",
@@ -37,8 +37,9 @@
     "desktop:make": "npm run desktop:bundle && electron-forge make --platform=win32 --arch=x64"
   },
   "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "file:vendor/quickjs/quickjs-wasmfile-release-sync-0.32.0-coding-dungeons.1.tgz",
     "electron-squirrel-startup": "1.0.1",
-    "quickjs-emscripten": "0.32.0",
+    "quickjs-emscripten-core": "0.32.0",
     "typescript": "6.0.3"
   },
   "overrides": {

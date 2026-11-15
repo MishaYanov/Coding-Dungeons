@@ -29,8 +29,10 @@ test('desktop runtime discovery accepts only the fixed model pair of packaged re
 
 test('the preview capability inventory distinguishes packages from optional files', async (t) => {
   const directory = await makeRuntime(t);
-  const inventory = discoverRuntime(directory, name => name === 'quickjs-emscripten');
+  const inventory = discoverRuntime(directory, name => ['quickjs-emscripten-core', '@jitl/quickjs-wasmfile-release-sync'].includes(name));
   assert.deepEqual(inventory.available, {javascript: true, typescript: false, model: false, native: false});
+  assert.equal(discoverRuntime(directory, name => name === 'quickjs-emscripten-core').available.javascript, false);
+  assert.equal(discoverRuntime(directory, name => name === '@jitl/quickjs-wasmfile-release-sync').available.javascript, false);
   const missing = discoverRuntime(join(directory, 'not-installed'), () => false);
   assert.deepEqual(missing.available, {javascript: false, typescript: false, model: false, native: false});
 });

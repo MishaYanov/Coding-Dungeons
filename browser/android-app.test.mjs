@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
+import {readFile, readdir} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {test} from 'node:test';
 import {promisify} from 'node:util';
@@ -8,6 +8,8 @@ import {chromium} from 'playwright-core';
 import javascriptExercises from '../data/workbench/javascript.mjs';
 import typescriptExercises from '../data/workbench/typescript.mjs';
 import goExercises from '../data/workbench/go.mjs';
+import {normalizeWorkbenchJob} from '../lib/workbench-runner-job.mjs';
+import {quickjsSecurityCases, quickjsSecurityJob} from '../test/fixtures/quickjs-security.mjs';
 
 // This harness owns only the separately installed debug application. It never
 // installs an APK, clears application data, starts Chrome, or creates a reverse.
@@ -212,9 +214,49 @@ async function checkBoundary(page) {
   }
 }
 
+async function checkPackagedQuickJS(t, page) {
+  const workerFiles = (await readdir(new URL('../dist/mobile/assets/', import.meta.url)))
+    .filter(name => /^runner-worker-[A-Za-z0-9_-]+\.js$/.test(name));
+  assert.equal(workerFiles.length, 1, 'The current mobile build must identify exactly one packaged JS/TS worker.');
+  const workerUrl = origin + '/assets/' + workerFiles[0];
+  for (const language of ['javascript', 'typescript']) {
+    const job = normalizeWorkbenchJob(quickjsSecurityJob(language));
+    assert.ok(job, 'The security regression must be a valid production worker job.');
+    const result = await page.evaluate(({workerUrl, job}) => new Promise((resolve, reject) => {
+      let worker;
+      let settled = false;
+      const timer = setTimeout(() => finish(new Error('The packaged security worker exceeded its deadline.')), 30_000);
+      function finish(error, value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        worker?.terminate();
+        if (error) reject(error);
+        else resolve(value);
+      }
+      try {
+        worker = new Worker(workerUrl, {type:'module'});
+        worker.onmessage = event => finish(null, event.data);
+        worker.onerror = event => {
+          event.preventDefault();
+          finish(new Error('The packaged security worker failed.'));
+        };
+        worker.onmessageerror = () => finish(new Error('The packaged security worker returned an invalid message.'));
+        worker.postMessage(job);
+      } catch {
+        finish(new Error('The packaged security worker could not start.'));
+      }
+    }), {workerUrl, job});
+    assert.equal(result.status, 'passed', language + ': the installed APK must contain the corrected interpreter.');
+    assert.deepEqual(result.tests.map(({id, status}) => ({id, status})),
+      quickjsSecurityCases.map(({id}) => ({id, status:'passed'})));
+  }
+  t.diagnostic(`JavaScript and TypeScript: all ${quickjsSecurityCases.length} engine regressions passed in the installed APK worker.`);
+}
+
 test('the installed Android test APK plays all four worlds offline and confines its WebView', {
   skip:!serial && 'Set FERRUM_ANDROID_EMULATOR and FERRUM_ADB after installing the debug APK.',
-  timeout:180_000,
+  timeout:240_000,
 }, async t => {
   const {page, context} = await attach(t);
   const requests = [];
@@ -222,6 +264,7 @@ test('the installed Android test APK plays all four worlds offline and confines 
   const onRequest = request => requests.push(request.url());
   context.on('request', onRequest);
   page.on('pageerror', error => errors.push(error.message));
+  await checkPackagedQuickJS(t, page);
   const runId = Date.now().toString(36);
   for (const world of worlds) await clearFirstBoss(t, page, world, runId);
   context.off('request', onRequest);
