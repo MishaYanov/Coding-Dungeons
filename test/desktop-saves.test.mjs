@@ -8,6 +8,7 @@ import test from 'node:test';
 import { openReaderStorage } from '../desktop/reader-storage.mjs';
 import { exportSaves, importSaves } from '../desktop/save-transfer.mjs';
 import { openStore } from '../lib/store.mjs';
+import { emptyMerchant, equipMerchant, purchaseMerchant, submitMerchantChallenge } from '../lib/merchant.mjs';
 
 const rustName = 'ferrum.sqlite';
 const jsName = 'ferrum.javascript.sqlite';
@@ -78,6 +79,32 @@ test('desktop save export includes committed WAL records without overwriting oth
   sourceStore.createHero({id: 'later', name: 'Later'});
   assert.deepEqual(names(join(snapshot.directory, rustName)), ['Rhea']);
   assert.notEqual((await exportSaves(source, destination)).directory, snapshot.directory);
+});
+
+test('desktop save transfer preserves merchant purchases and rejects spending without matching loot', async t => {
+  const {source, destination, seed} = await directories(t);
+  const store = await seed(jsName, 'Merchant Scout', jsHero);
+  store.startDiamondEncounter(jsHero, 1);
+  store.recordEncounterStage(jsHero, 'diamond-goblin', 'code', {correct:true, feedback:'Passed.'});
+  store.recordEncounterStage(jsHero, 'diamond-goblin', 'choice', {correct:true, feedback:'Correct.'});
+  const transaction = (id, change) => store.settleMerchant(jsHero, {id, fingerprint:id}, change);
+  transaction('title', (state, context) => purchaseMerchant(state, 'gemkeeper', context));
+  store.equipMerchant(jsHero, state => equipMerchant(state, 'gemkeeper', true));
+  transaction('key', (state, context) => purchaseMerchant(state, 'vault-key', context));
+  transaction('quiz', state => submitMerchantChallenge('javascript', state, {'order-keys':'b', 'zero-quantity':'c'}));
+
+  const snapshot = await exportSaves(source, destination);
+  const snapshotFile = join(snapshot.directory, jsName);
+  replacePayload(snapshotFile, 'hero_merchant', 'state', JSON.stringify({...emptyMerchant(), potionsBought:1}));
+  await assert.rejects(importSaves(snapshot.directory, destination), /hero_merchant\.state/);
+  replacePayload(snapshotFile, 'hero_merchant', 'state', JSON.stringify(store.merchantState(jsHero).state));
+  execute(snapshotFile, "DELETE FROM encounter_completions WHERE encounter_id = 'diamond-goblin' AND stage_id = 'choice'");
+  await assert.rejects(importSaves(snapshot.directory, destination), /hero_merchant\.state/);
+  const valid = await exportSaves(source, destination);
+  assert.deepEqual(await importSaves(valid.directory, destination), {imported:[jsName], skipped:[]});
+  const loaded = await openStore({file:join(destination, jsName)});
+  try { assert.deepEqual(loaded.merchantState(jsHero), store.merchantState(jsHero)); }
+  finally { loaded.close(); }
 });
 
 test('desktop imports into empty worlds and keeps occupied worlds intact', async (t) => {
