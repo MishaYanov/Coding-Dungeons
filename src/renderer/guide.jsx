@@ -45,6 +45,18 @@ function FieldCard({ title, children }) {
   return <section className="field-card"><h2>{title}</h2>{children}</section>;
 }
 
+function PathContinuation({ game, level }) {
+  const path = list(game.campaign?.paths).find(candidate => candidate.id === game.profile?.path);
+  const levels = list(path?.levels).map(Number);
+  const index = levels.indexOf(Number(level));
+  if (index < 0 || index + 1 >= levels.length) return null;
+  const next = levels[index + 1];
+  const page = levelPage(game, next);
+  return page ? <div className="hint-actions">
+    <BookLink page={page} className="button button-quiet">Continue on {path.name} · Level {next}</BookLink>
+  </div> : null;
+}
+
 function GuideNotes({ data, game }) {
   const notes = typeof data.notes === 'string' ? [data.notes] : list(data.notes);
   const paragraphs = notes.map((note) => text(note) || text(note?.body)).filter(Boolean);
@@ -57,6 +69,7 @@ function GuideNotes({ data, game }) {
       ? 'Read this page, then follow an encounter or jump to another level from the world map.'
       : 'The book is your campaign map. Turn a page to continue, or open a level from the world map.'}</p>}
     {first ? <div className="hint-actions"><BookLink page={first} className="button button-primary">Begin Level 01</BookLink></div> : null}
+    <PathContinuation game={game} level={data.level} />
   </section>;
 }
 

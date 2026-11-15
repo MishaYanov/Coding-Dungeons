@@ -410,6 +410,26 @@ test('world selection opens separate books and restores the right hero and draft
   assert.equal(await page.getByRole('checkbox', { name: 'Scouted' }).isChecked(), true);
 });
 
+test('the active path continues in its authored order and keeps alternate exits available', async t => {
+  const page = await newPage(t, '', 'typescript');
+  const campaign = JSON.parse(await readFile(new URL('data/worlds/typescript/campaign.json', project), 'utf8'));
+  const byLevel = level => campaign.quests.find(quest => quest.level === level);
+  await page.locator('#hero-path').selectOption('contract-engineer');
+  await createHero(page, 'Harbor Contract Engineer', 1);
+  await jumpTo(page, byLevel(3).sidePage);
+
+  const next = page.getByRole('link', {name:'Continue on Contract Engineer · Level 8', exact:true});
+  await next.waitFor();
+  assert.equal(await next.getAttribute('href'), '#page=' + byLevel(8).page);
+  const alternate = page.locator('.route-links').getByRole('link', {name:/Continue · Level 4/});
+  assert.equal(await alternate.getAttribute('href'), '#page=' + byLevel(4).page);
+  await next.click();
+  await openBookPage(page, byLevel(8).page);
+  await page.getByRole('link', {name:'Continue on Contract Engineer · Level 9', exact:true}).waitFor();
+  await jumpTo(page, byLevel(14).page);
+  await page.getByRole('link', {name:/Continue on Contract Engineer/}).waitFor({state:'hidden'});
+});
+
 test('Go beginner checkpoints update the character sheet and survive a reload', async (t) => {
   const page = await newPage(t, '', null);
   await page.getByRole('link', { name: /World 4 Go/ }).click();
