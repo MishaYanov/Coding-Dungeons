@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import test from 'node:test';
 import { discoverRuntime } from '../desktop/runtime-config.mjs';
 
 async function makeRuntime(t) {
-  const dir = await mkdtemp(join(tmpdir(), 'coding-dungeons-runtime-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'coding-dungeons-runtime-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   return dir;
 }

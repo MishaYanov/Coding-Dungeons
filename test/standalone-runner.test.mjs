@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -12,7 +12,7 @@ import { fixtureMetadata, presentWorkbenchRun } from '../lib/workbench-service.m
 const digest = content => createHash('sha256').update(content).digest('hex');
 
 async function bundle(t, language) {
-  const directory = await mkdtemp(join(tmpdir(), 'coding-dungeons-bundle-'));
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'coding-dungeons-bundle-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const files = { 'broker.exe': 'broker', 'sandbox-probe.exe': 'probe', 'wasm-worker/wasm-worker.exe': 'worker' };
   if (language === 'rust') Object.assign(files, {'rust/bin/rustc.exe': 'compiler', 'rust/wasm-linker.exe': 'linker'});
@@ -44,6 +44,61 @@ async function bundle(t, language) {
 }
 
 const probePass = 'LPAC, file isolation, loopback denial, and job cleanup verified.';
+
+test('native scratch paths stay canonical when Windows TEMP is a junction', {
+  skip: process.platform !== 'win32', concurrency: false,
+}, async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'coding-dungeons-temp-alias-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const target = join(root, 'real');
+  const alias = join(root, 'alias');
+  await mkdir(target);
+  await symlink(target, alias, 'junction');
+  const previous = { TEMP: process.env.TEMP, TMP: process.env.TMP };
+  try {
+    process.env.TEMP = alias;
+    process.env.TMP = alias;
+    const directory = await bundle(t, 'go');
+    assert.equal(directory, await realpath(directory), 'The fixture bundle must use a canonical temp parent.');
+    const operations = [];
+    const runner = createStandaloneRunner({ directory, platform: 'win32', architecture: 'x64',
+      command: async (_executable, [operation, scratch]) => {
+        operations.push(operation);
+        assert.equal(scratch, await realpath(scratch), `${operation} must receive a canonical scratch path.`);
+        if (operation === 'probe') return { code: 0, stdout: probePass };
+        assert.equal(operation, 'go-compile');
+        await writeFile(join(scratch, '..', 'compile.log'), 'submission.go:2:1: syntax error: unexpected }');
+        return { code: 2 };
+      },
+    });
+    const exercise = diamondExercise('go');
+    const result = await runner.grade({ language: 'go', source: exercise.reference, tests: exercise.tests });
+    assert.equal(result.status, 'compile_error', JSON.stringify(result));
+    assert.match(result.diagnostics[0].message, /submission\.go:2:1: syntax error/);
+    assert.deepEqual(operations, ['probe', 'go-compile']);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('an explicitly redirected native bundle is still rejected before starting the broker', {
+  skip: process.platform !== 'win32',
+}, async t => {
+  const directory = await bundle(t, 'go');
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'coding-dungeons-bundle-alias-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const alias = join(root, 'bundle');
+  await symlink(directory, alias, 'junction');
+  let calls = 0;
+  const runner = createStandaloneRunner({ directory: alias, platform: 'win32', architecture: 'x64',
+    command: async () => { calls++; return { code: 0, stdout: probePass }; },
+  });
+  assert.equal((await runner.diagnostics('go')).reason, 'files');
+  assert.equal(calls, 0);
+});
 
 test('missing compiler or worker companions fail readiness before the isolation probe', async t => {
   for (const [language, missing] of [['go', 'go/stdlib/0002.a'], ['rust', 'rust/bin/rustc_driver-fixture.dll'],
