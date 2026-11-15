@@ -198,6 +198,36 @@ test('the JavaScript World Map opens the rate limiter design quest', async (t) =
   assert.equal(await quest.getByText('Worked design', {exact:true}).count(), 0);
 });
 
+test('the TypeScript and Go World Maps open language-specific side quests', async t => {
+  for (const [world, title, firstAnswer, target, editor] of [
+    ['typescript', 'The Harbor Signal Board', /Accept unknown at the gate/, 44, 'TypeScript side quest code'],
+    ['go', 'Recall at the Relay', /report one confirmation/, 48, 'Go side quest code'],
+  ]) {
+    const page = await newPage(t, '#page=1', world);
+    await createHero(page, `Side Quest Scout ${world}`, 1);
+    await page.getByRole('button', {name:'World map', exact:true}).click();
+    await page.getByRole('dialog', {name:'World map', exact:true}).getByRole('link', {name:title, exact:true}).click();
+    await openBookPage(page, target);
+    const quest = page.getByRole('region', {name:title, exact:true});
+    await quest.getByText('0 / 4 steps complete', {exact:true}).waitFor();
+    await quest.getByRole('radio', {name:firstAnswer}).check();
+    await quest.getByRole('button', {name:'Check answer', exact:true}).click();
+    await quest.getByText('1 / 4 steps complete', {exact:true}).waitFor();
+    const code = quest.getByRole('textbox', {name:editor, exact:true});
+    await code.waitFor();
+    if (world === 'go') {
+      await quest.getByText(/You can keep editing your draft/).waitFor();
+      assert.equal(await quest.getByRole('button', {name:'Submit solution', exact:true}).isDisabled(), true);
+    }
+    const draft = (await code.inputValue()) + '\n// Remember the patrol route.';
+    await code.fill(draft);
+    await page.reload();
+    await openBookPage(page, target);
+    await code.waitFor();
+    assert.equal(await code.inputValue(), draft);
+  }
+});
+
 test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs', async (t) => {
   const page = await newPage(t, '');
   await createHero(page, 'Keyboard Warden', 1);

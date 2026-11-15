@@ -84,6 +84,62 @@ test('mobile campaigns expose their full book and local support status', async (
   }
 });
 
+test('TypeScript and Go expose distinct side quests only in their respective worlds', async () => {
+  const expected = [
+    ['typescript', 'typed-notice', 44],
+    ['go', 'cancellable-relay', 48],
+  ];
+  for (const [worldId, slug, page] of expected) {
+    const {api} = fixture({worldId});
+    const campaign = await api('/api/campaign');
+    assert.deepEqual(campaign.sideQuests.map(({slug, page}) => [slug, page]), [[slug, page]]);
+    assert.equal((await api(`/api/pages/${page}`)).page, page);
+  }
+});
+
+test('offline side quests bind the correct runner and restore completed stages and rewards from backups', async () => {
+  for (const worldId of ['typescript', 'go']) {
+    const options = {worldId, goRunnerAvailable:true};
+    const original = fixture(options);
+    const {api, calls} = original;
+    const [[path, {catalog}]] = localCatalog(worldId).sideQuestMap;
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Relay Scout', oneLife:true}});
+    const post = body => api(path, {method:'POST', hero, body});
+    const firstCode = catalog.stages.find(stage => stage.kind === 'code');
+    await assert.rejects(post({stageId:firstCode.id, code:'right', submissionId:'too-soon'}), /earlier stages/);
+    for (const stage of catalog.stages) {
+      if (stage.kind === 'choice') {
+        await post({stageId:stage.id, optionId:stage.answer, submissionId:stage.id});
+        continue;
+      }
+      const priorCode = catalog.stages.find(item => item.id === stage.carryFrom)?.exercise.reference;
+      const code = [priorCode, stage.exercise.reference].filter(Boolean).join('\n\n');
+      const attempt = {stageId:stage.id, code, submissionId:stage.id};
+      const practice = await post({...attempt, purpose:'examples'});
+      assert.equal(practice.completed.includes(stage.id), false);
+      assert.equal(practice.result.verdict, 'pass');
+      assert.equal(calls.at(-1).language, worldId);
+      assert.equal(calls.at(-1).tests.length, 1);
+      assert.equal(calls.at(-1).typeTests, undefined);
+      const checked = await post(attempt);
+      assert.equal(checked.result.verdict, 'pass');
+      assert.ok(checked.completed.includes(stage.id));
+      assert.equal(calls.at(-1).tests.length, stage.exercise.tests.length);
+      assert.deepEqual(calls.at(-1).typeTests, stage.exercise.typeTests);
+    }
+    const restored = fixture(options);
+    const backup = JSON.parse(JSON.stringify(await original.exportBackup()));
+    assert.equal((await restored.importBackup(backup)).imported, 1);
+    const progress = await restored.api('/api/progress', {hero});
+    assert.deepEqual(progress.levels, []);
+    assert.deepEqual(progress.workbench.clears, []);
+    assert.equal(progress.combat.potions, 2);
+    const view = await restored.api(path, {hero});
+    assert.deepEqual(view.completed, catalog.stages.map(stage => stage.id));
+    assert.equal(view.debrief, catalog.debrief);
+  }
+});
+
 test('mobile choice damage, replay, potion healing and trial reward persist by hero', async () => {
   const {api, repository} = fixture();
   const {hero} = await api('/api/heroes', {method:'POST', body:{name:' Rhea ', oneLife:true}});

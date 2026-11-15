@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import catalog from '../data/workbench/go.mjs';
+import cancellableRelay from '../data/workbench/cancellable-relay.mjs';
 
 const exec = promisify(execFile);
 const { lessons } = JSON.parse(await readFile(new URL('../data/worlds/go/source.json', import.meta.url), 'utf8'));
@@ -98,5 +99,27 @@ func main() {}`],
       ]);
       await rmdir(directory);
     }
+  }
+});
+
+test('the Go relay quest checks the confirmed prefix, cancellation, and wrapped delivery failures', {
+  skip:!goAvailable && 'Go is unavailable',
+}, async () => {
+  const {exercise} = cancellableRelay.stages.find(stage => stage.kind === 'code');
+  const directory = await mkdtemp(join(tmpdir(), 'dungeons-go-relay-'));
+  try {
+    await writeFile(join(directory, 'workbench_test.go'), harness(exercise.tests), 'utf8');
+    const correct = await runFixture(directory, exercise.reference);
+    assert.equal(correct.passed, true, correct.report);
+    assert.equal((await runFixture(directory, exercise.starter)).passed, false);
+    const losesCause = exercise.reference.replace('deliver %q: %w', 'deliver %q: %v');
+    const mutant = await runFixture(directory, losesCause);
+    assert.equal(mutant.passed, false);
+    assert.match(mutant.report, /FAIL:\s+TestWorkbench3/);
+  } finally {
+    await Promise.allSettled([
+      unlink(join(directory, 'submission.go')), unlink(join(directory, 'workbench_test.go')),
+    ]);
+    await rmdir(directory);
   }
 });

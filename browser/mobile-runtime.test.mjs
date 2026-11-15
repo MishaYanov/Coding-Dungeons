@@ -8,10 +8,8 @@ import { build, preview } from 'vite';
 import go from '../data/workbench/go.mjs';
 import javascript from '../data/workbench/javascript.mjs';
 import typescript from '../data/workbench/typescript.mjs';
-import refactoring from '../data/workbench/refactoring.mjs';
-import systemDesign from '../data/workbench/system-design.mjs';
-import rateLimiter from '../data/workbench/rate-limiter.mjs';
 import { definitions } from '../lib/diamond-content.mjs';
+import { sideQuestRoutes } from '../lib/side-quests.mjs';
 import { mobileTypeScript } from '../work/scripts/mobile-typescript.mjs';
 import { quickjsSecurityCases, quickjsSecurityJob } from '../test/fixtures/quickjs-security.mjs';
 
@@ -124,6 +122,26 @@ test('offline browser JavaScript and TypeScript workers reject the QuickJS buffe
   }
 });
 
+test('offline browser side quest stages accept references and reject starters in all supported worlds', {timeout:90_000}, async t => {
+  const {page, goReady} = await openProbe(t);
+  for (const {world:language, catalog} of sideQuestRoutes.values()) {
+    await t.test(catalog.title, {skip:language === 'go' && !goReady ? 'Stage the optional Go compiler pack.' : false}, async () => {
+      for (const stage of catalog.stages.filter(stage => stage.kind === 'code')) {
+        const carry = catalog.stages.find(previous => previous.id === stage.carryFrom)?.exercise.reference;
+        const {reference, starter, tests, typeTests} = stage.exercise;
+        for (const [code, expected] of [[reference, 'passed'], [starter, 'failed']]) {
+          const source = [carry, code].filter(Boolean).join('\n\n');
+          const result = await page.evaluate(request => window.grade(request), {language, source, tests, typeTests});
+          assert.equal(result.status, expected, `${catalog.id}/${stage.id}: ${JSON.stringify(result)}`);
+          if (expected === 'passed') {
+            assert.deepEqual(result.tests.map(item => item.id), [...typeTests ?? [], ...tests].map(item => item.id));
+          }
+        }
+      }
+    });
+  }
+});
+
 test('browser runtimes grade every bundled reference and reject its starter offline', { timeout:210_000 }, async t => {
   const {page, goReady} = await openProbe(t);
   for (const [language, catalog] of Object.entries(catalogs)) {
@@ -145,22 +163,6 @@ test('browser runtimes grade every bundled reference and reject its starter offl
       reportTiming(t, wallTimes);
     });
   }
-
-  await t.test('side-quest code stages accept references and reject starters offline', async () => {
-    for (const catalog of [refactoring, systemDesign, rateLimiter]) {
-      for (const stage of catalog.stages.filter(stage => stage.kind === 'code')) {
-        const carry = catalog.stages.find(previous => previous.id === stage.carryFrom)?.exercise.reference ?? '';
-        const {reference, starter, tests} = stage.exercise;
-        for (const [code, expected] of [[reference, 'passed'], [starter, 'failed']]) {
-          const result = await page.evaluate(request => window.grade(request), {
-            language:'javascript', source:carry + '\n' + code, tests,
-          });
-          assert.equal(result.status, expected, `${catalog.id}/${stage.id}: ${JSON.stringify(result)}`);
-          if (expected === 'passed') assert.deepEqual(result.tests.map(item => item.id), tests.map(item => item.id));
-        }
-      }
-    }
-  });
 
   await t.test('worker limits and cancellation leave the workbench ready for another run', async () => {
     const testCode = { language:'javascript', source:'function work() { while (true) {} }',
