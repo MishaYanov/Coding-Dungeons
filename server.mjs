@@ -765,15 +765,16 @@ async function revealSuggestion(request, response, world, heroId) {
 
 const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8',
   '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
-  '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip'};
+  '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip', '.json':'application/json; charset=utf-8'};
 const publicFiles = new Set(['/index.html', '/styles.css',
   ...worlds.flatMap(({info}) => [info.bookUrl, info.kitUrl].filter(Boolean))]);
 const pageAsset = /^\/book\/(?:(?:javascript|typescript|go)\/)?pages\/[1-9]\d{0,2}\.webp$/;
+const bookText = /^\/book\/(?:(?:javascript|typescript|go)\/)?reader-text\.json$/;
 
 async function staticFile(request, response, path) {
   const named = path === '/' ? '/index.html' : path;
   const builtAsset = /^\/assets\/[A-Za-z0-9_-]+\.(?:js|css)$/.test(named);
-  if (!publicFiles.has(named) && !pageAsset.test(named) && !builtAsset) throw new HttpError(404, 'Page not found.');
+  if (!publicFiles.has(named) && !pageAsset.test(named) && !bookText.test(named) && !builtAsset) throw new HttpError(404, 'Page not found.');
   const file = join(named.startsWith('/book/') ? publicDir : rendererDir, named.slice(1));
   const meta = await stat(file).catch(() => null);
   if (!meta?.isFile()) throw new HttpError(404, 'Page asset not found.');

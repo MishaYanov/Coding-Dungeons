@@ -82,6 +82,7 @@ async function bookFiles(id) {
   return [
     book + (rust ? 'ferrum-expedition.pdf' : 'book.pdf'),
     book + (rust ? 'ferrum-field-kit.zip' : 'field-kit.zip'),
+    book + 'reader-text.json',
     ...pages.map(({page}) => book + `pages/${page}.webp`),
   ];
 }

@@ -852,3 +852,22 @@ test('a fallen hero keeps the book and cannot submit or drink a potion', async (
   await page.keyboard.press('d');
   await openBookPage(page, checkpoint.page + 1);
 });
+
+test('book text mode shows prose and indented code without moving the saved reading page', async t => {
+  const page = await newPage(t, '', 'typescript');
+  await createHero(page, 'Text Edition Reader', 1);
+  await jumpTo(page, 11);
+  await page.getByRole('button', {name:'Read as text', exact:true}).click();
+  const text = page.getByRole('article', {name:'Book text, page 11'});
+  await text.getByRole('heading', {name:'The Two Signal Flags'}).waitFor();
+  const code = await text.locator('pre code').textContent();
+  assert.match(code, /\n  if \(arrival\.kind === 'assigned'\) \{\n    return/);
+  assert.equal(await page.locator('#book-page').count(), 0);
+  await text.getByText('Links on this page', {exact:true}).click();
+  await text.getByRole('link', {name:'Open book page 2', exact:true}).click();
+  await page.getByRole('article', {name:'Book text, page 2'}).waitFor();
+  await page.reload();
+  await page.getByRole('article', {name:'Book text, page 2'}).waitFor();
+  await page.getByRole('button', {name:'Page image', exact:true}).click();
+  await openBookPage(page, 2);
+});

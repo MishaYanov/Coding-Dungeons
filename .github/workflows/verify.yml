@@ -71,3 +71,5 @@ jobs:
         run: npm run test:book
       - name: Check book assets
         run: python verify-worlds.py --check-typescript
+      - name: Check the reflowable text edition
+        run: python work/scripts/build-reader-text.py --check

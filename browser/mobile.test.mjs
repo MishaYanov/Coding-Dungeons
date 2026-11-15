@@ -211,6 +211,16 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   assert.equal(await more.getAttribute('aria-expanded'), 'false');
   assert.equal(await more.evaluate(button => document.activeElement === button), true);
   await tap(more);
+  await tap(options.getByRole('button', {name:'Read as text', exact:true}));
+  const chapter = page.getByRole('article', {name:'Book text, page 1'});
+  await chapter.waitFor();
+  assert.equal(await chapter.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+  await page.reload();
+  await chapter.waitFor();
+  await tap(more);
+  await tap(options.getByRole('button', {name:'Page image', exact:true}));
+  await bookPage(page, 1);
+  await tap(more);
   await tap(closeMenu);
   await options.waitFor({state:'hidden'});
   await tap(more);
