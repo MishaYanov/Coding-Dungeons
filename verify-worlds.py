@@ -1,10 +1,12 @@
 """Audit installed book artifacts against the reader manifest and editable lessons."""
 
+import argparse
 from collections import Counter
 import hashlib
 import json
 from pathlib import Path
-import sys
+import subprocess
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 from zipfile import ZipFile
 
@@ -21,7 +23,22 @@ def load(path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
-def audit(world):
+def verify_typescript_examples(kit, levels):
+    compiler = ROOT / "node_modules/typescript/bin/tsc"
+    if not compiler.is_file():
+        raise SystemExit("Run npm ci to install the pinned TypeScript compiler.")
+    with TemporaryDirectory(prefix="ferrum-typescript-book-") as tmp:
+        for level in levels:
+            example = f"level-{level:02}.ts"
+            Path(tmp, example).write_bytes(kit.read(f"examples/{example}"))
+            subprocess.run(
+                ["node", str(compiler), "--strict", "--target", "ES2022", "--noEmit", example],
+                cwd=tmp, check=True, timeout=30,
+            )
+    print(f"TypeScript: {len(levels)} exported examples pass the documented compiler command.", flush=True)
+
+
+def audit(world, check_typescript=False):
     rust = world == "rust"
     data = ROOT / "data" if rust else ROOT / "data/worlds" / world
     book = ROOT / "public/book" if rust else ROOT / "public/book" / world
@@ -125,12 +142,19 @@ def audit(world):
                     assert exported == lesson[key].rstrip() + "\n", (world, level, folder)
         if rust:
             assert len(reader.get_fields()) == 171
+        if world == "typescript" and check_typescript:
+            verify_typescript_examples(kit, sorted(levels))
     print(f"{world}: {total} pages, {len(quests)} levels, {link_count} links, "
           f"{sum(len(p['prompts']) for p in pages)} GM cards, verified field kit", flush=True)
 
 
 if __name__ == "__main__":
-    for selected in sys.argv[1:] or WORLDS:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("world", nargs="*", metavar="WORLD")
+    parser.add_argument("--check-typescript", action="store_true",
+                        help="compile the TypeScript kit examples using the documented command")
+    args = parser.parse_args()
+    for selected in args.world or WORLDS:
         if selected not in WORLDS:
-            raise SystemExit(f"Unknown world: {selected}")
-        audit(selected)
+            parser.error(f"Unknown world: {selected}")
+        audit(selected, args.check_typescript)

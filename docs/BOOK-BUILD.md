@@ -30,3 +30,5 @@ The technical manuscript lives in `work/manuscript`. Quest and route material li
 The packaging scripts build the field kit from the checked listings and attach it to the PDF. The PDF checks validate the attachment, navigation targets, listing labels, and fillable progress fields. The layout check flags empty pages and out-of-bounds text, renders the pages, and creates contact sheets in `work/qa/campaign/final`. Review edited pages there before publishing an updated reader. Keep prompt IDs and page anchors stable when editing a released campaign, since saved answers use both.
 
 Run `python verify-worlds.py` against the finished reader. It checks every PDF page, page image, book link, and prompt binding, and compares the attached field kits with the downloaded copies. Pass a world ID to check just that world.
+
+After `npm ci`, run `python verify-worlds.py typescript --check-typescript` to compile the TypeScript kit examples with the documented command. The CI workflow runs this check.

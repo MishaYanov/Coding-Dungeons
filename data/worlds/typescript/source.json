@@ -68,7 +68,7 @@
         "A single object type with optional `dock` and `reason` fields would permit a waiting arrival with no reason. A tagged union makes the appropriate fields required for each case. A structurally compatible value can still carry extra properties. Check the tag before using the fields required for that branch.",
         "When testing an optional primitive, check for the missing state you mean. `if (dock)` treats zero as false, even if dock zero is a valid location. `dock !== undefined` makes the distinction explicit. For a tagged union, checking `kind` avoids mixing a status decision with the truthiness of a field."
       ],
-      "code": "type Arrival =\n  | { kind: 'assigned'; dock: number }\n  | { kind: 'waiting'; reason: string };\n\nfunction statusText(arrival: Arrival): string {\n  if (arrival.kind === 'assigned') {\n    return `Dock ${arrival.dock}`;\n  }\n  return `Waiting: ${arrival.reason}`;\n}\n\nconst status = statusText({ kind: 'assigned', dock: 0 });\nif (status !== 'Dock 0') throw new Error(status);",
+      "code": "type Arrival =\n  | { kind: 'assigned'; dock: number }\n  | { kind: 'waiting'; reason: string };\n\nfunction statusText(arrival: Arrival): string {\n  if (arrival.kind === 'assigned') {\n    return `Dock ${arrival.dock}`;\n  }\n  return `Waiting: ${arrival.reason}`;\n}\n\nconst dockStatus = statusText({ kind: 'assigned', dock: 0 });\nif (dockStatus !== 'Dock 0') throw new Error(dockStatus);",
       "takeaway": "A discriminant lets the compiler track which fields exist after a runtime check.",
       "question": "Which property can you access after `arrival.kind === 'waiting'` succeeds?",
       "options": ["reason", "dock", "Both reason and dock", "Neither reason nor dock"],
