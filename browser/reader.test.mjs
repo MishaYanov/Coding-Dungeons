@@ -741,6 +741,10 @@ test('a hidden diamond starts a saved goblin fight with two graded stages and on
   const submitAnswer = fight.getByRole('button', { name: 'Submit answer', exact: true });
   await submitAnswer.waitFor();
 
+  await jumpTo(page, offPage.number);
+  await submitAnswer.waitFor();
+  await jumpTo(page, visible[1].number);
+
   await page.reload();
   await openBookPage(page, visible[1].number);
   await submitAnswer.waitFor();
@@ -752,14 +756,19 @@ test('a hidden diamond starts a saved goblin fight with two graded stages and on
   await submitAnswer.click();
   await fight.getByText('Goblin defeated', { exact: true }).waitFor();
   await health.getByText('2 potions', { exact: true }).waitFor();
+  await fight.getByRole('button', { name: 'Continue adventure', exact: true }).click();
+  await fight.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#guide-panel').evaluate(node => document.activeElement === node), true);
 
   await page.reload();
   await openBookPage(page, visible[1].number);
+  await fight.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'Character sheet' }).click();
   const sheet = page.getByRole('dialog', { name: 'Character sheet' });
   await sheet.getByText('Diamonds collected · 3', { exact: true }).waitFor();
   await sheet.getByRole('button', { name: 'Close character sheet' }).click();
   await jumpTo(page, visible[0].number);
+  await fight.waitFor({ state: 'hidden' });
   await diamond.waitFor({ state: 'hidden' });
   const saved = await diamondPages(page, 16);
   assert.ok(saved.every(({ sparkle, diamonds }) => !sparkle && diamonds === 3));

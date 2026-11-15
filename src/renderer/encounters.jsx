@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { mountCreature } from '../../public/creatures.mjs';
 import { CodeIndentation, useCodeIndentation } from './code-editor.mjs';
 import { WorkbenchReport } from './guide.jsx';
+import { isDiamondComplete } from './game.mjs';
 export { diamondPosition } from './diamond-placement.mjs';
 
 const diamondDraftKey = 'diamond-goblin:code';
@@ -309,9 +310,16 @@ function DiamondBattle({ game, actions }) {
       <Steps stages={encounter.stages} completed={completed} current={current} label="Goblin fight stages" diamond />
       <DiamondFeedback feedback={feedback} />
       <div className="special-body diamond-body">
-        {finished ? <p className="special-victory" ref={focusTarget} tabIndex={-1}>
-          You recovered the goblin’s bag. +{encounter.rewardDiamonds} diamonds
-        </p> : <DiamondStage key={current.id} stage={current} draft={game.drafts.get(diamondDraftKey) ?? (view.draft || undefined)}
+        {finished ? <>
+          <p className="special-victory" ref={focusTarget} tabIndex={-1}>
+            You recovered the goblin’s bag. +{encounter.rewardDiamonds} diamonds
+          </p>
+          <button type="button" className="button button-primary" onClick={(event) => {
+            const guide = event.currentTarget.closest('.guide-panel');
+            actions.dismissDiamond();
+            guide?.focus({ preventScroll: true });
+          }}>Continue adventure</button>
+        </> : <DiamondStage key={current.id} stage={current} draft={game.drafts.get(diamondDraftKey) ?? (view.draft || undefined)}
           saveDraft={(value) => actions.persistDraft(diamondDraftKey, value)} unavailable={unavailable} busy={busy}
           disabled={disabled} focusTarget={focusTarget} submit={submit} error={error} />}
       </div>
@@ -321,6 +329,7 @@ function DiamondBattle({ game, actions }) {
 
 export function DiamondEncounter({ game, actions }) {
   return <div id="diamond-encounter" className="guide-content diamond-slot">
-    {game.diamond?.encounter && <DiamondBattle game={game} actions={actions} />}
+    {game.diamond?.encounter && (!isDiamondComplete(game.diamond) || game.diamondVictory)
+      && <DiamondBattle game={game} actions={actions} />}
   </div>;
 }

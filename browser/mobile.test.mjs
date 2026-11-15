@@ -269,6 +269,18 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
   await fight.getByRole('radio', {name:'values.slice()', exact:true}).check();
   await tap(fight.getByRole('button', {name:'Submit answer', exact:true}));
   await fight.getByText('Goblin defeated', {exact:true}).waitFor();
+  // Turning the page dismisses the result without needing to close it first.
+  const victoryPage = Number(await restored.locator('#page-number').inputValue());
+  await tap(restored.getByRole('tab', {name:'World', exact:true}));
+  await jump(restored, victoryPage === 1 ? 2 : 1);
+  await bookPage(restored, victoryPage === 1 ? 2 : 1);
+  await tap(restored.getByRole('tab', {name:'GM', exact:true}));
+  await fight.waitFor({state:'hidden'});
+  await restored.reload();
+  await jump(restored, victoryPage);
+  await bookPage(restored, victoryPage);
+  await tap(restored.getByRole('tab', {name:'GM', exact:true}));
+  await fight.waitFor({state:'hidden'});
 });
 
 test('mobile worlds keep their own saves, offline books, and code grading capability', {timeout:360_000}, async t => {
