@@ -101,7 +101,7 @@ def get_input(spec, destination, archives):
     if preloaded is not None and preloaded.is_file():
         data = preloaded.read_bytes()
     elif "localPath" in spec:
-        data = (Path(__file__).resolve().parent.parent / spec["localPath"]).read_bytes()
+        data = (Path(__file__).resolve().parents[2] / spec["localPath"]).read_bytes()
     else:
         print("Downloading " + spec["url"], flush=True)
         request = urllib.request.Request(spec["url"], headers={"User-Agent": "Coding-Dungeons-reproducible-build/1"})

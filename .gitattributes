@@ -6,3 +6,5 @@ android/gradlew text eol=lf
 *.pdf binary
 *.webp binary
 *.zip binary
+*.tgz binary
+vendor/quickjs/*.patch text eol=lf

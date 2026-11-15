@@ -68,8 +68,10 @@ async function firstChallenge(page, id, language, number) {
   const codeBox = page.getByRole('textbox', {name:`${language} code`});
   let answer = first.reference ?? first.solution;
   if (id === 'javascript' || id === 'typescript') {
+    // These fixed JavaScript fixtures exercise the guest interpreter without
+    // introducing unrelated TypeScript errors into the challenge signature.
     answer += '\n' + quickjsSecurityCases.map(({expression}) =>
-      `if (!${expression}) throw new Error('QuickJS security regression');`).join('\n');
+      `if (!eval(${JSON.stringify(expression)})) throw new Error('QuickJS security regression');`).join('\n');
   }
   await codeBox.fill(answer);
   const submit = page.getByRole('button', {name:'Submit solution', exact:true});

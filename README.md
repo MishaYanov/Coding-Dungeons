@@ -33,6 +33,8 @@ Setup writes the program to your local AppData and registers its shortcuts and u
 
 Running code carries risk. The Windows sandbox and WebAssembly limits reduce what submitted code can access. Bugs in the OS, toolchain, or runner can still affect isolation. The app includes this notice under **Help → Security and offline use**. See the [security review](docs/SECURITY-REVIEW.md) for details about the controls and their limits.
 
+Version 1.0.16 replaces the embedded QuickJS runtime used for JavaScript and TypeScript in the desktop, PWA, and Android editions. The rebuild includes upstream fixes for resizable-buffer issues #492 and #478, plus a local guard against a 32-bit allocation overflow reported in #535. The patched runtime is included in the application; it is not downloaded during play. See the [pinned sources, build instructions, and provenance](vendor/quickjs/README.md). These fixes address the identified defects; they do not remove the need to keep the operating system and browser/WebView updated.
+
 ## Browser development
 
 The browser and desktop builds share the React reader in `src/renderer`. Install Node.js 24 or newer, then run these commands from the project folder.
@@ -122,7 +124,7 @@ The private Android APK bundles all four books and their Workbench runtimes. Ins
 
 The wrapper uses Android System WebView and requests neither Internet nor storage permissions. Heroes and drafts stay in the app's private storage. **Save backup** uses Android's document picker to export a world or import into an empty world. Export important saves before uninstalling or clearing app storage; browser/PWA saves and APK saves are separate. The app targets Android 8.0 and later with a compatible WebView. Support on 2 GB phones is not verified.
 
-Version 1.0.15 is a private local build. Its experimental Rust compiler has the same compatibility and redistribution limits as the browser edition: public distribution remains blocked pending complete component notices and verified source provenance. See [mobile Rust limitations](docs/MOBILE-RUST.md).
+Version 1.0.16 is a private local build. Its experimental Rust compiler has the same compatibility and redistribution limits as the browser edition: public distribution remains blocked pending complete component notices and verified source provenance. See [mobile Rust limitations](docs/MOBILE-RUST.md).
 
 On Windows, install Android Studio with SDK Platform 37.0 and Build-Tools 36.0.0. The build script uses Android Studio's bundled JDK and the default SDK location; set `JAVA_HOME` and `ANDROID_HOME` if yours differ. Stage both compiler packs, then build:
 
