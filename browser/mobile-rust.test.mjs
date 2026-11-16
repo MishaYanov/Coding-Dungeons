@@ -116,7 +116,7 @@ window.grade = request => runRustWorkbench(request);`);
   ])));
   const shellFiles = ['/index.html', ...(await filesIn(join(dist, 'assets'))).map(file => '/assets/' + file)];
   const offline = {shellVersion:'mobile-rust-test', shellFiles, integrity,
-    worlds:{rust:{number:3, version:'mobile-rust-test', files:packFiles.map(file => '/runtime/rust/' + file)}}};
+    worlds:{rust:{number:4, version:'mobile-rust-test', files:packFiles.map(file => '/runtime/rust/' + file)}}};
   await writeFile(join(dist, 'sw.js'), `const offline = ${JSON.stringify(offline)};\n`
     + await readFile(join(project, 'src/mobile/service-worker.js'), 'utf8'));
   server = await preview({...config, preview:{host:'127.0.0.1', port:0, strictPort:true}});

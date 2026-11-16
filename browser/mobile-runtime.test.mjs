@@ -71,7 +71,7 @@ window.grade = request => request.language === 'go' ? runGoWorkbench(request) : 
   await build(config);
   if (goReady) await cp(goPack, join(dist, 'runtime/go'), { recursive:true });
   const shellFiles = ['/index.html', ...(await readdir(join(dist, 'assets'))).map(file => `/assets/${file}`)];
-  const worlds = goReady ? {go:{ number:4, version:'mobile-runtime-test', files:goFiles.map(file => `/runtime/go/${file}`) }} : {};
+  const worlds = goReady ? {go:{ number:5, version:'mobile-runtime-test', files:goFiles.map(file => `/runtime/go/${file}`) }} : {};
   const worker = await readFile(join(project, 'src/mobile/service-worker.js'), 'utf8');
   await writeFile(join(dist, 'sw.js'), `const offline = ${JSON.stringify({shellVersion:'mobile-runtime-test', shellFiles, worlds})};\n${worker}`);
   server = await preview({ ...config, preview:{ port:0, host:'127.0.0.1', strictPort:true } });

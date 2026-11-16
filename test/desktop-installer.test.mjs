@@ -10,13 +10,16 @@ test('the desktop package copies only the application and excludes local credent
   const ignore = forgeConfig.packagerConfig.ignore;
   for (const path of ['', '/server.mjs', '/desktop/preload.cjs', '/lib/standalone-runner.mjs',
     '/data/worlds/go/pages.json', '/dist/renderer/book/javascript/pages/1.webp', '/dist/renderer/book/ferrum-expedition.pdf',
+    '/data/worlds/csharp/campaign.json', '/data/worlds/csharp/pages.json', '/data/worlds/csharp/exercises.json',
+    '/dist/renderer/book/csharp/book.pdf', '/dist/renderer/book/csharp/field-kit.zip', '/dist/renderer/book/csharp/pages/1.webp',
     '/dist/renderer/assets/index-Ab23.js', '/lib/quickjs-runtime.mjs',
     '/node_modules/quickjs-emscripten-core/dist/index.js',
     '/node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm']) {
     assert.equal(ignore(path), false, path);
   }
   for (const path of ['/local-backup.txt', '/.env', '/state/ferrum.sqlite', '/dist/renderer/assets/private.key', '/infra/run-suite.sh',
-    '/desktop/runtime/credentials.pfx', '/node_modules/package/.env.local', '/data/worlds/go/source.json']) {
+    '/desktop/runtime/credentials.pfx', '/node_modules/package/.env.local', '/data/worlds/go/source.json',
+    '/data/worlds/csharp/source.json']) {
     assert.equal(ignore(path), true, path);
   }
 });

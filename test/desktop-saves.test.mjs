@@ -12,6 +12,7 @@ import { emptyMerchant, equipMerchant, purchaseMerchant, submitMerchantChallenge
 
 const rustName = 'ferrum.sqlite';
 const jsName = 'ferrum.javascript.sqlite';
+const csharpName = 'ferrum.csharp.sqlite';
 const rustHero = '11111111-aaaa-4aaa-aaaa-111111111111';
 const jsHero = '22222222-aaaa-4aaa-aaaa-222222222222';
 const staleHero = '33333333-aaaa-4aaa-aaaa-333333333333';
@@ -79,6 +80,27 @@ test('desktop save export includes committed WAL records without overwriting oth
   sourceStore.createHero({id: 'later', name: 'Later'});
   assert.deepEqual(names(join(snapshot.directory, rustName)), ['Rhea']);
   assert.notEqual((await exportSaves(source, destination)).directory, snapshot.directory);
+});
+
+test('desktop saves back up and restore a C# hero and their notebook without changing Rust records', async t => {
+  const {source, destination, seed, reader} = await directories(t);
+  await seed(rustName, 'Rust explorer', rustHero);
+  const csharpHero = randomUUID();
+  const csharp = await seed(csharpName, 'C# explorer', csharpHero);
+  csharp.saveResponse(csharpHero, 4, 'boss-1', 'Console.WriteLine("Lantern");', 'Draft saved.');
+  const sourceReader = reader('source-reader');
+  sourceReader.set(draftsKey(csharpHero), '{"4:boss-1":"// notebook"}');
+  const backup = await exportSaves(source, destination, {readerStorage:sourceReader});
+  assert.deepEqual(backup.files, [rustName, csharpName]);
+  const restoredReader = reader('destination-reader');
+  assert.deepEqual(await importSaves(backup.directory, destination, {readerStorage:restoredReader}),
+    {imported:[rustName, csharpName], skipped:[]});
+  assert.deepEqual(names(join(destination, rustName)), ['Rust explorer']);
+  assert.deepEqual(names(join(destination, csharpName)), ['C# explorer']);
+  assert.equal(restoredReader.get(draftsKey(csharpHero)), '{"4:boss-1":"// notebook"}');
+  const store = await openStore({file:join(destination, csharpName)});
+  try { assert.equal(store.response(csharpHero, 4, 'boss-1').value, 'Console.WriteLine("Lantern");'); }
+  finally { store.close(); }
 });
 
 test('desktop save transfer preserves merchant purchases and rejects spending without matching loot', async t => {

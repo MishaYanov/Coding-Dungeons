@@ -34,10 +34,11 @@ public class ShellPolicyTest {
         assertFalse(ShellPolicy.isExternalHttps("intent://example.com/"));
     }
 
-    @Test public void downloadsAreOnlyTheEightAuthoredBooksAndKits() {
+    @Test public void downloadsAreOnlyTheAuthoredBooksAndKits() {
         for (String path : new String[]{"book/ferrum-expedition.pdf", "book/ferrum-field-kit.zip",
                 "book/javascript/book.pdf", "book/javascript/field-kit.zip", "book/typescript/book.pdf",
-                "book/typescript/field-kit.zip", "book/go/book.pdf", "book/go/field-kit.zip"}) {
+                "book/typescript/field-kit.zip", "book/csharp/book.pdf", "book/csharp/field-kit.zip",
+                "book/go/book.pdf", "book/go/field-kit.zip"}) {
             assertEquals(path, ShellPolicy.bookAsset(ShellPolicy.ORIGIN + "/" + path));
         }
         assertNull(ShellPolicy.bookAsset(ShellPolicy.ORIGIN + "/runtime/rust/rustc.wasm"));

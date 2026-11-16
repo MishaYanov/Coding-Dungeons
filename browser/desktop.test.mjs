@@ -28,7 +28,7 @@ async function worldPicker(page) {
   const worlds = page.getByRole('dialog', {name: 'Choose a world'});
   await worlds.waitFor();
   assert.deepEqual(await worlds.locator('a strong').allTextContents(),
-    ['JavaScript', 'TypeScript', 'Rust', 'Go']);
+    ['JavaScript', 'TypeScript', 'C# and .NET', 'Rust', 'Go']);
   return worlds;
 }
 
@@ -171,12 +171,16 @@ test('Windows package protects its engine, runs the required Workbenches, and re
     await page.getByRole('button', {name: 'Create hero'}).click();
     await page.locator('#page-frame:not([hidden]) img').waitFor();
     await winFirstWorkbench(page, 'typescript', 'TypeScript', typescript[0].reference);
+    await chooseWorldHero(page, /^World 3 C# and \.NET\b/, 'C# smoke hero');
+    await page.getByRole('img', {name:/C# and \.NET campaign book, page 1(?: ·|$)/}).waitFor();
+    await page.getByText('Guided practice', {exact:true}).waitFor();
+    await access(join(userData, 'state', 'ferrum.csharp.sqlite'));
     if (process.env.FERRUM_DESKTOP_REQUIRE_NATIVE === '1') {
-      await chooseWorldHero(page, /^World 4 Go\b/, 'Go smoke hero');
+      await chooseWorldHero(page, /^World 5 Go\b/, 'Go smoke hero');
       await winFirstWorkbench(page, 'go', 'Go', go[0].reference);
     }
     if (process.env.FERRUM_DESKTOP_REQUIRE_GM === '1' || process.env.FERRUM_DESKTOP_REQUIRE_NATIVE === '1') {
-      await chooseWorldHero(page, /^World 3 Rust\b/, 'Rust smoke hero');
+      await chooseWorldHero(page, /^World 4 Rust\b/, 'Rust smoke hero');
     }
     if (process.env.FERRUM_DESKTOP_REQUIRE_GM === '1') {
       const input = page.locator('#page-number');

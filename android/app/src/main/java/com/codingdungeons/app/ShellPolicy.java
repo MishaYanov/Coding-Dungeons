@@ -19,6 +19,7 @@ final class ShellPolicy {
             "book/ferrum-expedition.pdf", "book/ferrum-field-kit.zip",
             "book/javascript/book.pdf", "book/javascript/field-kit.zip",
             "book/typescript/book.pdf", "book/typescript/field-kit.zip",
+            "book/csharp/book.pdf", "book/csharp/field-kit.zip",
             "book/go/book.pdf", "book/go/field-kit.zip"));
 
     private ShellPolicy() {}

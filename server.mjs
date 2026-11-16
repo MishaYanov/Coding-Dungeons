@@ -20,6 +20,7 @@ import { suggestions } from './data/workbench/suggestions.mjs';
 import { evaluateTrial, trialsFor } from './lib/trials.mjs';
 import { diamondExercise, diamondStage, diamondView, evaluateDiamondChoice, evaluateDiamondCode,
   refreshDiamondOutcome, settleDiamond, startDiamond } from './lib/diamond-encounter.mjs';
+import { diamondChoiceStage } from './lib/diamond-content.mjs';
 import { equipMerchant, merchantView, purchaseMerchant, submitMerchantChallenge } from './lib/merchant.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -37,8 +38,9 @@ const textLimit = 20 * 1024;
 const worldSpecs = [
   {id:'javascript', name:'JavaScript', title:'JavaScript Fundamentals', subtitle:'World 1'},
   {id:'typescript', name:'TypeScript', title:'TypeScript Fundamentals', subtitle:'World 2'},
+  {id:'csharp', name:'C# and .NET', title:'C# and .NET for Beginners', subtitle:'Lantern Workshop'},
   {id:'rust', name:'Rust', title:'Understanding Rust', subtitle:'The Ferrum Expedition'},
-  {id:'go', name:'Go', title:'Understanding Go', subtitle:'World 4'},
+  {id:'go', name:'Go', title:'Understanding Go', subtitle:'World 5'},
 ];
 const courseSuites = {javascript:javascriptSuites, typescript:typescriptSuites, go:goSuites, rust:rustSuites};
 const rustDatabase = resolve(root, process.env.FERRUM_DB ?? 'state/ferrum.sqlite');
@@ -654,10 +656,11 @@ async function submitDiamond(request, response, world, heroId) {
   const combatView = result => ({...view(result), combat:publicCombat(store.combatState(heroId))});
   const respond = outcome => json(response, submissionResult(refreshDiamondOutcome(store, heroId, worldId, outcome), true));
   if (stageId !== 'code' && stageId !== 'choice') throw new HttpError(400, 'Choose a goblin challenge.');
-  const allowedKeys = stageId === 'code' ? ['stageId','submissionId','code','purpose'] : ['stageId','submissionId','optionId'];
+  const choice = diamondChoiceStage(worldId, stageId);
+  const allowedKeys = choice ? ['stageId','submissionId','optionId'] : ['stageId','submissionId','code','purpose'];
   if (Object.keys(data).some(key => !allowedKeys.includes(key))) throw new HttpError(400, 'Send an answer for this challenge.');
-  if (stageId === 'choice') {
-    const attempt = evaluateDiamondChoice(worldId, data.optionId);
+  if (choice) {
+    const attempt = evaluateDiamondChoice(worldId, data.optionId, stageId);
     if (!attempt) throw new HttpError(400, 'Choose one of the listed answers.');
     const {ticket, prior} = prepareSubmission(store, heroId, data, ['diamond', stageId, data.optionId], true);
     if (prior) return respond(prior);
@@ -768,7 +771,7 @@ const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf
   '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip'};
 const publicFiles = new Set(['/index.html', '/styles.css',
   ...worlds.flatMap(({info}) => [info.bookUrl, info.kitUrl].filter(Boolean))]);
-const pageAsset = /^\/book\/(?:(?:javascript|typescript|go)\/)?pages\/[1-9]\d{0,2}\.webp$/;
+const pageAsset = /^\/book\/(?:(?:javascript|typescript|csharp|go)\/)?pages\/[1-9]\d{0,2}\.webp$/;
 
 async function staticFile(request, response, path) {
   const named = path === '/' ? '/index.html' : path;

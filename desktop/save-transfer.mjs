@@ -5,7 +5,7 @@ import { createSaveSchema, goblinDiamonds, openStore } from '../lib/store.mjs';
 import { validMerchantState } from '../lib/merchant.mjs';
 import { isReaderHeroId, maxReaderValueBytes } from './reader-storage.mjs';
 
-const files = ['ferrum.sqlite', 'ferrum.javascript.sqlite', 'ferrum.typescript.sqlite', 'ferrum.go.sqlite'];
+const files = ['ferrum.sqlite', 'ferrum.javascript.sqlite', 'ferrum.typescript.sqlite', 'ferrum.go.sqlite', 'ferrum.csharp.sqlite'];
 const readerDataFile = 'reader-data.json';
 const maxReaderDataBytes = 32 * 1024 * 1024;
 const maxSavePayloadBytes = 1024 * 1024;

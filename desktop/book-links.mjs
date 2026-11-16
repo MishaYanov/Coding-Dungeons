@@ -5,6 +5,7 @@ const books = [
   'data/pages.json',
   'data/worlds/javascript/pages.json',
   'data/worlds/typescript/pages.json',
+  'data/worlds/csharp/pages.json',
   'data/worlds/go/pages.json',
 ];
 

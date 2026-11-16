@@ -1,6 +1,6 @@
 # Coding Dungeons
 
-Play through four programming books in a local game reader. Read the book on the left, then use the Game Master on the right for quizzes, coding challenges, hints, and debriefs. Your character sheet tracks XP, skill levels, and path progress.
+Play through five programming books in a local game reader. Read the book on the left, then use the Game Master on the right for quizzes, coding challenges, hints, and debriefs. Your character sheet tracks XP, skill levels, and path progress.
 
 Open **Code Workbench** on a graded challenge. Run Examples to practice, then Submit solution to run the required suite. Passing the full suite defeats the creature and saves Forge progress. Choose Hard Mode to lock hints, suggestions, and example answers for the encounter and earn an unaided clear. Project review pages keep the book's design work alongside the executable drills.
 
@@ -18,8 +18,17 @@ Choose **One Life** when creating a hero to start with 100 HP and one healing po
 | --- | ---: | --- |
 | 1 · JavaScript | 14 | Language foundations, data validation, state, and asynchronous work |
 | 2 · TypeScript | 14 | Types, runtime boundaries, generics, and typed APIs |
-| 3 · Rust | 42 | Ownership, API design, concurrency, unsafe Rust, and systems design |
-| 4 · Go | 14 | Foundations, interfaces, error handling, cancellation, and worker pools |
+| 3 · C# and .NET | 18 | Console apps, validation, models, LINQ, JSON, async, and a tested capstone |
+| 4 · Rust | 42 | Ownership, API design, concurrency, unsafe Rust, and systems design |
+| 5 · Go | 14 | Foundations, interfaces, error handling, cancellation, and worker pools |
+
+**C# and .NET for Beginners** targets the .NET 10 LTS SDK. Use the Lantern Workshop's GM checkpoints, trials, goblin questions, and Vault to practice. The game saves C# code drafts for Forge self-review. Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), then extract the field kit from the World Map. The kit includes expected output and starter files. Run the first example from the extracted directory with the following command.
+
+```powershell
+dotnet run --file examples/level-01.cs --property:PublishAot=false
+```
+
+With this option the example uses the installed SDK without restoring native publishing tools.
 
 ## Windows desktop
 
@@ -69,7 +78,7 @@ The GitHub Actions **Verify** workflow runs on pushes to `main` and on pull requ
 
 The optional mobile Rust compiler is a local experimental prototype. Public distribution of a Rust-enabled build is blocked on matching component notices and exact compiler source provenance; see [mobile Rust status and validation](docs/MOBILE-RUST.md).
 
-The installable web app includes JavaScript, TypeScript, Rust, and Go. Use **Change world** from the hero picker or campaign menu. Download each world you want to read offline. Heroes, progress, and drafts stay on the device and are separate for each world. Use **Save backup** to export a world's saves or import them into an empty save for that same world.
+The installable web app includes JavaScript, TypeScript, C#, Rust, and Go. Use **Change world** from the hero picker or campaign menu. Download each world you want to read offline. Heroes, progress, and drafts stay on the device and are separate for each world. Use **Save backup** to export a world's saves or import them into an empty save for that same world.
 
 ```powershell
 npm.cmd ci
@@ -93,6 +102,7 @@ For a physical phone, serve `dist/mobile/` at the root of an HTTPS origin. Open 
 | --- | --- |
 | JavaScript | QuickJS runs the supplied tests inside a Web Worker. |
 | TypeScript | The pinned TypeScript compiler checks the submission and type contracts. QuickJS runs the emitted JavaScript against the suite. |
+| C# | Authored choice grading, code drafts, and Forge self-review work offline. Run code from the field kit with a separate .NET 10 SDK. |
 | Rust | With the optional experimental pack, Rust 1.96.0-dev compiles submissions and tests locally to WebAssembly. Each test uses a fresh WASI instance. The book and desktop target remain Rust 1.99.1; newer features may be unavailable on mobile. Without the pack, books, prompts and drafts remain available. |
 | Go | With the optional pack, the pinned Go 1.27.4 compiler and linker run as WebAssembly in a worker. The linked program runs against the suite with a fresh WASI instance for each test. |
 
@@ -103,7 +113,7 @@ npm.cmd run mobile:stage-go
 npm.cmd run mobile:build
 ```
 
-The Go compiler pack adds about 92 MiB before HTTP compression. In the build that includes it, **Download World 4** saves the complete pack alongside the book. Go challenges use the bundled standard-library subset. The mobile GM reviews written responses with authored rules. Submissions and feedback stay on the device.
+The Go compiler pack adds about 92 MiB before HTTP compression. In the build that includes it, **Download World 5** saves the complete pack alongside the book. Go challenges use the bundled standard-library subset. The mobile GM reviews written responses with authored rules. Submissions and feedback stay on the device.
 
 Stage the experimental browser Rust toolchain before building:
 
@@ -112,7 +122,7 @@ npm.cmd run mobile:stage-rust
 npm.cmd run mobile:build
 ```
 
-The staging command downloads checksum-pinned compiler artifacts from GitHub on the build machine. The pack adds about 152 MiB before HTTP compression. **Download World 3** then saves that pack and the book for offline use. Learner code stays on the device. No Cargo packages, compiler updates or remote grading services are fetched at runtime. See [mobile Rust implementation and limitations](docs/MOBILE-RUST.md), including compiler compatibility and memory measurements. This experimental pack is not a guarantee of support on 2 GB phones or iPhone.
+The staging command downloads checksum-pinned compiler artifacts from GitHub on the build machine. The pack adds about 152 MiB before HTTP compression. **Download World 4** then saves that pack and the book for offline use. Learner code stays on the device. No Cargo packages, compiler updates or remote grading services are fetched at runtime. See [mobile Rust implementation and limitations](docs/MOBILE-RUST.md), including compiler compatibility and memory measurements. This experimental pack is not a guarantee of support on 2 GB phones or iPhone.
 
 Run `npm.cmd run test:mobile` for the phone-size Chromium regression test. It uses the real browser grader, service worker, and IndexedDB.
 
@@ -122,7 +132,7 @@ To run the same test in emulator Chrome, finish Chrome's welcome screens first a
 
 ### Android app
 
-The private Android APK bundles all four books and their Workbench runtimes. Install it and open **Coding Dungeons**, then choose a world and create a hero. Worlds show **included offline**: no server, world download, or Internet connection is needed to read or submit code. The Android GM uses the mobile edition's authored rules. External documentation links can open your browser, which may need an Internet connection.
+The private Android APK bundles all five books and the four available Workbench runtimes. Install it and open **Coding Dungeons**, then choose a world and create a hero. Worlds show **included offline**: reading, saving drafts, and supported grading run without a server, world download, or Internet connection. The Android GM uses the mobile edition's authored rules. External documentation links can open your browser, which may need an Internet connection.
 
 The wrapper uses Android System WebView and requests neither Internet nor storage permissions. Heroes and drafts stay in the app's private storage. **Save backup** uses Android's document picker to export a world or import into an empty world. Export important saves before uninstalling or clearing app storage; browser/PWA saves and APK saves are separate. The app targets Android 8.0 and later with a compatible WebView. Support on 2 GB phones is not verified.
 
@@ -148,7 +158,7 @@ npm.cmd run android:build:test
 npm.cmd run test:android
 ```
 
-The test package is `com.codingdungeons.app.test`, separate from the normal app. Tests exercise all four packaged worlds, correct and wrong submissions, HP, saved progress, and request boundaries. They stop only that test app and remove their own debugger forwarding port; they do not clear saves or use a host web server.
+The test package is `com.codingdungeons.app.test`, separate from the normal app. Tests exercise the packaged worlds, correct and wrong submissions, HP, saved progress, and request boundaries. They stop only that test app and remove their own debugger forwarding port; they do not clear saves or use a host web server.
 
 The native document tests use a provider included only in the instrumentation APK. They exercise saved bytes, cancellation, retries, concurrent operations, oversized imports, read-only snapshots, and actual WebView file-input reads. Run them on an emulator with:
 

@@ -8,7 +8,7 @@ Start on Windows
 1. Use Node.js 24 or newer. Run npm ci in the project folder on a fresh checkout.
 2. Open Start_Ferrum.cmd and visit the local address it prints.
    The default is http://127.0.0.1:4173.
-3. Choose World 1 JavaScript, World 2 TypeScript, World 3 Rust, or World 4 Go, then
+3. Choose World 1 JavaScript, World 2 TypeScript, World 3 C# and .NET, World 4 Rust, or World 5 Go, then
    create or load a hero. Use Worlds in the header to switch languages.
    Add ?world=rust to the address to open the Rust campaign directly.
 4. Press A and D to turn the book pages. The arrow keys also work.

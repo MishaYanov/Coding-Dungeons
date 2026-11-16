@@ -642,6 +642,7 @@ dialog::backdrop { background: #050a10b8; }
 }
 .world-card[data-world="javascript"] { --world-accent: #f5d36e; }
 .world-card[data-world="typescript"] { --world-accent: #93bfff; }
+.world-card[data-world="csharp"] { --world-accent: #d5b4ff; }
 .world-card[data-world="go"] { --world-accent: #7edbe6; }
 .world-card:hover, .world-card[aria-current="true"] { color: var(--text); background: #233747; }
 .world-card-number { color: var(--world-accent); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }

@@ -23,7 +23,7 @@ and record the exact source revisions used to build these artifacts.
 The compiler and matching WASI libraries are downloaded only by the developer's
 explicit staging command. The shipped app uses the pinned local files and does
 not fetch compiler tools or source packages from GitHub or crates.io at runtime.
-After the World 3 download completes, supported challenge grading works offline.
+After the Rust world download completes, supported challenge grading works offline.
 The compiler has no access to device files: its work and library directories are
 virtual memory. Submitted programs receive no preopened directories or network
 capabilities. Timeouts and memory limits remain necessary; no sandbox guarantees

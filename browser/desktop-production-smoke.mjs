@@ -60,12 +60,28 @@ async function firstChallenge(page, id, language, number) {
   const fromJson = async path => JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, ''));
   const campaign = await fromJson(join(directory, 'campaign.json'));
   const {bossPage} = campaign.quests.find(quest => quest.level === 1);
-  const [first] = id === 'rust'
-    ? await fromJson(join(directory,'exercises.json'))
-    : (await import(pathToFileURL(join(project,'data','workbench',`${id}.mjs`)))).default;
   const pageInput = page.locator('#page-number');
   await pageInput.fill(String(bossPage));
   await pageInput.press('Enter');
+  if (id === 'csharp') {
+    const draft = 'Console.WriteLine("Lantern ready");';
+    const editor = page.getByRole('textbox', {name:'C# code', exact:true});
+    await editor.fill(draft);
+    await page.getByRole('button', {name:'Save code draft', exact:true}).click();
+    await page.getByText('Draft saved', {exact:true}).waitFor();
+    const review = page.getByRole('checkbox', {name:'Forge self-review', exact:true});
+    await review.check();
+    await page.getByText('Quest log updated', {exact:true}).waitFor();
+    await page.reload();
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), draft);
+    assert.ok(await review.isChecked());
+    console.log('Passed: C# guided code notebook, Forge self-review and reload');
+    return;
+  }
+  const [first] = id === 'rust'
+    ? await fromJson(join(directory,'exercises.json'))
+    : (await import(pathToFileURL(join(project,'data','workbench',`${id}.mjs`)))).default;
   const codeBox = page.getByRole('textbox', {name:`${language} code`});
   let answer = first.reference ?? first.solution;
   if (id === 'javascript' || id === 'typescript') {
@@ -156,7 +172,7 @@ try {
 
   if (process.env.CODING_DUNGEONS_SMOKE_STARTUP_ONLY !== '1') {
     for (const [id, language, number] of [
-      ['javascript','JavaScript',1], ['typescript','TypeScript',2], ['rust','Rust',3], ['go','Go',4],
+      ['javascript','JavaScript',1], ['typescript','TypeScript',2], ['csharp','C# and .NET',3], ['rust','Rust',4], ['go','Go',5],
     ]) await firstChallenge(page, id, language, number);
   }
 } catch (error) {

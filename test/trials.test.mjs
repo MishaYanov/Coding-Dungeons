@@ -5,6 +5,7 @@ import { evaluateTrial, trialsFor } from '../lib/trials.mjs';
 const expected = [
   ['javascript', 'dispatch-floor-trial', { 'relay-order': 'b', 'badge-identity': 'c' }],
   ['typescript', 'signal-harbor-trial', { 'read-signal': 'a', 'missing-signal': 'c' }],
+  ['csharp', 'lantern-workshop-trial', { 'try-parse-stock': 'a', 'build-tool': 'b' }],
   ['rust', 'foundry-trial', { 'pack-ownership': 'b', 'repair-borrow': 'a' }],
   ['go', 'relay-guild-trial', { 'shared-crates': 'c', 'deferred-ledger': 'b' }],
 ];

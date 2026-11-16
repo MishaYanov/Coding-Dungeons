@@ -12,7 +12,7 @@ const rustCache = 'coding-dungeons-mobile-world-rust-';
 const legacyVersion = '0123456789abcdef';
 
 function worker(fetchAsset, {integrity = {[file]:digest('compiler')}, stored = new Map(),
-  worlds = {rust:{number:3, version:legacyVersion, files:[file]}}, shellVersion = 'shell'} = {}) {
+  worlds = {rust:{number:4, version:legacyVersion, files:[file]}}, shellVersion = 'shell'} = {}) {
   const handlers = new Map();
   const fetch = async request => fetchAsset(typeof request === 'string' ? new Request(request) : request);
   const caches = {
@@ -97,7 +97,7 @@ test('a corrupted runtime entry repairs only from a verified response', async ()
 test('Go uses the build asset inventory when checking runtime downloads', async () => {
   const asset = '/runtime/go/compile.wasm';
   let body = 'unexpected Go compiler';
-  const go = worker(() => new Response(body), {integrity:{}, worlds:{go:{number:4, version:legacyVersion,
+  const go = worker(() => new Response(body), {integrity:{}, worlds:{go:{number:5, version:legacyVersion,
     files:[asset], hashes:{[asset]:digest('pinned Go compiler')}}}});
   await assert.rejects(go.request(asset), /integrity/i);
   assert.match((await go.message('download-world', 'go')).error, /could not finish downloading/);
@@ -126,7 +126,7 @@ test('a world revision stages only changed files before replacing a complete leg
     if (!online) throw new Error('Offline');
     return new Response('new compiler');
   }, {stored, shellVersion:'new-shell', integrity:{[file]:digest('new compiler')},
-    worlds:{rust:{number:3, version:nextVersion, files:[page, file],
+    worlds:{rust:{number:4, version:nextVersion, files:[page, file],
       hashes:{[file]:digest('new compiler'),[page]:digest('same page')}}}});
 
   await assert.rejects(updated.lifecycle('install'), /Offline/);

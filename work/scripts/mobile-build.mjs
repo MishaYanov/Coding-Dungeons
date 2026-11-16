@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {rustToolchain} from '../../lib/mobile/rust-toolchain.mjs';
 
 const project = new URL('../../', import.meta.url);
-const worldIds = ['javascript', 'typescript', 'rust', 'go'];
+const worldIds = ['javascript', 'typescript', 'csharp', 'rust', 'go'];
 const goPack = new URL('out/mobile-go-pack/', project);
 const rustPack = new URL('out/mobile-rust-pack/', project);
 const require = createRequire(import.meta.url);
