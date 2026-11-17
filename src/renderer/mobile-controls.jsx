@@ -180,9 +180,12 @@ export function MobileControls({game}) {
       </button>}
       {world.id === 'rust' && rustInfo && <p className="fine-print">
         Includes the experimental Rust {rustInfo.version} Workbench.
-        {' '}{androidShell ? 'Code tests run offline using the workbench included in the app.' : 'After downloading World 3, code tests run offline.'}
+        {' '}{androidShell ? 'Code tests run offline using the workbench included in the app.' : `After downloading ${worldLabel}, code tests run offline.`}
         {' '}{androidShell ? 'The bundled workbench uses about 152 MiB.' : 'The workbench adds about 152 MiB.'}
         {' '}Some Rust features are unavailable; 2 GB phones are not yet verified.
+      </p>}
+      {world.id === 'csharp' && <p className="fine-print">
+        Read the book, answer checkpoints, and save code drafts offline. Run the field kit on a computer with the .NET 10 SDK.
       </p>}
       <details>
         <summary>Save backup</summary>

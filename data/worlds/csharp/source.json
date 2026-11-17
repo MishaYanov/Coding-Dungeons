@@ -1,0 +1,579 @@
+{
+  "title": "C# and .NET: The Lantern Workshop",
+  "subtitle": "Learn the language, test your rules, and light the workshop.",
+  "intro": [
+    "The Lantern Workshop has one working light and a queue of orders. As its newest apprentice, you will write the small programs the shop needs to open. Start with one console message, then work up to a complete inventory report that rejects bad data and tests its results.",
+    "This book assumes no C# experience. Use the .NET 10 SDK, which is the long-term support release. Work a level by predicting the example output, running it, then changing one input. Use the GM's checkpoint feedback and compare your code with the book's debrief.",
+    "The field kit has self-contained examples and starters. Use the .NET SDK to run your C# code. The game records your choices, notes, and code drafts for review."
+  ],
+  "zones": [
+    {
+      "name": "Apprentice's Bench",
+      "first": 1,
+      "last": 6,
+      "skill": "Console and control flow"
+    },
+    {
+      "name": "The Lantern Foundry",
+      "first": 7,
+      "last": 12,
+      "skill": "Data and contracts"
+    },
+    {
+      "name": "Dispatch Hall",
+      "first": 13,
+      "last": 18,
+      "skill": "Boundaries and applications"
+    }
+  ],
+  "paths": [
+    {
+      "id": "apprentice",
+      "name": "Apprentice",
+      "description": "Learn C# through small programs that process workshop orders. This route starts with the very first console command and assumes no experience with .NET.",
+      "topics": "SDK, strings, numeric types, parsing, loops, methods, collections and nullability",
+      "levels": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "id": "workshop-builder",
+      "name": "Workshop Builder",
+      "description": "Build the inventory command after you can read and write the smaller examples. Practice modeling, testing, and handling failures before the final dispatch.",
+      "topics": "Records, interfaces, LINQ, exceptions, JSON, tasks, cancellation, tests and a console capstone",
+      "levels": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ]
+    },
+    {
+      "id": "full-expedition",
+      "name": "Full Lantern Expedition",
+      "description": "Visit every bench in order. Bring the early input and collection rules into a small application you can build, test, and explain.",
+      "topics": "Every C# and .NET level from the first lantern to the inventory report",
+      "levels": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ]
+    }
+  ],
+  "lessons": [
+    {
+      "title": "Light the First Lantern",
+      "objective": "Set up a .NET SDK and run your first C# program from a terminal.",
+      "body": [
+        "The Lantern Workshop opens when its terminal can print a signal. C# is the language you write. The .NET runtime runs compiled code, and the .NET libraries provide services such as writing to the console. The SDK includes the compiler, templates, and commands you need to build programs. For this book, install the .NET 10 SDK, the long-term support release.",
+        "Run `dotnet --info` in a terminal to see which SDKs the command can find. In an empty working folder, `dotnet new console -f net10.0` creates a project. Its Program.cs can contain top-level statements, so you can write your first command without declaring a Main method. Run `dotnet build` to check and compile the project. Run `dotnet run` to build if necessary and start it.",
+        "The field kit includes a separate file for each example. With the .NET 10 SDK, open the unzipped kit folder and run `dotnet run --file examples/level-01.cs --property:PublishAot=false`. That option skips native publishing tools, so the example can run without downloading extra packages. For a project instead, copy one example into Program.cs and keep only one file of top-level statements in that project. See the [file-based app guide](https://learn.microsoft.com/dotnet/core/sdk/file-based-apps)."
+      ],
+      "code": "using System;\n\nstring apprentice = \"Mira\";\nConsole.WriteLine($\"Lantern lit for {apprentice}!\");",
+      "expectedOutput": "Lantern lit for Mira!",
+      "takeaway": "Use the SDK to build. Use the console output to check what the program actually did.",
+      "question": "You installed only the .NET runtime and want to use dotnet new console. What else does the workstation need?",
+      "options": [
+        "The .NET SDK.",
+        "A web browser extension.",
+        "A package named Console.",
+        "A second copy of the source file."
+      ],
+      "correct": 0,
+      "feedback": "The SDK supplies the compiler and templates that dotnet new and dotnet build use.",
+      "challenge": "Change the program to hold the apprentice name in a string variable and print Hello, Jo! when the name is Jo. Changing the variable should change the printed name.",
+      "starter": "using System;\n\nstring apprentice = \"Jo\";\nConsole.WriteLine(apprentice);\n// Include the apprentice variable in the greeting.",
+      "hint1": "Put a dollar sign before the opening quote to interpolate a value into a string.",
+      "hint2": "Place the expression in braces inside the string. Remember the comma and exclamation point.",
+      "debrief": "Read the name from the variable when writing the greeting. Try Jo and Mira without editing the output template. Build after deliberately removing a quote, then restore it and read the compiler message.",
+      "sideQuest": "Print one line that says which room you are in and one line that says where you will go next. Identify the difference between a build error and a program whose output is wrong."
+    },
+    {
+      "title": "Measure the Brass",
+      "objective": "Choose types for whole counts and decimal quantities, and see what integer division does.",
+      "body": [
+        "Counts and prices need different rules. Use `int` for bounded whole numbers and `decimal` when your calculation uses base-ten quantities like money. Decimal values still have finite precision. Apply a documented rounding rule when the domain calls for it. In a literal such as `0.25m`, the `m` suffix tells the compiler to use decimal.",
+        "`var` has the compiler infer a local variable's type from its initializer. The variable still has a fixed static type. Assigning a string to `var count = 3` later is a compile error. A descriptive name and a clear initialization are usually more useful than an abbreviation.",
+        "Dividing two integers yields an integer and truncates toward zero. Casting the result after the division cannot recover the fraction. Convert an operand first. The example formats the decimal explicitly so every reader gets a decimal point regardless of system settings."
+      ],
+      "code": "using System;\nusing System.Globalization;\n\nint lamps = 5;\nint shelves = 2;\nint full = lamps / shelves;\ndecimal average = (decimal)lamps / shelves;\nstring display = average.ToString(\"F1\", CultureInfo.InvariantCulture);\nConsole.WriteLine($\"{full} whole, {display} average\");",
+      "expectedOutput": "2 whole, 2.5 average",
+      "takeaway": "The operand types determine the division. Choose the type before calculating.",
+      "question": "What is the value of (decimal)(5 / 2)?",
+      "options": [
+        "2.5",
+        "2",
+        "3",
+        "A division-by-zero error"
+      ],
+      "correct": 1,
+      "feedback": "The inner division operates on two ints and returns 2. The cast then converts 2 to decimal.",
+      "challenge": "Print the cost of 3 identical fittings priced at 1.25 each as 3.75, with two decimal places and no currency sign. Try a count of zero and a fractional price.",
+      "starter": "using System;\nusing System.Globalization;\n\nint count = 3;\ndecimal price = 1.25m;\ndecimal total = count + price; // Correct the rule.\nConsole.WriteLine(total.ToString(\"F2\",\n    CultureInfo.InvariantCulture));",
+      "hint1": "A whole count can be multiplied by a decimal price.",
+      "hint2": "Keep ToString with F2 and invariant culture so the format remains stable.",
+      "debrief": "Compute the total as count times price, then format that decimal only at the display boundary. Changing the format does not change the calculation.",
+      "sideQuest": "Compare -5 / 2 with (decimal)-5 / 2 and explain the difference in one sentence."
+    },
+    {
+      "title": "The Unreadable Order",
+      "objective": "Parse text without exceptions for expected mistakes, then validate the result.",
+      "body": [
+        "A number that can be parsed can still violate the workshop rules. A lantern order requires at least one unit. The input `-3` is a valid integer but an invalid order. Check spelling and range at the boundary, then give your calculation a number it can trust.",
+        "`int.TryParse` tells you whether the conversion succeeded and writes the result to an `out` variable. Ordinary invalid or out-of-range text returns false. Do not use the numeric result on failure. In a terminal later, `Console.ReadLine()` can also return null at end of input.",
+        "The condition `parsed && count > 0` stops as soon as parsing fails. The example checks a fixed string so its output is predictable. For human-entered measurements, choose the intended culture rather than assuming every user enters numbers the same way."
+      ],
+      "code": "using System;\n\nstring text = \" 12 \";\nbool parsed = int.TryParse(text, out int count);\nif (parsed && count > 0)\n{\n    Console.WriteLine($\"Accepted {count}\");\n}\nelse\n{\n    Console.WriteLine(\"Use a positive whole number.\");\n}",
+      "expectedOutput": "Accepted 12",
+      "takeaway": "Conversion answers whether the value is representable. Validation answers whether it is allowed.",
+      "question": "Why does a positive-count command need more than int.TryParse?",
+      "options": [
+        "TryParse rejects all positive numbers.",
+        "TryParse cannot read text with digits.",
+        "An integer can parse and still be zero or negative.",
+        "The out variable always contains null."
+      ],
+      "correct": 2,
+      "feedback": "TryParse checks integer syntax and range. The application must decide whether a parsed count is allowed.",
+      "challenge": "Read the sample text, then print Accepted 3 for \"3\" and Invalid for \"0\", \"-3\", and \"three\". Keep the invalid path free of arithmetic on the parsed result.",
+      "starter": "using System;\n\nstring text = \"3\";\n// Parse text, then check the size of the count.\nConsole.WriteLine($\"Invalid: {text}\");",
+      "hint1": "Use int.TryParse and declare count with out int count.",
+      "hint2": "Print the success message only when parsing succeeds and count is greater than zero.",
+      "debrief": "Combine the conversion result and the positive-count check with &&. Try the four samples and a value larger than int.MaxValue.",
+      "sideQuest": "Test an empty string, leading spaces, and a leading plus sign. Write down which formats your command should accept."
+    },
+    {
+      "title": "Walk the Shelves",
+      "objective": "Use loops and branches to count matching supplies.",
+      "body": [
+        "`if` selects a branch. A loop repeats work while its condition holds or while there are items left. Use `foreach` when you need each item but do not need its position. Use an indexed `for` loop when the position itself matters.",
+        "An array index begins at zero. A length of four means the last valid index is three. The usual ascending loop condition is `index < counts.Length`. Using `<=` visits one position too many.",
+        "In this room, a shelf is ready when it has at least two fittings. Keep one counter outside the loop and increase it only when a shelf meets that condition. An empty array skips the body and leaves the counter at zero."
+      ],
+      "code": "using System;\n\nint[] counts = { 0, 2, 4, 1 };\nint ready = 0;\n\nforeach (int count in counts)\n{\n    if (count >= 2)\n    {\n        ready++;\n    }\n}\nConsole.WriteLine($\"Ready shelves: {ready}\");",
+      "expectedOutput": "Ready shelves: 2",
+      "takeaway": "Start a counter before the loop and update it only for matching items.",
+      "question": "What happens when the example's array is empty?",
+      "options": [
+        "The body runs once with count equal to zero.",
+        "The loop throws because index zero is missing.",
+        "The counter ends at one.",
+        "The loop body is skipped and ready stays zero."
+      ],
+      "correct": 3,
+      "feedback": "Foreach has no first item to visit in an empty array. The counter keeps its initialization.",
+      "challenge": "Count shelves with zero fittings in {0, 4, 0, 5}. Print Empty shelves: 2. Also test an empty array and an array with no empty shelves.",
+      "starter": "using System;\n\nint[] counts = { 0, 4, 0, 5 };\nint empty = 0;\n// Count the shelves whose value is zero.\nConsole.WriteLine($\"Empty shelves: {empty}\");",
+      "hint1": "Inspect each count with foreach.",
+      "hint2": "Place empty++ inside the if that checks count == 0.",
+      "debrief": "You need to count matching entries. Summing the entries changes the meaning. Verify the result of an empty array independently of a shelf that contains zero.",
+      "sideQuest": "Repeat the task with a for loop and print the positions of all empty shelves."
+    },
+    {
+      "title": "A Rule at the Workbench",
+      "objective": "Write a method with explicit inputs and a result that callers can test.",
+      "body": [
+        "A method separates a rule from the place it is used. Pass the values the rule needs as parameters, then return its result. A method such as `FittingsFor` can be checked by callers without reading console output or editing shared state.",
+        "In the examples, a static local function lives next to the top-level code. It cannot capture local variables from the statements around it. Its parameters make that dependency visible. Avoid reading from the console inside a calculation you want to reuse.",
+        "Define the valid input range before choosing what to return. In this room, negative counts indicate a caller mistake. A guard clause rejects them early. The checked expression throws if multiplication goes outside the range of int. Ordinary valid inputs, including zero, still return normally."
+      ],
+      "code": "using System;\n\nConsole.WriteLine(FittingsFor(4));\n\nstatic int FittingsFor(int lanterns)\n{\n    if (lanterns < 0)\n    {\n        throw new ArgumentOutOfRangeException(nameof(lanterns));\n    }\n    return checked(lanterns * 3);\n}",
+      "expectedOutput": "12",
+      "takeaway": "Give reusable rules explicit inputs and test their return values.",
+      "question": "Where should Console.WriteLine usually live if you want to reuse a calculation?",
+      "options": [
+        "In the caller so the calculation can return a value.",
+        "Inside every if condition.",
+        "In a static variable.",
+        "Inside the calculation before each return."
+      ],
+      "correct": 0,
+      "feedback": "The caller can print, save, or test the returned value. The calculation does not need to know how its result will be used.",
+      "challenge": "Implement MountingScrews(int lanterns) with two screws per lantern. Return zero for zero, throw ArgumentOutOfRangeException for negatives, and use checked multiplication.",
+      "starter": "using System;\n\nConsole.WriteLine(MountingScrews(4));\n\nstatic int MountingScrews(int lanterns)\n{\n    // Guard the input, then calculate the result.\n    return 0;\n}",
+      "hint1": "Validate lanterns before multiplying.",
+      "hint2": "Use checked(lanterns * 2) to detect overflow in the result.",
+      "debrief": "The public rule is two screws per lantern. The method can be called for any valid count. Test 0, a normal value, a negative value, and a count whose result would exceed int range.",
+      "sideQuest": "Add a second method named BracketsFor that follows the same input rules. Call both from two different places."
+    },
+    {
+      "title": "The Growing Order List",
+      "objective": "Choose an array for fixed slots or a List<T> for a changing number of items.",
+      "body": [
+        "An array has a fixed length even though you can replace an element. `List<T>` grows as you add items and reports how many are currently present in `Count`. The type argument T determines which elements the compiler lets you add.",
+        "`Add` appends one item. `Remove` removes the first matching value and reports whether it found one. Removing an element shifts later positions down. Save a reference to an item or a stable identifier if its position might change.",
+        "Do not change the list directly while a foreach enumerator is visiting it. Build a filtered copy, use `RemoveAll` for a predicate, or use an indexed loop with a deliberate rule for shifted items. In this room, the display comes after the edits."
+      ],
+      "code": "using System;\nusing System.Collections.Generic;\n\nvar orders = new List<string> { \"north\", \"east\" };\norders.Add(\"west\");\norders.Remove(\"east\");\nConsole.WriteLine(string.Join(\", \", orders));",
+      "expectedOutput": "north, west",
+      "takeaway": "An array's length is fixed. A list's Count changes as you add or remove entries.",
+      "question": "What is orders.Count after adding west and removing east?",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "The list does not have a Count property."
+      ],
+      "correct": 1,
+      "feedback": "The list has two entries initially, grows to three and returns to two.",
+      "challenge": "Start with north and east. Remove north, append south, then print east, south in that order. Keep the collection typed as List<string>.",
+      "starter": "using System;\nusing System.Collections.Generic;\n\nvar orders = new List<string> { \"north\", \"east\" };\n// Remove the closed route, then add the new one.\nConsole.WriteLine(string.Join(\", \", orders));",
+      "hint1": "Remove accepts the item to find, not its index.",
+      "hint2": "Add appends south at the end.",
+      "debrief": "The list after removal contains east. Appending south preserves that relative order. Check what Remove reports if north is already gone.",
+      "sideQuest": "Create a list containing two copies of east. Remove east once and count how many copies remain."
+    },
+    {
+      "title": "Find a Stock Entry",
+      "objective": "Use a dictionary to find a stock count without confusing zero with missing.",
+      "body": [
+        "A `Dictionary<TKey, TValue>` pairs each unique key with a value. Keys identify things, and values describe them. A string key can name a fixture, while an int value stores its count. Setting `stock[\"glass\"] = 4` inserts or replaces the value for glass.",
+        "Reading a missing key through the indexer throws. Use `TryGetValue` when a key can be absent. Its Boolean result tells you whether the lookup succeeded. A stored zero means the key exists and the stock is empty, which is different from an unknown key.",
+        "String comparison is a business rule. This ledger chooses `StringComparer.OrdinalIgnoreCase` for identifiers so casing alone does not change the key. For user-visible linguistic sorting or searching, a culture-aware rule may be more appropriate."
+      ],
+      "code": "using System;\nusing System.Collections.Generic;\n\nvar stock = new Dictionary<string, int>(\n    StringComparer.OrdinalIgnoreCase);\nstock[\"glass\"] = 0;\n\nif (stock.TryGetValue(\"GLASS\", out int count))\n{\n    Console.WriteLine($\"Known stock: {count}\");\n}\nelse\n{\n    Console.WriteLine(\"Unknown fixture\");\n}",
+      "expectedOutput": "Known stock: 0",
+      "takeaway": "Use the success flag to distinguish missing data from a valid zero.",
+      "question": "A lookup returns true and writes 0 into count. What does that mean?",
+      "options": [
+        "The key is missing.",
+        "The dictionary automatically inserted the key.",
+        "The key exists with a stored count of zero.",
+        "An exception occurred."
+      ],
+      "correct": 2,
+      "feedback": "True reports a successful lookup. Zero is the stored value and does not indicate absence by itself.",
+      "challenge": "Print Known stock: 2 for WICK, Known stock: 0 for GLASS, and Unknown fixture for BRASS. Store wick as 2 and glass as 0 with a case-insensitive ordinal comparer.",
+      "starter": "using System;\nusing System.Collections.Generic;\n\nvar stock = new Dictionary<string, int>(\n    StringComparer.OrdinalIgnoreCase);\nstock[\"wick\"] = 2;\nstock[\"glass\"] = 0;\nstring key = \"WICK\";\n// Look up key and distinguish missing from zero.\nConsole.WriteLine($\"Unknown fixture: {key}\");",
+      "hint1": "Use TryGetValue(key, out int count) rather than reading the indexer.",
+      "hint2": "Pick the success or missing message from the Boolean result.",
+      "debrief": "The dictionary's comparer handles case policy for both insert and lookup. A known zero goes down the same success branch as a known positive count.",
+      "sideQuest": "Add an update for WICK after inserting wick. Explain why Count does not grow."
+    },
+    {
+      "title": "The Missing Nameplate",
+      "objective": "Handle an optional string with nullable annotations and an explicit fallback.",
+      "body": [
+        "Some inputs can be absent. With nullable reference analysis enabled, `string` expresses that you expect a value and `string?` expresses that null is allowed. These annotations support compile-time warnings. They do not automatically validate data arriving from a file.",
+        "`?.` stops a member access when its receiver is null. `??` uses a fallback when its left operand is null. An empty string is still a string value, so neither operator treats it as missing. Choose whether your domain considers blank text equivalent to absence.",
+        "For a lantern label, whitespace-only text is not useful. Trim a provided label, then check whether the result has any characters. Keep the fallback in one method so the printed label and the data rules agree."
+      ],
+      "code": "#nullable enable\nusing System;\n\nConsole.WriteLine(Label(\"   \"));\n\nstatic string Label(string? input)\n{\n    string? cleaned = input?.Trim();\n    return string.IsNullOrEmpty(cleaned) ? \"Unlabeled\" : cleaned;\n}",
+      "expectedOutput": "Unlabeled",
+      "takeaway": "Distinguish null from an empty string and define your fallback in one place.",
+      "question": "What does \"\" ?? \"Unlabeled\" evaluate to?",
+      "options": [
+        "Unlabeled",
+        "null",
+        "A warning that prevents compilation",
+        "The empty string"
+      ],
+      "correct": 3,
+      "feedback": "The empty string is not null, so the coalescing operator returns the left operand.",
+      "challenge": "Implement Label(string? input). Use Unlabeled for null or a whitespace-only value. Return the trimmed text otherwise.",
+      "starter": "#nullable enable\nusing System;\n\nConsole.WriteLine(Label(\"  Gate  \"));\n\nstatic string Label(string? input)\n{\n    // Normalize a provided name and handle a missing one.\n    return \"Unlabeled\";\n}",
+      "hint1": "Call Trim conditionally with input?.Trim().",
+      "hint2": "Use string.IsNullOrEmpty on the trimmed value. The compiler knows the string is present on the other branch.",
+      "debrief": "The method promises a string to the caller. Null and whitespace are handled before it returns. Try a nonempty label and both missing cases.",
+      "sideQuest": "Replace the fallback temporarily with the null-forgiving operator and explain why suppressing a warning alone cannot create a usable value."
+    },
+    {
+      "title": "Model the Lantern",
+      "objective": "Use records to represent a value and distinguish a copied reference from a copied object.",
+      "body": [
+        "Group related fields into a named type. A lantern has a code and a wattage, so a `record Lantern(string Code, int Watts)` gives those facts one meaning. A positional record class gives you generated properties and value-based equality for its components.",
+        "Record classes are reference types. Assignment alone copies the reference, not the object. A `with` expression creates a copy with selected members changed. It is shallow for reference-valued members, so nested mutable collections can still be shared.",
+        "This model uses an immutable string and an int. Upgrading a lantern with `with` leaves the original unchanged. A record by itself does not enforce a positive wattage. Add a validation boundary when a record can be built from untrusted input."
+      ],
+      "code": "using System;\n\nvar original = new Lantern(\"N-01\", 5);\nvar upgraded = original with { Watts = 8 };\nConsole.WriteLine($\"{original.Watts} -> {upgraded.Watts}\");\n\nrecord Lantern(string Code, int Watts);",
+      "expectedOutput": "5 -> 8",
+      "takeaway": "Use a named model to give data meaning. Choose validation and copying behavior deliberately.",
+      "question": "What happens to original.Watts after applying the with expression?",
+      "options": [
+        "It remains 5.",
+        "It becomes 8.",
+        "It becomes null.",
+        "The compiler rejects the original object."
+      ],
+      "correct": 0,
+      "feedback": "The with expression returns a new record with the changed value. It does not replace the original record's Watts.",
+      "challenge": "Create a record Order(string Code, int Count). Create A-12 with Count 2, copy it with Count 4, and print 2 -> 4 using both values.",
+      "starter": "using System;\n\nvar original = new Order(\"A-12\", 2);\nvar changed = original;\n// Make a copy with a different count.\nConsole.WriteLine($\"{original.Count} -> {changed.Count}\");\n\nrecord Order(string Code, int Count);",
+      "hint1": "Use original with { Count = 4 } for the updated order.",
+      "hint2": "Print from separate variables. Assigning original to changed does not copy it.",
+      "debrief": "Equal records can be separate objects. Ask whether you care about the values, the object identity, or preserving nested mutable state before copying.",
+      "sideQuest": "Create a second Order with the same values and print the result of == and ReferenceEquals(original, second). Explain the two results."
+    },
+    {
+      "title": "Exchange the Pricing Rule",
+      "objective": "Call an interface so the order workflow can use different pricing rules.",
+      "body": [
+        "An interface states what a caller can ask an implementation to do. The checkout flow needs a price for a quantity. It can depend on `IPriceRule` without knowing how a specific rule computes that price.",
+        "The caller constructs one rule and passes it into the workflow. This ordinary method parameter is a simple form of dependency injection. The method is easier to test because a small deterministic implementation can stand in for a more complicated dependency.",
+        "An interface is useful when there is a real boundary to express. A helper with a single simple calculation can remain a method. Here the two price rules use the same contract, and the input and output stay explicit."
+      ],
+      "code": "using System;\nusing System.Globalization;\n\nIPriceRule rule = new FlatRate();\nstring result = rule.Quote(4).ToString(\"F2\",\n    CultureInfo.InvariantCulture);\nConsole.WriteLine(result);\n\ninterface IPriceRule\n{\n    decimal Quote(int count);\n}\n\nsealed class FlatRate : IPriceRule\n{\n    public decimal Quote(int count) => count * 1.50m;\n}",
+      "expectedOutput": "6.00",
+      "takeaway": "An interface lets the caller depend on the operation rather than one implementation.",
+      "question": "Why should a method parameter be IPriceRule if several rules can price an order?",
+      "options": [
+        "It changes every rule into a string.",
+        "It lets callers supply different implementations of the same contract.",
+        "It forces every rule to return the same price.",
+        "It prevents calls to Quote."
+      ],
+      "correct": 1,
+      "feedback": "The interface exposes Quote. The actual implementation supplied by the caller determines how it computes that price.",
+      "challenge": "Add DiscountRate with a cost of 1.25 per fixture. Select that rule in the top-level program and print 5.00 for 4 fixtures.",
+      "starter": "using System;\nusing System.Globalization;\n\nIPriceRule rule = new FlatRate();\n// Define DiscountRate and choose it here.\nConsole.WriteLine(rule.Quote(4).ToString(\"F2\",\n    CultureInfo.InvariantCulture));\n\ninterface IPriceRule\n{\n    decimal Quote(int count);\n}\n\nsealed class FlatRate : IPriceRule\n{\n    public decimal Quote(int count) => count * 1.50m;\n}",
+      "hint1": "Declare sealed class DiscountRate : IPriceRule.",
+      "hint2": "Use the public decimal Quote(int count) signature and return count times 1.25m.",
+      "debrief": "Only the chosen implementation changes. Try both rules with the same quantity and explain why the checkout flow did not need a new branch.",
+      "sideQuest": "Add a PrintQuote method that takes an IPriceRule and the count. Call it twice with different implementations."
+    },
+    {
+      "title": "A View of the Inventory",
+      "objective": "Read a LINQ chain and decide when to materialize a query result.",
+      "body": [
+        "LINQ lets you express a sequence of operations. `Where` keeps matching entries, `Select` transforms them, and `OrderBy` orders the results. In a lambda such as `n => n >= 3`, `n` is the current entry and the expression supplies the condition.",
+        "Many queries over IEnumerable are deferred. Creating a query does not enumerate its source. If the source changes before you enumerate it, the query may see the changed data. Calling `ToList` enumerates immediately and stores the results in a new list.",
+        "Choose materialization when you need a stable set of results, or when expensive query work would be repeated on every pass. A materialized list stores the same object references for reference-valued elements. It is not a deep snapshot of their mutable fields."
+      ],
+      "code": "using System;\nusing System.Collections.Generic;\nusing System.Linq;\n\nvar counts = new List<int> { 1, 3, 5 };\nvar ready = counts.Where(n => n >= 3);\nvar snapshot = ready.ToList();\ncounts.Add(7);\nConsole.WriteLine($\"{snapshot.Count} then {ready.Count()}\");",
+      "expectedOutput": "2 then 3",
+      "takeaway": "A deferred query runs when enumerated. ToList stores the results of one enumeration.",
+      "question": "What does snapshot.Count report after counts.Add(7)?",
+      "options": [
+        "3",
+        "0",
+        "2",
+        "It throws because counts changed."
+      ],
+      "correct": 2,
+      "feedback": "ToList ran before the new value was added, so the materialized list contains the original two matching integers.",
+      "challenge": "Filter the sample to counts at least 3, order low to high, then double each count. Print 6, 8, 10. Check that the input list stays in its original order.",
+      "starter": "using System;\nusing System.Collections.Generic;\nusing System.Linq;\n\nvar counts = new List<int> { 5, 1, 4, 3 };\n// Shape the result with Where, OrderBy, and Select.\nvar result = counts.ToList();\nConsole.WriteLine(string.Join(\", \", result));",
+      "hint1": "Start with counts.Where(n => n >= 3).",
+      "hint2": "OrderBy(n => n) sorts ascending. Select(n => n * 2) builds the doubled values.",
+      "debrief": "This query reads the input sequence and exposes a new result sequence. Sorting a List in place with Sort would change the input, which is a different contract.",
+      "sideQuest": "Print a deferred query twice with a mutation between prints. Repeat using ToList and compare."
+    },
+    {
+      "title": "Read the Ledger Safely",
+      "objective": "Dispose a reader and handle a specific expected failure at the boundary.",
+      "body": [
+        "A resource can need cleanup even though .NET manages memory. Readers and streams often implement IDisposable. A `using` declaration disposes a resource at the end of the enclosing scope. Cleanup also happens if execution leaves that scope because of an exception.",
+        "Catch an exception when the current layer can recover, translate it into useful feedback, or add context before passing it on. Catch the specific failure you know how to handle. A catch that does nothing can make an invalid order look successful.",
+        "The example uses an in-memory StringReader so you can reproduce the same behavior without a file. It demonstrates FormatException from invalid integer text. For expected bad user input, prefer TryParse. For a disk-backed reader, consider failures such as a missing file separately from malformed content."
+      ],
+      "code": "using System;\nusing System.IO;\n\ntry\n{\n    using var reader = new StringReader(\"five\");\n    int count = int.Parse(reader.ReadLine() ?? \"\");\n    Console.WriteLine($\"Count: {count}\");\n}\ncatch (FormatException)\n{\n    Console.WriteLine(\"The ledger count is not a whole number.\");\n}",
+      "expectedOutput": "The ledger count is not a whole number.",
+      "takeaway": "Dispose resources at their owning scope and handle the failure you can explain.",
+      "question": "What happens to reader when int.Parse throws FormatException in this example?",
+      "options": [
+        "It stays open until the next successful parse.",
+        "It moves into the catch block.",
+        "It is disposed only if the caller prints a message.",
+        "It is disposed as the try scope is exited."
+      ],
+      "correct": 3,
+      "feedback": "The using declaration arranges cleanup when control leaves the enclosing scope, including exceptional exits.",
+      "challenge": "Read a number from the StringReader, print Count: 9 for \"9\", and show Invalid count for \"nine\". Keep the using declaration and catch only FormatException for this exercise.",
+      "starter": "using System;\nusing System.IO;\n\ntry\n{\n    using var reader = new StringReader(\"9\");\n    int count = 0; // Parse the line.\n    Console.WriteLine($\"Count: {count}\");\n}\ncatch (FormatException)\n{\n    Console.WriteLine(\"Invalid count\");\n}",
+      "hint1": "ReadLine returns a line or null. Use an empty fallback for this sample.",
+      "hint2": "Pass the string to int.Parse inside the try block.",
+      "debrief": "The input boundary reports malformed text while allowing the success path to use a real integer. Keep file/resource cleanup separate from business-level checks such as count >= 0.",
+      "sideQuest": "Rewrite the example to use TryParse. Compare which path reports expected invalid input and which cleanup still happens."
+    },
+    {
+      "title": "The Dispatch Manifest",
+      "objective": "Use System.Text.Json and validate the object before relying on it.",
+      "body": [
+        "JSON carries names and values across a boundary. `JsonSerializer.Deserialize<T>` reads that text into a .NET type. Use the exact property names for the default console serializer. A web app may use different settings, so make the boundary contract explicit.",
+        "Malformed JSON can throw JsonException. The text `null` can deserialize to null when the type permits it. A successfully deserialized object can still contain missing or unsuitable data. A property type alone does not enforce a positive count or a nonblank identifier.",
+        "This manifest round trip uses PascalCase names on both sides. It checks the returned object and domain rules before printing. When your own app accepts outside files, test invalid text, the literal null, absent properties, and values outside the allowed range."
+      ],
+      "code": "#nullable enable\nusing System;\nusing System.Text.Json;\n\nvar original = new Manifest(\"N-01\", 3);\nstring json = JsonSerializer.Serialize(original);\nManifest? copy = JsonSerializer.Deserialize<Manifest>(json);\n\nif (copy is null || string.IsNullOrWhiteSpace(copy.Code)\n    || copy.Count <= 0)\n{\n    throw new JsonException(\"Manifest does not meet the rules.\");\n}\nConsole.WriteLine($\"{copy.Code} x{copy.Count}\");\n\nrecord Manifest(string Code, int Count);",
+      "expectedOutput": "N-01 x3",
+      "takeaway": "Parsing JSON creates a value. Validate that value before using it.",
+      "question": "What should the program do if a manifest parses with Count = -3?",
+      "options": [
+        "Reject it in domain validation.",
+        "Trust it because JSON parsing succeeded.",
+        "Ignore the count and assume it is three.",
+        "Set every manifest to null."
+      ],
+      "correct": 0,
+      "feedback": "A negative integer is legal JSON and fits an int. The application rule rejects that count after parsing.",
+      "challenge": "Deserialize the sample manifest. Print N-02 x4 for the starter input and Invalid manifest if a parsed record is null, its Code is blank, or Count is zero or negative.",
+      "starter": "#nullable enable\nusing System;\nusing System.Text.Json;\n\nstring json = \"\"\"{\"Code\":\"N-02\",\"Count\":4}\"\"\";\nvar manifest = JsonSerializer.Deserialize<Manifest>(json);\n// Validate the result before using its fields.\nConsole.WriteLine(\"Invalid manifest\");\n\nrecord Manifest(string Code, int Count);",
+      "hint1": "Check manifest is null before accessing any property.",
+      "hint2": "String.IsNullOrWhiteSpace checks for absent or blank identifiers. Count must be positive.",
+      "debrief": "Keep parsing and domain validation separate. Try null and a negative count. Add a separate branch for JsonException if you want to report malformed input as a user message.",
+      "sideQuest": "Change the property name to count and observe the default deserializer. Explain when an explicitly case-insensitive configuration is appropriate."
+    },
+    {
+      "title": "Ask Two Workstations",
+      "objective": "Compose Task results and await them without blocking to extract each value.",
+      "body": [
+        "`Task<T>` represents an operation that can produce a T, fail, or be canceled. `await` obtains the result after completion. A task does not imply a dedicated thread. In real I/O, the caller can allow other work while it waits for the device or service.",
+        "`Task.WhenAll` can combine independent operations that have already started. With tasks of the same result type, the returned task holds an array in input order when all succeed. If a task fails, awaiting completion observes the failure. The caller can decide where to report it.",
+        "The workshop uses `Task.Yield` to make a continuation without depending on a server, a long delay, or execution order. Its fake readings are deterministic. Read the function signature and the unfinished task value before reading the final printed total."
+      ],
+      "code": "using System;\nusing System.Threading.Tasks;\n\nTask<int> east = ReadAsync(4);\nTask<int> west = ReadAsync(7);\nint[] values = await Task.WhenAll(east, west);\nConsole.WriteLine($\"{values[0]} + {values[1]}\");\n\nstatic async Task<int> ReadAsync(int count)\n{\n    await Task.Yield();\n    return count;\n}",
+      "expectedOutput": "4 + 7",
+      "takeaway": "Start independent operations, then await their combined result.",
+      "question": "Both reads succeed and west finishes first. Which value is values[0]?",
+      "options": [
+        "7, because it finished first.",
+        "4, because east is the first task supplied.",
+        "0, because tasks return no values.",
+        "The result varies with the scheduler."
+      ],
+      "correct": 1,
+      "feedback": "The result array for Task.WhenAll keeps the order of its task inputs when all succeed.",
+      "challenge": "Start the two sample reads, await them with Task.WhenAll, and print their sum as 11. Avoid using Task.Result or Wait.",
+      "starter": "using System;\nusing System.Threading.Tasks;\n\nTask<int> east = ReadAsync(4);\nTask<int> west = ReadAsync(7);\n// Await both results and print their sum.\nawait Task.WhenAll(east, west);\nConsole.WriteLine(0);\n\nstatic async Task<int> ReadAsync(int count)\n{\n    await Task.Yield();\n    return count;\n}",
+      "hint1": "The result of awaiting Task.WhenAll here is int[].",
+      "hint2": "Add the first and second entries after the await.",
+      "debrief": "Task.WhenAll waits for all supplied tasks. When a second action depends on the first action's result, await the first before starting the second.",
+      "sideQuest": "Make one fake reader throw InvalidOperationException after Task.Yield. Put an appropriate catch around the await and note which lines still run."
+    },
+    {
+      "title": "Recall the Runner",
+      "objective": "Pass a cancellation token and handle a canceled operation as its own outcome.",
+      "body": [
+        "A cancellation request is cooperative. A CancellationTokenSource lets the caller request cancellation. Pass its Token to the operations that need to notice the request. The request cannot stop code that never checks the token or hands it to a cancellable API.",
+        "A method can call `ThrowIfCancellationRequested` at a boundary, or pass the token through to `ReadAsync` and other APIs that understand it. If a request arrives after an operation has completed, it cannot undo changes already made. Decide the checkpoints at which cancellation is safe.",
+        "Cancel before calling the fake reader so this example has no timing race. In the catch, check that this operation's token was canceled. In a real command, keep cancellation distinct from malformed data and from unexpected failures."
+      ],
+      "code": "using System;\nusing System.Threading;\nusing System.Threading.Tasks;\n\nusing var recall = new CancellationTokenSource();\nrecall.Cancel();\ntry\n{\n    Console.WriteLine(await ReadAsync(recall.Token));\n}\ncatch (OperationCanceledException)\n    when (recall.IsCancellationRequested)\n{\n    Console.WriteLine(\"Reading canceled.\");\n}\n\nstatic async Task<int> ReadAsync(CancellationToken token)\n{\n    await Task.Yield();\n    token.ThrowIfCancellationRequested();\n    return 5;\n}",
+      "expectedOutput": "Reading canceled.",
+      "takeaway": "Pass the token through and make cancellation part of the caller's contract.",
+      "question": "What does calling recall.Cancel() do to arbitrary synchronous code that ignores the token?",
+      "options": [
+        "It terminates the code immediately.",
+        "It automatically undoes prior writes.",
+        "It requests cancellation, but the code can continue.",
+        "It disables the compiler."
+      ],
+      "correct": 2,
+      "feedback": "Cancellation works through cooperation. Code must observe the token or call an operation that does so.",
+      "challenge": "Make ReadAsync honor the caller's token. With recall.Cancel() enabled, print Reading canceled. With it removed, print 5. Test both paths without timers.",
+      "starter": "using System;\nusing System.Threading;\nusing System.Threading.Tasks;\n\nusing var recall = new CancellationTokenSource();\nrecall.Cancel();\ntry\n{\n    Console.WriteLine(await ReadAsync(recall.Token));\n}\ncatch (OperationCanceledException)\n    when (recall.IsCancellationRequested)\n{\n    Console.WriteLine(\"Reading canceled.\");\n}\n\nstatic async Task<int> ReadAsync(CancellationToken token)\n{\n    await Task.Yield();\n    // Notice the request before returning the reading.\n    return 5;\n}",
+      "hint1": "Use token.ThrowIfCancellationRequested inside ReadAsync.",
+      "hint2": "Pass the actual recall.Token from the caller. Checking CancellationToken.None would not see this request.",
+      "debrief": "Cancellation comes from the caller and reaches the work through the token. The test uses a known canceled token so it does not guess when the scheduler will resume the method.",
+      "sideQuest": "Sketch a process that saves several shelves one at a time. Decide what should be returned if the process is canceled after two successful writes."
+    },
+    {
+      "title": "The Inspection Bench",
+      "objective": "Write small repeatable checks that catch boundary mistakes.",
+      "body": [
+        "A test describes a behavior with an input and an expected outcome. Arrange a known input, act by calling the code, then compare the result. This chapter uses ordinary C# and exceptions rather than a NuGet test framework, so the checks run with the SDK alone.",
+        "Test the boundary and the values around it. A clamp with a maximum of five needs cases below zero, at zero, at five, and above five. Choose at least one ordinary interior value. A function that always returns five should fail your suite.",
+        "Use a clear message so a failing case tells you what to investigate. Make a deliberate one-line mistake and watch the check catch it. When you use a supported test framework later, keep the same inputs and expected outcomes. A project with that framework can run its checks using dotnet test."
+      ],
+      "code": "using System;\n\nvar cases = new[] { (-1, 0), (0, 0), (3, 3), (5, 5), (6, 5) };\nforeach (var (input, expected) in cases)\n{\n    int actual = Clamp(input);\n    if (actual != expected)\n    {\n        throw new Exception($\"For {input}, expected {expected}.\");\n    }\n}\nConsole.WriteLine($\"{cases.Length} checks passed\");\n\nstatic int Clamp(int input) => Math.Clamp(input, 0, 5);",
+      "expectedOutput": "5 checks passed",
+      "takeaway": "Test exact boundaries and ordinary inputs so a plausible wrong implementation fails.",
+      "question": "Which input can catch a clamp that always returns the upper bound of five?",
+      "options": [
+        "5",
+        "6",
+        "100",
+        "3"
+      ],
+      "correct": 3,
+      "feedback": "A correct clamp preserves the interior value 3. Inputs at or above the bound would not expose a constant five.",
+      "challenge": "Implement Clamp for 0 through 5. A negative input becomes zero, inputs inside the range stay unchanged, and larger values become five. Run the five checks. Change one expected value temporarily to see the failure.",
+      "starter": "using System;\n\nvar cases = new[] { (-1, 0), (0, 0), (3, 3), (5, 5), (6, 5) };\nforeach (var (input, expected) in cases)\n{\n    if (Clamp(input) != expected)\n    {\n        Console.WriteLine($\"A check failed at {input}.\");\n        return;\n    }\n}\nConsole.WriteLine($\"{cases.Length} checks passed\");\n\nstatic int Clamp(int input) => 5; // Replace this rule.",
+      "hint1": "Use Math.Clamp(input, 0, 5) or write the two boundary branches.",
+      "hint2": "The range includes both zero and five. Return the original value inside that range.",
+      "debrief": "A known failure proves that your test distinguishes a wrong outcome. Add a check for one more ordinary value and name the contract it protects.",
+      "sideQuest": "Write a separate check for the earlier label method with null, blank text, and a name surrounded by spaces."
+    },
+    {
+      "title": "Shape a Console Command",
+      "objective": "Separate a console entry point from a workflow and return a useful exit code.",
+      "body": [
+        "The workshop command needs a small front door. Read arguments, select a command, call a method, then choose what to print and which exit code to return. Put rules and parsing in separate functions so you can check them without simulating a terminal.",
+        "The top-level `args` array contains arguments for the program. In a project, place them after `dotnet run --`, for example `dotnet run -- help`. Use `--file` when running the field kit files. Zero conventionally signals success. Choose and document a nonzero status for a command that could not run.",
+        "A project file describes how the SDK should build the application. `net10.0` is the target framework for this workshop, and its SDK chooses the corresponding default C# version unless you override it. Start with `dotnet new console -f net10.0`. Write a Program.cs that calls your workflow and use `dotnet build` before sharing your source."
+      ],
+      "code": "using System;\n\nstring command = args.Length == 0 ? \"summary\" : args[0];\nswitch (command)\n{\n    case \"summary\":\n        Console.WriteLine(\"Workshop summary\");\n        return 0;\n    case \"help\":\n        Console.WriteLine(\"Commands: summary, help\");\n        return 0;\n    default:\n        Console.Error.WriteLine(\"Unknown command.\");\n        return 2;\n}",
+      "expectedOutput": "Workshop summary",
+      "takeaway": "Keep console input and output outside the rules you want to check.",
+      "question": "Which result tells a shell that the example accepted the command?",
+      "options": [
+        "Exit code 0.",
+        "Writing any line to standard output.",
+        "Returning a nonempty string.",
+        "Exit code 2."
+      ],
+      "correct": 0,
+      "feedback": "The example uses 0 for success and 2 for an unknown command. The shell sees that status separately from printed output.",
+      "challenge": "Add a stock command that prints Stock report and returns zero. Keep summary as the default. Unknown commands should still print to standard error and return two.",
+      "starter": "using System;\n\nstring command = args.Length == 0 ? \"summary\" : args[0];\nswitch (command)\n{\n    case \"summary\":\n        Console.WriteLine(\"Workshop summary\");\n        return 0;\n    // Add the stock command here.\n    default:\n        Console.Error.WriteLine(\"Unknown command.\");\n        return 2;\n}",
+      "hint1": "Add a case for the exact string stock before default.",
+      "hint2": "Return zero after printing the successful report.",
+      "debrief": "The exit status and displayed text are two distinct outputs. Check the default, the new case, and an unknown command. Add the command to help if you copy the sample into a larger project.",
+      "sideQuest": "Add a switch for quiet output in a project copy. Explain where its policy belongs so it does not have to change the inventory calculations."
+    },
+    {
+      "title": "Open the Lantern Workshop",
+      "objective": "Build a complete inventory report from JSON and test its behavior.",
+      "body": [
+        "The workshop is ready for one complete workflow. A manifest contains a code and a stock count for every shelf. Build a console command that starts with JSON, validates each shelf, then reports codes whose stock is below three. Write down the three stages before editing your program. Keep printing outside the report method.",
+        "Start with the sample. Next add tests for an empty manifest, a shelf that has exactly three units, and malformed JSON. A missing or negative count, a blank code, or a repeated identifier violates the workshop's rules. A nullable int lets validation distinguish a missing count from zero. Report valid identifiers in ordinal order so output does not depend on the machine's language.",
+        "Finish by moving your report function into an ordinary console project and keeping the tests as tiny independent inputs. The same report function could later be called by an ASP.NET Core endpoint or a desktop window. Those hosts handle transport and display. Keep the report calculation and its checks independent of the host."
+      ],
+      "code": "#nullable enable\nusing System;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Text.Json;\n\nstring sample = \"\"\"\n    [{\"Code\":\"Wick\",\"Count\":2},{\"Code\":\"Glass\",\"Count\":0}]\n    \"\"\";\nstring report = Report(sample);\nif (report != \"Glass, Wick\" || Report(\"[]\") != \"\")\n{\n    throw new Exception(\"A report check failed.\");\n}\nConsole.WriteLine(report);\n\nstatic string Report(string json)\n{\n    var rows = JsonSerializer.Deserialize<Shelf[]>(json)\n        ?? throw new JsonException(\"Expected a shelf list.\");\n    var codes = new HashSet<string>(StringComparer.Ordinal);\n    foreach (var row in rows)\n    {\n        if (row is null || string.IsNullOrWhiteSpace(row.Code)\n            || row.Count is null or < 0 || !codes.Add(row.Code))\n        {\n            throw new JsonException(\"Invalid shelf.\");\n        }\n    }\n    var low = rows.Where(row => row.Count is < 3)\n        .Select(row => row.Code)\n        .OrderBy(code => code, StringComparer.Ordinal);\n    return string.Join(\", \", low);\n}\n\nrecord Shelf(string Code, int? Count);",
+      "expectedOutput": "Glass, Wick",
+      "takeaway": "Validate at the boundary, keep calculation separate from display, and test the whole contract.",
+      "question": "The JSON is well formed but one shelf appears twice with the same Code. Where should that be caught?",
+      "options": [
+        "In the string interpolation used for display.",
+        "In the manifest validation after parsing.",
+        "By assuming JSON disallows duplicate strings.",
+        "By silently reporting the code twice."
+      ],
+      "correct": 1,
+      "feedback": "Repeated identifiers can be valid JSON. The application must enforce its own uniqueness rule.",
+      "challenge": "Build Report(string json) for the workshop. Require a non-null list with unique, case-sensitive nonblank codes and an explicit nonnegative count for each shelf. Return low-stock codes in ordinal order, joined by a comma and a space. Use the sample and write at least three checks before marking Forge.",
+      "starter": "#nullable enable\nusing System;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Text.Json;\n\nstring json = \"\"\"\n    [{\"Code\":\"Wick\",\"Count\":2},{\"Code\":\"Glass\",\"Count\":0}]\n    \"\"\";\nConsole.WriteLine(Report(json));\n\nstatic string Report(string json)\n{\n    var rows = JsonSerializer.Deserialize<Shelf[]>(json)\n        ?? throw new JsonException(\"Expected a shelf list.\");\n    // Validate the shelves, then build the low-stock summary.\n    return \"\";\n}\n\nrecord Shelf(string Code, int? Count);",
+      "hint1": "Start with a HashSet<string> using StringComparer.Ordinal. Add returns false when the identifier is already in the set.",
+      "hint2": "After validating every row, keep counts below three, select Code, and order those codes with StringComparer.Ordinal.",
+      "debrief": "Separate the JSON boundary from the query. Check Glass, Wick for the sample, an empty result for no low-stock shelves, and rejection for a missing count and other bad data. Explain the result for stock exactly three and why a duplicate is rejected before any report is printed.",
+      "sideQuest": "Take a small report from the kit into a console project. Add an explain command that states the low-stock threshold and document how a teammate can build and run it."
+    }
+  ]
+}

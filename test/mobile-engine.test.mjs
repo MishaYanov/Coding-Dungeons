@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import test from 'node:test';
 import rubrics from '../data/gm-rubrics.json' with {type:'json'};
+import {evaluateDiamondChoice} from '../lib/diamond-content.mjs';
 import { createMobileEngine } from '../lib/mobile/engine.mjs';
 import { localCatalog } from '../lib/mobile/catalog.mjs';
 import { mobileReaderKey } from '../lib/mobile/input.mjs';
@@ -59,7 +60,7 @@ function fixture(options = {}) {
 test('mobile campaign exposes all World 1 pages and exercise metadata', async () => {
   const {api} = fixture();
   assert.deepEqual((await api('/api/worlds')).worlds.map(({id, number}) => [id, number]),
-    [['javascript', 1], ['typescript', 2], ['rust', 3], ['go', 4]]);
+    [['javascript', 1], ['typescript', 2], ['csharp', 3], ['rust', 4], ['go', 5]]);
   const campaign = await api('/api/campaign');
   assert.equal(campaign.total, 47);
   assert.equal(campaign.exercises.length, 14);
@@ -82,6 +83,84 @@ test('mobile campaigns expose their full book and local support status', async (
     assert.equal((await api(`/api/pages/${pages}`)).page, pages);
     assert.equal((await api('/api/status')).runner, runner);
   }
+});
+
+test('C# supports checkpoints, saved drafts, and self-review without executing source', async () => {
+  const worldId = 'csharp';
+  const original = fixture({worldId, goRunnerAvailable:true, rustRunnerAvailable:true});
+  const {api, calls} = original;
+  const campaign = await api('/api/campaign');
+  assert.equal(campaign.world.number, 3);
+  assert.equal(campaign.world.name, 'C# and .NET');
+  assert.ok(campaign.quests.length >= 14);
+  assert.deepEqual(campaign.exercises, []);
+  const status = await api('/api/status');
+  assert.equal(status.runner, 'unavailable');
+  assert.equal(status.capabilities.nativeRunner, false);
+  assert.match(status.runnerDetail, /\.NET 10 SDK/);
+
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Lantern Apprentice', oneLife:true,
+    path:campaign.paths[0].id}});
+  const send = (path, body) => api(path, {method:'POST', hero, body});
+  const first = campaign.quests[0];
+  const chapter = await api(`/api/pages/${first.bossPage}`);
+  const checkpoint = chapter.prompts.find(prompt => prompt.type === 'choice');
+  assert.ok(!Object.hasOwn(checkpoint, 'correctOption'));
+  const authoredPage = localCatalog(worldId).pages[first.bossPage - 1];
+  const answer = authoredPage.prompts.find(prompt => prompt.id === checkpoint.id).correctOption;
+  const outcome = await send('/api/answers', {page:chapter.page, promptId:checkpoint.id, value:answer, submissionId:'cs-checkpoint'});
+  assert.equal(outcome.correct, true);
+  const prompt = chapter.prompts.find(item => item.id === 'boss-1');
+  assert.equal(prompt.type, 'code');
+  assert.equal(prompt.exerciseId, undefined);
+  const forge = () => api('/api/progress/1', {method:'PATCH', hero, body:{forge:true}});
+  await assert.rejects(forge(), /save your boss encounter draft/i);
+  const code = 'Console.WriteLine("Workshop");';
+  const draft = await send('/api/answers', {page:chapter.page, promptId:prompt.id, value:code});
+  assert.equal(draft.correct, null);
+  await forge();
+
+  const restored = fixture({worldId});
+  await restored.importBackup(await original.exportBackup());
+  const progress = await restored.api('/api/progress', {hero});
+  assert.equal(progress.responses.find(item => item.promptId === prompt.id).value, code);
+  assert.equal(progress.levels[0].forge, true);
+  assert.equal(progress.combat.hp, 100);
+  assert.deepEqual(calls, []);
+});
+
+test('C# goblin predicts code output before its riddle and awards a potion once', async () => {
+  const worldId = 'csharp';
+  const original = fixture({worldId});
+  const {api, calls} = original;
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Lantern Delver', oneLife:true}});
+  const send = (path, body) => api(path, {method:'POST', hero, body});
+  const drafts = await Promise.all(Array.from({length:8}, (_, index) => api(`/api/diamond?page=${index + 1}`, {hero})
+    .then(view => ({page:index + 1, ...view}))));
+  const {page} = drafts.find(view => view.sparkle);
+  const encounter = (await send('/api/diamond/start', {page})).encounter;
+  assert.deepEqual(encounter.stages.map(({id, kind}) => [id, kind]), [['code','choice'], ['choice','choice']]);
+  assert.ok(encounter.stages.every(stage => !Object.hasOwn(stage, 'answer')));
+  const answer = stage => stage.options.find(({id}) => evaluateDiamondChoice(worldId, id, stage.id).correct).id;
+  const [lock, riddle] = encounter.stages;
+  const submit = (stage, submissionId) => send('/api/diamond/submit', {
+    stageId:stage.id, optionId:answer(stage), submissionId,
+  });
+  await assert.rejects(submit(riddle, 'riddle-early'), /crack the sack lock/i);
+  const first = await submit(lock, 'predict-output');
+  assert.deepEqual(first.completed, ['code']);
+  assert.equal(first.combat.potions, 1);
+  assert.equal(first.diamonds, 0);
+  const last = await submit(riddle, 'cs-riddle');
+  assert.deepEqual(last.completed, ['code','choice']);
+  assert.equal(last.combat.potions, 2);
+  assert.equal(last.diamonds, 3);
+  assert.equal((await submit(riddle, 'cs-riddle')).combat.potions, 2);
+  assert.deepEqual(calls, []);
+
+  const restored = fixture({worldId});
+  await restored.importBackup(await original.exportBackup());
+  assert.equal((await restored.api('/api/merchant', {hero})).balance, 3);
 });
 
 test('mobile choice damage, replay, potion healing and trial reward persist by hero', async () => {
@@ -642,9 +721,9 @@ test('each World opens a distinct IndexedDB and JavaScript keeps the established
     names.push(name);
     throw new Error('Test database');
   }};
-  for (const worldId of ['javascript', 'typescript', 'rust', 'go']) {
+  for (const worldId of ['javascript', 'typescript', 'csharp', 'rust', 'go']) {
     await assert.rejects(createMobileRepository(indexedDB, worldId).list(), /Test database/);
   }
   assert.deepEqual(names, ['coding-dungeons-mobile', 'coding-dungeons-mobile-typescript',
-    'coding-dungeons-mobile-rust', 'coding-dungeons-mobile-go']);
+    'coding-dungeons-mobile-csharp', 'coding-dungeons-mobile-rust', 'coding-dungeons-mobile-go']);
 });

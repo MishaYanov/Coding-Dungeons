@@ -24,8 +24,8 @@ const [rustExercise] = await readJson('../data/exercises.json');
 const worlds = [
   {id:'javascript', name:'JavaScript', number:1, reference:javascriptExercises[0].reference},
   {id:'typescript', name:'TypeScript', number:2, reference:typescriptExercises[0].reference},
-  {id:'rust', name:'Rust', number:3, reference:rustExercise.solution, rejectStarter:true},
-  {id:'go', name:'Go', number:4, reference:goExercises[0].reference, rejectStarter:true},
+  {id:'rust', name:'Rust', number:4, reference:rustExercise.solution, rejectStarter:true},
+  {id:'go', name:'Go', number:5, reference:goExercises[0].reference, rejectStarter:true},
 ];
 
 async function attach(t) {
@@ -288,7 +288,35 @@ test('the installed Android test APK dismisses goblin victory while keeping its 
     .getByText('Diamonds collected · 3', {exact:true}).waitFor();
 });
 
-test('the installed Android test APK plays all four worlds offline and confines its WebView', {
+test('the installed Android test APK bundles the C# book and saves code drafts offline', {
+  skip:!serial && 'Set FERRUM_ANDROID_EMULATOR and FERRUM_ADB after installing the debug APK.',
+  timeout:90_000,
+}, async t => {
+  const {page} = await attach(t);
+  const runId = Date.now().toString(36);
+  await createHero(page, {id:'csharp', name:'C# and .NET', number:3}, `Android Lantern Scribe ${runId}`);
+  const csharpAssets = await page.evaluate(async () => {
+    const urls = ['/book/csharp/book.pdf', '/book/csharp/field-kit.zip'];
+    return Promise.all(urls.map(async url => {
+      const response = await fetch(url);
+      return [response.status, (await response.arrayBuffer()).byteLength > 0];
+    }));
+  });
+  assert.deepEqual(csharpAssets, [[200,true], [200,true]], 'The Android APK contains the C# PDF and kit.');
+  const csharp = await readJson('../data/worlds/csharp/campaign.json');
+  const {bossPage} = csharp.quests[0];
+  const input = page.locator('#page-number:visible');
+  await input.fill(String(bossPage));
+  await input.press('Enter');
+  await bookPage(page, bossPage);
+  await page.getByRole('tab', {name:'GM', exact:true}).click();
+  await page.getByRole('textbox', {name:'C# code', exact:true}).fill('Console.WriteLine("Lantern Workshop");');
+  await page.getByRole('button', {name:'Save code draft', exact:true}).click();
+  await page.getByText('Draft saved', {exact:true}).waitFor();
+  assert.equal(await page.getByRole('button', {name:'Run Examples', exact:true}).count(), 0);
+});
+
+test('the installed Android test APK grades the four executable worlds offline and confines its WebView', {
   skip:!serial && 'Set FERRUM_ANDROID_EMULATOR and FERRUM_ADB after installing the debug APK.',
   timeout:240_000,
 }, async t => {

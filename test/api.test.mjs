@@ -14,7 +14,7 @@ import { openStore } from '../lib/store.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const mutationHeaders = { 'Content-Type': 'application/json', 'X-Ferrum-Request': '1' };
-const worldExtensions = {javascript: 'js', typescript: 'ts', go: 'go'};
+const worldExtensions = {javascript: 'js', typescript: 'ts', csharp: 'cs', go: 'go'};
 let database;
 let child;
 let base;
@@ -764,10 +764,10 @@ test('saved answers get the current edition feedback without losing the submitte
 test('world discovery, reading, and saved progress stay scoped to the selected language', async () => {
   const {payload: {worlds}} = await request('/api/worlds');
   assert.deepEqual(worlds.map(({id, number}) => [id, number]),
-    [['javascript', 1], ['typescript', 2], ['rust', 3], ['go', 4]]);
+    [['javascript', 1], ['typescript', 2], ['csharp', 3], ['rust', 4], ['go', 5]]);
   await request('/api/campaign', {headers: {'X-Ferrum-World': 'unknown'}, status: 404});
   const {payload: legacy} = await request('/api/campaign');
-  assert.deepEqual(legacy.world, worlds[2]);
+  assert.deepEqual(legacy.world, worlds.find(world => world.id === 'rust'));
   assert.equal(legacy.total, 559);
 
   const {hero: rustHero, cookie: rustCookie} = await createHero('Across Worlds');
@@ -780,6 +780,7 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
     assert.ok(campaign.paths.length > 0);
     const {payload: status} = await request('/api/status', {headers});
     assert.equal(status.storage, 'SQLite');
+    if (world.id === 'csharp') assert.equal(status.runner, 'unavailable');
     const {payload: {heroes}} = await request('/api/heroes', {headers});
     assert.ok(!heroes.some(hero => hero.name === rustHero.name));
     const {payload: {hero}, response} = await request('/api/heroes', {
@@ -797,6 +798,10 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
     const {level, bossPage} = campaign.quests[0];
     const {payload: page} = await request(`/api/pages/${bossPage}`, {headers});
     const graded = !!page.prompts.find(prompt => prompt.id === `boss-${level}`)?.exerciseId;
+    if (world.id === 'csharp') {
+      assert.equal(graded, false);
+      await request('/api/grade', {method:'POST', headers, hero, body:{page:bossPage, code:'// draft'}, status:409});
+    }
     assert.ok(page.image.startsWith(`/book/${world.id}/pages/`));
     const {response: pageImage} = await request(page.image, {method: 'HEAD'});
     assert.equal(pageImage.headers.get('Content-Type'), 'image/webp');

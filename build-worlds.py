@@ -25,7 +25,8 @@ from build_book import CodeBlock, PAGE_H, PAGE_W, STYLES, WIDTH, HEIGHT, MARGIN_
 WORLDS = [
     (1, 'javascript', 'JavaScript', 'js', '#815718'),
     (2, 'typescript', 'TypeScript', 'ts', '#245795'),
-    (4, 'go', 'Go', 'go', '#22665c'),
+    (3, 'csharp', 'C# and .NET', 'cs', '#633a83'),
+    (5, 'go', 'Go', 'go', '#22665c'),
 ]
 
 
@@ -63,7 +64,7 @@ def listing(source, label, kind, language):
     lines = source.splitlines()
     if language == 'Go':
         lines = [line.expandtabs(4) for line in lines]
-    block = CompactCodeBlock if language == 'Go' and len(lines) > 40 else CodeBlock
+    block = CompactCodeBlock if language in ('Go', 'C# and .NET') and len(lines) > 40 else CodeBlock
     return block(lines, label, kind=kind)
 
 
@@ -117,7 +118,8 @@ def validate_world(source):
 def book_story(source, number, name, accent):
     title = ParagraphStyle('World title', parent=STYLES['h1'], fontSize=34, leading=38,
                            spaceAfter=18, textColor=colors.HexColor(accent))
-    map_item = ParagraphStyle('Map entry', parent=STYLES['reference'], leading=12, spaceAfter=1.8)
+    map_spacing = dict(leading=10.5, spaceAfter=1.2) if name == 'C# and .NET' else dict(leading=12, spaceAfter=1.8)
+    map_item = ParagraphStyle('Map entry', parent=STYLES['reference'], **map_spacing)
     manual_text = ParagraphStyle('Manual text', parent=STYLES['body'], leading=13.4, spaceAfter=5.5)
     lessons = source['lessons']
     story = [Spacer(1, 45), paragraph(f'WORLD {number} / {name.upper()}', 'part'),
@@ -174,6 +176,10 @@ def build_kit(path, source, number, name, extension):
         'js': 'Run a worked example with node examples/level-01.js.',
         'ts': 'With TypeScript installed, check a worked example with '
               'tsc --strict --target ES2022 --noEmit examples/level-01.ts.',
+        'cs': 'Install the .NET 10 SDK and run:\n'
+              'dotnet run --file examples/level-01.cs --property:PublishAot=false\n'
+              'The option skips native publishing tools. Run one file at a time. '
+              'The examples only use the standard library.',
         'go': 'With Go installed, run a worked example with go run examples/level-01.go.',
     }[extension]
     with zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED) as kit:
@@ -183,6 +189,10 @@ def build_kit(path, source, number, name, extension):
         for n, lesson in enumerate(source['lessons'], 1):
             kit.writestr(f'examples/level-{n:02d}.{extension}', lesson['code'].rstrip() + '\n')
             kit.writestr(f'starters/level-{n:02d}.{extension}', lesson['starter'].rstrip() + '\n')
+        if extension == 'cs':
+            outputs = '\n'.join(f'Level {n:02d}: {lesson["expectedOutput"]}'
+                                for n, lesson in enumerate(source['lessons'], 1))
+            kit.writestr('Expected_Results.txt', 'Expected final output lines\n\n' + outputs + '\n')
         journal = '\n\n'.join(f'Level {n:02d} / {lesson["title"]}\n'
                              'Scout [ ]  Forge [ ]  Explain [ ]  Side quest [ ]\n'
                              'Prediction:\nWhat I tested:\nWhat I learned:'
@@ -198,13 +208,16 @@ def page_links(page, numbers):
     width, height = map(float, (page.mediabox.width, page.mediabox.height))
     for ref in page.get('/Annots', []):
         annotation = ref.get_object()
-        if annotation.get('/Subtype') != '/Link' or not annotation.get('/Dest'):
+        if annotation.get('/Subtype') != '/Link':
             continue
-        target = annotation['/Dest'][0].idnum
         x0, y0, x1, y1 = map(float, annotation['/Rect'])
-        links.append(dict(x=round(x0 / width * 100, 3), y=round((height - y1) / height * 100, 3),
-                          w=round((x1 - x0) / width * 100, 3), h=round((y1 - y0) / height * 100, 3),
-                          page=numbers[target], label=f'Open book page {numbers[target]}'))
+        rectangle = dict(x=round(x0 / width * 100, 3), y=round((height - y1) / height * 100, 3),
+                         w=round((x1 - x0) / width * 100, 3), h=round((y1 - y0) / height * 100, 3))
+        if dest := annotation.get('/Dest'):
+            target = numbers[dest[0].idnum]
+            links.append(dict(**rectangle, page=target, label=f'Open book page {target}'))
+        elif (url := str(annotation.get('/A', {}).get('/URI', ''))).startswith('https://'):
+            links.append(dict(**rectangle, url=url, label='Open source reference'))
     return links
 
 

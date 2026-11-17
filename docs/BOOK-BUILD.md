@@ -2,14 +2,14 @@
 
 The Windows rebuild uses Python 3, Poppler's `pdftoppm` on `PATH`, and the Georgia, Calibri, and Consolas fonts from Windows. The reader uses the existing PDFs and page images directly.
 
-Run these commands from the project folder to rebuild JavaScript, TypeScript, and Go.
+Run these commands from the project folder to rebuild JavaScript, TypeScript, C#, and Go.
 
 ```powershell
 python -m pip install -r requirements-book.txt
 python build-worlds.py
 ```
 
-Edit `data/worlds/<world>/source.json` to change a campaign. Pass `javascript`, `typescript`, or `go` to rebuild only that world. The script generates its campaign and page data beside the source, then writes the PDF, WebP pages, and field kit under `public/book/<world>`. Each PDF also embeds its field kit.
+Edit `data/worlds/<world>/source.json` to change a campaign. Pass `javascript`, `typescript`, `csharp`, or `go` to rebuild only that world. The script generates its campaign and page data beside the source, then writes the PDF, WebP pages, and field kit under `public/book/<world>`. Each PDF also embeds its field kit.
 
 The Rust rebuild also requires Node.js 24 or newer, Rust 1.99.1, and a host linker.
 
@@ -32,3 +32,5 @@ The packaging scripts build the field kit from the checked listings and attach i
 Run `python verify-worlds.py` against the finished reader. It checks every PDF page, page image, book link, and prompt binding, and compares the attached field kits with the downloaded copies. Pass a world ID to check just that world.
 
 After `npm ci`, run `python verify-worlds.py typescript --check-typescript` to compile the TypeScript kit examples with the documented command. The CI workflow runs this check.
+
+With the .NET 10 SDK installed, run `python verify-worlds.py csharp --check-csharp`. This runs each authored example and starter from the exported kit as an independent file-based app and compares the example’s final output line. Set `DUNGEONS_DOTNET` to a private SDK's `dotnet` executable to check without adding it to `PATH`. CI uses SDK 10.0.404.

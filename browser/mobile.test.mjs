@@ -305,7 +305,7 @@ test('a phone downloads World 1, grades fights offline, and preserves hero state
 
 test('mobile worlds keep their own saves, offline books, and code grading capability', {timeout:360_000}, async t => {
   const {page, context, origin} = await play(t);
-  const worlds = [['javascript','JavaScript'], ['typescript','TypeScript'], ['rust','Rust'], ['go','Go']];
+  const worlds = [['javascript','JavaScript'], ['typescript','TypeScript'], ['csharp','C# and .NET'], ['rust','Rust'], ['go','Go']];
   const goBundled = await access(join(project, 'dist/mobile/runtime/go/manifest.json')).then(() => true, () => false);
   const rustBundled = await rustPack();
   const heroPicker = page.getByRole('dialog', {name:'Choose your hero'});
@@ -320,6 +320,7 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
   async function download(number) {
     await tap(heroPicker.getByRole('button', {name:`Download World ${number}`, exact:true}));
     await heroPicker.getByText(`World ${number} ready offline`, {exact:true}).waitFor({timeout:90_000});
+    await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
   }
 
   await tap(worldPicker.locator('[data-world="typescript"]'));
@@ -342,12 +343,37 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
   await tap(page.getByRole('button', {name:'Submit solution', exact:true}));
   await page.locator('.creature-encounter[data-state="defeated"]').waitFor();
 
-  for (const [world, language, number] of [['rust','Rust',3], ['go','Go',4]]) {
+  await context.setOffline(false);
+  await page.goto(origin + '?world=csharp');
+  await heroPicker.getByText(/Run the field kit on a computer with the \.NET 10 SDK/).waitFor();
+  assert.equal(await heroPicker.getByRole('button', {name:/Type Mage/}).count(), 0);
+  await download(3);
+  await context.setOffline(true);
+  const csharpQuest = await firstQuest('csharp');
+  await hero(page, 'Lantern Scribe', true);
+  await jump(page, csharpQuest.bossPage);
+  await bookPage(page, csharpQuest.bossPage);
+  await tap(gm);
+  const csharpCode = page.getByRole('textbox', {name:'C# code', exact:true});
+  const draft = 'Console.WriteLine("Lantern Workshop");';
+  await csharpCode.fill(draft);
+  await tap(page.getByRole('button', {name:'Save code draft', exact:true}));
+  await page.getByText('Draft saved', {exact:true}).waitFor();
+  await page.getByRole('checkbox', {name:'Forge self-review'}).check();
+  await page.getByText('Quest log updated', {exact:true}).waitFor();
+  assert.equal(await page.getByRole('button', {name:'Run Examples', exact:true}).count(), 0);
+  await page.reload();
+  await bookPage(page, csharpQuest.bossPage);
+  await tap(gm);
+  assert.equal(await csharpCode.inputValue(), draft);
+  assert.equal(await page.getByRole('checkbox', {name:'Forge self-review'}).isChecked(), true);
+
+  for (const [world, language, number] of [['rust','Rust',4], ['go','Go',5]]) {
     await context.setOffline(false);
     await page.goto(origin + '?world=' + world);
     assert.equal(await heroPicker.getByRole('button', {name:/Type Mage/}).count(), 0);
     if (world === 'rust' && rustBundled) {
-      await heroPicker.getByText(`Includes the experimental Rust ${rustBundled.rustVersion} Workbench. After downloading World 3, code tests run offline.`,
+      await heroPicker.getByText(`Includes the experimental Rust ${rustBundled.rustVersion} Workbench. After downloading World ${number}, code tests run offline.`,
         {exact:false}).waitFor();
       await heroPicker.getByText('2 GB phones are not yet verified.', {exact:false}).waitFor();
     }
@@ -403,7 +429,7 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
     }
   }
 
-  // Downloading either of the other worlds preserves World 2 and its previous clear.
+  // Downloading the other worlds preserves World 2 and its previous clear.
   await page.goto(origin + '?world=typescript');
   await bookPage(page, typeQuest.bossPage);
   await tap(gm);

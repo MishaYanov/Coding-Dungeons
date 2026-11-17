@@ -309,7 +309,9 @@ function GameMaster({ game, compact, hidden, panelRef }) {
   const unavailable = mobile ? `${world?.name} runner unavailable on mobile` : `${world?.name} runner offline`;
   const runnerLabel = !world ? 'Choose a world' : guided ? 'Guided practice'
     : ready ? `${world.name} runner ready` : runner ? unavailable : 'Runner status unknown';
-  const runnerTitle = guided ? 'Save your code and check it against the encounter debrief'
+  const runnerTitle = guided ? (world.id === 'csharp'
+    ? 'Save your code here and run the field-kit files with the .NET 10 SDK'
+    : 'Save your code and check it against the encounter debrief')
     : [storage, runnerDetail || (runner && `${world?.name} runner ${runner}`)].filter(Boolean).join(' · ') || 'Practice status';
   const title = page?.title || (hero ? profile.callsign : 'Your expedition');
   return (

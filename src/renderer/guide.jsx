@@ -248,6 +248,8 @@ function Prompt({ data, prompt, index, game, actions }) {
   const code = prompt.type === 'code';
   const choice = prompt.type === 'choice';
   const runnable = code && prompt.exerciseId != null;
+  const csharpDraft = code && game.world.id === 'csharp' && !runnable;
+  const language = csharpDraft ? 'C#' : game.world.name;
   const graded = runnable || choice || Boolean(prompt.assessment);
   const runnerUnavailable = runnable && text(game.runner).toLowerCase() === 'unavailable';
   const exercise = runnable && list(game.campaign?.exercises).find(({ id }) => String(id) === String(prompt.exerciseId));
@@ -329,7 +331,7 @@ function Prompt({ data, prompt, index, game, actions }) {
         actions.clearDraft(key, value);
         actions.recordResponse(hero, { ...outcome, ...body, value });
         if (mounted.current) {
-          setMessage(draft ? 'Draft saved' : 'Saved to your quest log');
+          setMessage(draft || csharpDraft ? 'Draft saved' : 'Saved to your quest log');
         }
         actions.refreshProgress().catch(() => {});
       }
@@ -353,7 +355,7 @@ function Prompt({ data, prompt, index, game, actions }) {
         event.currentTarget.requestSubmit(submitButton.current);
       }
     }}>
-    <div className="prompt-heading"><h2 id={titleId}>{title}</h2><span className="prompt-type">{promptLabels[prompt.type]}</span></div>
+    <div className="prompt-heading"><h2 id={titleId}>{title}</h2><span className="prompt-type">{csharpDraft ? 'CODE DRAFT' : promptLabels[prompt.type]}</span></div>
     {text(prompt.body) && <p className="prompt-copy">{prompt.body}</p>}
     {prompt.assessment && <MushroomJuiceNote id={`${titleId}-gm-help`} />}
     {prompt.assessment && game.combat?.oneLife && <p className="fine-print">Written feedback does not affect HP.</p>}
@@ -371,10 +373,10 @@ function Prompt({ data, prompt, index, game, actions }) {
         </label>;
       })}
     </fieldset> : <textarea ref={input} className={code ? 'code-editor' : 'answer-editor'}
-      aria-label={code ? `${game.world.name} code` : 'Your written response'}
+      aria-label={code ? `${language} code` : 'Your written response'}
       aria-describedby={code ? indentationId : undefined}
       rows={code ? 12 : 4} maxLength={code ? 49152 : 12000}
-      placeholder={code ? `Write your ${game.world.name} solution here` : 'Explain your reasoning and the rule you rely on.'}
+      placeholder={code ? `Write your ${language} solution here` : 'Explain your reasoning and the rule you rely on.'}
       spellCheck={!code} autoCapitalize={code ? 'off' : undefined} autoComplete={code ? 'off' : undefined}
       autoCorrect={code ? 'off' : undefined} disabled={busy} value={value}
       {...(code ? editorProps : { onChange: (event) => updateValue(event.target.value) })} />}
@@ -385,7 +387,7 @@ function Prompt({ data, prompt, index, game, actions }) {
     <div className="form-actions">
       <button ref={submitButton} type="submit" value="submit" className="button button-primary"
         data-expedition-submit={graded ? '' : undefined} disabled={submitDisabled}>
-        {runnable ? 'Submit solution' : code ? 'Save code notes' : choice ? 'Check answer' : prompt.assessment ? 'Ask the GM' : 'Submit response'}
+        {runnable ? 'Submit solution' : csharpDraft ? 'Save code draft' : code ? 'Save code notes' : choice ? 'Check answer' : prompt.assessment ? 'Ask the GM' : 'Submit response'}
       </button>
       {runnable && <>
         <button type="submit" value="examples" className="button button-quiet" disabled={runnerUnavailable || busy}>Run Examples</button>
@@ -394,7 +396,9 @@ function Prompt({ data, prompt, index, game, actions }) {
       </>}
       <span className="inline-status" aria-live="polite" data-error={status.error}>{status.copy}</span>
     </div>
-    {code && !runnable && <p className="fine-print">This is a code notebook. Your notes are saved for this page.</p>}
+    {code && !runnable && <p className="fine-print">{csharpDraft
+      ? 'Use the .NET 10 SDK to run the field-kit files. Save your solution here and compare it with the debrief.'
+      : 'This is a code notebook. Your notes are saved for this page.'}</p>}
     {runnerUnavailable && <p className="fine-print">{game.runnerDetail
       || `The local ${game.world.name} runner is unavailable.`} You can still save your code draft.</p>}
     {result ? <WorkbenchReport result={result} data={data} game={game} />

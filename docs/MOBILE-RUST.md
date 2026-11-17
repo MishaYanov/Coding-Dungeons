@@ -1,6 +1,6 @@
 # Experimental offline Rust Workbench
 
-The optional World 3 pack runs real Rust compilation and challenge tests on the device. It preserves the existing books, heroes, drafts, examples, full submissions, monster fights, hard clears, HP and rewards. Infrastructure failures and cancellation preserve drafts without charging HP or consuming a submission ID.
+The optional Rust World 4 pack runs real Rust compilation and challenge tests on the device. It preserves the existing books, heroes, drafts, examples, full submissions, monster fights, hard clears, HP and rewards. Infrastructure failures and cancellation preserve drafts without charging HP or consuming a submission ID.
 
 ## Toolchain and compatibility
 
@@ -24,7 +24,7 @@ npm.cmd run mobile:preview
 
 Staging downloads the two fixed GitHub release archives, validates their hashes and sizes, extracts only the named regular files, validates the resulting binaries, adds license notices and atomically replaces `out/mobile-rust-pack`. A failed stage preserves the prior pack. To stage without downloading, pass `--archives` pointing to a directory containing the two pinned `.tar.zst` archives.
 
-The installed pack is approximately 151.8 MiB before HTTP compression. World 3's book is additional. Open the built app, choose World 3 and complete **Download World 3** while online. The same edition then grades supported code offline. Runtime integrity checks reject mismatched or redirected compiler assets. Nothing from GitHub or crates.io is fetched while grading.
+The installed pack is approximately 151.8 MiB before HTTP compression. Rust's book is additional. Open the built app, choose Rust and complete **Download World 4** while online. The same edition then grades supported code offline. Runtime integrity checks reject mismatched or redirected compiler assets. Nothing from GitHub or crates.io is fetched while grading.
 
 Builds without the pack retain the existing reader and draft-only Rust mode. Merely setting an environment flag cannot enable a missing or mismatched runtime.
 

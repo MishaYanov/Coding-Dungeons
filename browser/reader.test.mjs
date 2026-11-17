@@ -72,7 +72,7 @@ after(async () => {
     await closed;
   }
   if (scratch) {
-    for (const database of ['browser.sqlite', 'browser.javascript.sqlite', 'browser.typescript.sqlite', 'browser.go.sqlite']) {
+    for (const database of ['browser.sqlite', 'browser.javascript.sqlite', 'browser.typescript.sqlite', 'browser.csharp.sqlite', 'browser.go.sqlite']) {
       for (const suffix of ['', '-wal', '-shm']) {
         await unlink(join(scratch, `${database}${suffix}`)).catch((error) => {
           if (error.code !== 'ENOENT') throw error;
@@ -366,7 +366,7 @@ test('a delayed save cannot erase a newer draft after revisiting its page', { ti
   assert.equal(await note.inputValue(), 'newer draft');
 });
 
-test('the home page offers all four worlds after playing as a Rust hero in the same tab', async (t) => {
+test('the home page offers all five worlds after playing as a Rust hero in the same tab', async (t) => {
   const page = await newPage(t, '', 'rust');
   await createHero(page, 'Home Page Scout', 1);
 
@@ -375,8 +375,9 @@ test('the home page offers all four worlds after playing as a Rust hero in the s
   await picker.waitFor();
   await picker.getByRole('link', { name: /World 1 JavaScript/ }).waitFor();
   await picker.getByRole('link', { name: /World 2 TypeScript/ }).waitFor();
-  await picker.getByRole('link', { name: /World 3 Rust/ }).waitFor();
-  await picker.getByRole('link', { name: /World 4 Go/ }).waitFor();
+  await picker.getByRole('link', { name: /World 3 C# and \.NET/ }).waitFor();
+  await picker.getByRole('link', { name: /World 4 Rust/ }).waitFor();
+  await picker.getByRole('link', { name: /World 5 Go/ }).waitFor();
 });
 
 test('world selection opens separate books and restores the right hero and draft', async (t) => {
@@ -412,7 +413,7 @@ test('world selection opens separate books and restores the right hero and draft
 
 test('Go beginner checkpoints update the character sheet and survive a reload', async (t) => {
   const page = await newPage(t, '', null);
-  await page.getByRole('link', { name: /World 4 Go/ }).click();
+  await page.getByRole('link', { name: /World 5 Go/ }).click();
   await page.getByRole('dialog', { name: 'Choose your hero' }).waitFor();
   const go = JSON.parse(await readFile(new URL('data/worlds/go/campaign.json', project), 'utf8'));
   const beginner = go.paths[0];
@@ -454,6 +455,53 @@ test('Go beginner checkpoints update the character sheet and survive a reload', 
   await openBookPage(page, go.quests[0].page);
   await jumpTo(page, go.quests[0].bossPage);
   assert.equal(await page.getByRole('textbox', { name: 'Go code' }).inputValue(), '// Keep this Go draft 1');
+});
+
+test('C# starts a beginner hero and keeps a notebook and Forge review after reload', async t => {
+  const page = await newPage(t, '', null);
+  await page.getByRole('link', {name:/World 3 C# and \.NET/}).click();
+  const campaign = JSON.parse(await readFile(new URL('data/worlds/csharp/campaign.json', project), 'utf8'));
+  await page.locator('#hero-path').selectOption(campaign.paths[0].id);
+  await createHero(page, 'Lantern Apprentice', 1);
+  const {bossPage} = campaign.quests[0];
+  await jumpTo(page, bossPage);
+  await page.getByText('Guided practice', {exact:true}).waitFor();
+  const review = page.getByRole('checkbox', {name:'Forge self-review', exact:true});
+  const editor = page.getByRole('textbox', {name:'C# code', exact:true});
+  assert.equal(await page.getByRole('button', {name:'Run Examples', exact:true}).count(), 0);
+  const draft = 'Console.WriteLine("Workshop ready");';
+  await editor.fill(draft);
+  await page.getByRole('button', {name:'Save code draft', exact:true}).click();
+  await page.getByText('Draft saved', {exact:true}).waitFor();
+  await review.check();
+  await page.getByText('Quest log updated', {exact:true}).waitFor();
+  await page.reload();
+  await openBookPage(page, bossPage);
+  assert.equal(await editor.inputValue(), draft);
+  assert.ok(await review.isChecked());
+});
+
+test('the C# hidden diamond opens a two-question goblin and funds the merchant', async t => {
+  const page = await newPage(t, '', 'csharp');
+  await createHero(page, 'Lantern Delver', 1);
+  const discovery = (await diamondPages(page, 8, 'csharp')).find(({sparkle}) => Boolean(sparkle));
+  assert.ok(discovery);
+  await jumpTo(page, discovery.number);
+  await page.getByRole('button', {name:diamondName}).click();
+  const fight = page.locator('.diamond-encounter');
+  await fight.getByRole('heading', {name:'Read the sack lock', exact:true}).waitFor();
+  assert.equal(await fight.getByRole('textbox').count(), 0);
+  await fight.getByRole('radio', {name:'3', exact:true}).check();
+  await fight.getByRole('button', {name:'Submit answer', exact:true}).click();
+  await fight.getByRole('heading', {name:'Answer the goblin’s riddle', exact:true}).waitFor();
+  await fight.getByRole('radio', {name:'counts.TryGetValue(key, out int count)', exact:true}).check();
+  await fight.getByRole('button', {name:'Submit answer', exact:true}).click();
+  await fight.getByText('Goblin defeated', {exact:true}).waitFor();
+  await page.getByRole('button', {name:'Visit merchant', exact:true}).click();
+  const shop = page.getByRole('dialog', {name:'Diamond merchant'});
+  await shop.getByText('3 diamonds available', {exact:true}).waitFor();
+  await shop.getByRole('button', {name:'Buy Vault Key · 2 diamonds', exact:true}).click();
+  await shop.getByText('1 diamond available', {exact:true}).waitFor();
 });
 
 test('an unavailable Go sandbox keeps the creature standing and the draft available', async (t) => {

@@ -4,7 +4,9 @@ import argparse
 from collections import Counter
 import hashlib
 import json
+import os
 from pathlib import Path
+from shutil import which
 import subprocess
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -16,7 +18,7 @@ from pypdf import PdfReader
 
 
 ROOT = Path(__file__).resolve().parent
-WORLDS = ("javascript", "typescript", "rust", "go")
+WORLDS = ("javascript", "typescript", "csharp", "rust", "go")
 
 
 def load(path):
@@ -38,7 +40,40 @@ def verify_typescript_examples(kit, levels):
     print(f"TypeScript: {len(levels)} exported examples pass the documented compiler command.", flush=True)
 
 
-def audit(world, check_typescript=False):
+def verify_csharp_examples(kit, lessons):
+    dotnet = os.environ.get("DUNGEONS_DOTNET") or which("dotnet")
+    if not dotnet:
+        raise SystemExit("Install the .NET 10 SDK to check the C# examples.")
+    dotnet = str(Path(dotnet).resolve())
+    with TemporaryDirectory(prefix="ferrum-csharp-book-") as tmp:
+        directory = Path(tmp)
+        (directory / "global.json").write_text(json.dumps({"sdk": {
+            "version": "10.0.100", "rollForward": "latestFeature", "allowPrerelease": False,
+        }}), encoding="utf-8")
+        (directory / "NuGet.Config").write_text(
+            '<configuration><packageSources><clear /></packageSources></configuration>', encoding="utf-8")
+        env = {
+            **os.environ, "DOTNET_ROOT": str(Path(dotnet).parent), "DOTNET_CLI_HOME": tmp,
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1", "NuGetAudit": "false",
+        }
+        sdk = subprocess.check_output([dotnet, "--version"], cwd=tmp, env=env, text=True, timeout=30).strip()
+        if not sdk.startswith("10."):
+            raise SystemExit(f"Use the .NET 10 SDK for the book checks (found {sdk}).")
+        for index, lesson in enumerate(lessons, 1):
+            for folder in ("examples", "starters"):
+                filename = f"{folder}-{index:02}.cs"
+                (directory / filename).write_bytes(kit.read(f"{folder}/level-{index:02}.cs"))
+                result = subprocess.run([dotnet, "run", "--file", filename, "--property:PublishAot=false"], cwd=tmp, env=env,
+                                        encoding="utf-8", capture_output=True, timeout=60)
+                if result.returncode:
+                    raise ValueError(f"C# {filename} failed with .NET SDK {sdk}:\n{result.stdout}\n{result.stderr}")
+                output = result.stdout.strip().splitlines()
+                if folder == "examples" and (not output or output[-1] != lesson["expectedOutput"]):
+                    raise ValueError(f"Unexpected C# output from {filename}: {result.stdout}")
+    print(f"C#: {len(lessons)} exported examples and {len(lessons)} starters ran on .NET SDK {sdk}.", flush=True)
+
+
+def audit(world, check_typescript=False, check_csharp=False):
     rust = world == "rust"
     data = ROOT / "data" if rust else ROOT / "data/worlds" / world
     book = ROOT / "public/book" if rust else ROOT / "public/book" / world
@@ -60,6 +95,7 @@ def audit(world, check_typescript=False):
     assert all(path["levels"] and set(path["levels"]) <= levels for path in campaign["paths"])
     if not rust:
         assert campaign["paths"] == source["paths"] and campaign["zones"] == source["zones"]
+        assert campaign["world"]["number"] == WORLDS.index(world) + 1
     exercises = {e["id"]: e["level"] for e in load(data / "exercises.json")}
     seen_exercises = set()
     prompts = {}
@@ -129,7 +165,7 @@ def audit(world, check_typescript=False):
             assert choice_page == quest["manualPage" if rust else "bossPage"]
             if source:
                 lesson = source["lessons"][level - 1]
-                extension = {"javascript": "js", "typescript": "ts", "go": "go"}[world]
+                extension = {"javascript": "js", "typescript": "ts", "csharp": "cs", "go": "go"}[world]
                 listing = prompts[f"listing-{level}-1"][1]
                 boss = prompts[f"boss-{level}"][1]
                 assert choice["body"] == lesson["question"] and choice["feedback"] == lesson["feedback"]
@@ -144,6 +180,8 @@ def audit(world, check_typescript=False):
             assert len(reader.get_fields()) == 171
         if world == "typescript" and check_typescript:
             verify_typescript_examples(kit, sorted(levels))
+        if world == "csharp" and check_csharp:
+            verify_csharp_examples(kit, source["lessons"])
     print(f"{world}: {total} pages, {len(quests)} levels, {link_count} links, "
           f"{sum(len(p['prompts']) for p in pages)} GM cards, verified field kit", flush=True)
 
@@ -153,8 +191,10 @@ if __name__ == "__main__":
     parser.add_argument("world", nargs="*", metavar="WORLD")
     parser.add_argument("--check-typescript", action="store_true",
                         help="compile the TypeScript kit examples using the documented command")
+    parser.add_argument("--check-csharp", action="store_true",
+                        help="run the C# kit programs with the .NET 10 SDK")
     args = parser.parse_args()
     for selected in args.world or WORLDS:
         if selected not in WORLDS:
             parser.error(f"Unknown world: {selected}")
-        audit(selected, args.check_typescript)
+        audit(selected, args.check_typescript, args.check_csharp)
