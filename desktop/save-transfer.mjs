@@ -1,7 +1,8 @@
 import { lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
-import { createSaveSchema, openStore } from '../lib/store.mjs';
+import { createSaveSchema, goblinDiamonds, openStore } from '../lib/store.mjs';
+import { validMerchantState } from '../lib/merchant.mjs';
 import { isReaderHeroId, maxReaderValueBytes } from './reader-storage.mjs';
 
 const files = ['ferrum.sqlite', 'ferrum.javascript.sqlite', 'ferrum.typescript.sqlite', 'ferrum.go.sqlite'];
@@ -109,7 +110,10 @@ function inspect(db, {allowLegacy = true, validatePayloads = false, validateRows
     inspectSavedText(db, tables);
     if (!legacy) inspectSavedRows(db, tables);
   }
-  if (validatePayloads && !legacy) inspectSavedPayloads(db, tables);
+  if (validatePayloads && !legacy) {
+    inspectSavedPayloads(db, tables);
+    inspectMerchant(db, tables);
+  }
   const occupied = saveTables.some(table => tables.has(table) && db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get());
   return {legacy, occupied};
 }
@@ -296,6 +300,27 @@ function inspectSavedPayloads(db, tables) {
       try { value = JSON.parse(payload); }
       catch (error) { throw new Error(message, {cause:error}); }
       if (!valid(value)) throw new Error(message);
+    }
+  }
+}
+
+function inspectMerchant(db, tables) {
+  if (!tables.has('hero_merchant')) return;
+  const message = 'Invalid save payload in hero_merchant.state.';
+  if (db.prepare('SELECT 1 FROM hero_merchant WHERE length(CAST(state AS BLOB)) > 1024 LIMIT 1').get()) {
+    throw new Error(message);
+  }
+  const hasGoblin = tables.has('diamond_encounters') && tables.has('encounter_completions');
+  const oneLife = tables.has('one_life_heroes')
+    ? db.prepare('SELECT 1 FROM one_life_heroes WHERE hero_id = ?') : null;
+  for (const {hero_id:heroId, state} of db.prepare('SELECT hero_id, state FROM hero_merchant').iterate()) {
+    if (!text(state)) throw new Error(message);
+    let value;
+    try { value = JSON.parse(state); }
+    catch (error) { throw new Error(message, {cause:error}); }
+    const earned = hasGoblin ? goblinDiamonds(db, heroId) : 0;
+    if (!validMerchantState(value, earned) || (value.potionsBought > 0 && !oneLife?.get(heroId))) {
+      throw new Error(message);
     }
   }
 }

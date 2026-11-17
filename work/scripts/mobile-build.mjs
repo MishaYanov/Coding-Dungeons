@@ -92,6 +92,18 @@ async function contentVersion(output, files, seed = '') {
   return hash.digest('hex').slice(0, 16);
 }
 
+async function worldInventory(output, number, files) {
+  const generation = createHash('sha256');
+  const hashes = {};
+  for (const path of files) {
+    const bytes = await readFile(join(output, path));
+    // Keep the old version calculation so identical installed packs still match.
+    generation.update(path + '\0').update(bytes);
+    hashes['/' + path] = createHash('sha256').update(bytes).digest('hex');
+  }
+  return {number, version:generation.digest('hex').slice(0, 16), files:Object.keys(hashes), hashes};
+}
+
 export function mobileBuild() {
   let output;
   let runtime;
@@ -150,9 +162,8 @@ export function mobileBuild() {
       const shellFiles = ['index.html', 'styles.css', ...mobileFiles, ...assets,
         'licenses/coding-dungeons.txt', ...Object.keys(dependencyNotices).map(name => 'licenses/' + name)];
       const worker = await readFile(new URL('src/mobile/service-worker.js', project), 'utf8');
-      const worlds = await Promise.all(books.map(async (files, index) => [worldIds[index], {
-        number:index + 1, version:await contentVersion(output, files), files:files.map(path => '/' + path),
-      }]));
+      const worlds = await Promise.all(books.map(async (files, index) => [worldIds[index],
+        await worldInventory(output, index + 1, files)]));
       const manifest = {
         shellVersion:await contentVersion(output, shellFiles, worker),
         shellFiles:shellFiles.map(path => '/' + path),

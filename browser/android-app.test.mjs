@@ -10,6 +10,7 @@ import typescriptExercises from '../data/workbench/typescript.mjs';
 import goExercises from '../data/workbench/go.mjs';
 import {normalizeWorkbenchJob} from '../lib/workbench-runner-job.mjs';
 import {quickjsSecurityCases, quickjsSecurityJob} from '../test/fixtures/quickjs-security.mjs';
+import {diamondName, diamondSolution} from './diamond-fixture.mjs';
 
 // This harness owns only the separately installed debug application. It never
 // installs an APK, clears application data, starts Chrome, or creates a reverse.
@@ -253,6 +254,39 @@ async function checkPackagedQuickJS(t, page) {
   }
   t.diagnostic(`JavaScript and TypeScript: all ${quickjsSecurityCases.length} engine regressions passed in the installed APK worker.`);
 }
+
+test('the installed Android test APK dismisses goblin victory while keeping its reward', {
+  skip:!serial && 'Set FERRUM_ANDROID_EMULATOR and FERRUM_ADB after installing the debug APK.',
+  timeout:90_000,
+}, async t => {
+  const {page} = await attach(t);
+  await createHero(page, worlds.find(world => world.id === 'javascript'), `Goblin ${Date.now().toString(36)}`);
+  const diamond = page.getByRole('button', {name:diamondName});
+  for (let number = 1; number <= 8; number++) {
+    const input = page.locator('#page-number:visible');
+    await input.fill(String(number));
+    await input.press('Enter');
+    await bookPage(page, number);
+    if (await diamond.waitFor({timeout:500}).then(() => true, () => false)) break;
+  }
+  await diamond.click();
+  const fight = page.locator('.diamond-encounter');
+  await fight.getByRole('textbox', {name:'Goblin code'}).fill(diamondSolution);
+  await fight.getByRole('button', {name:'Submit code', exact:true}).click();
+  await fight.getByRole('radio', {name:'values.slice()', exact:true}).check();
+  await fight.getByRole('button', {name:'Submit answer', exact:true}).click();
+  await fight.getByText('Goblin defeated', {exact:true}).waitFor();
+  await fight.getByRole('button', {name:'Continue adventure', exact:true}).click();
+  await fight.waitFor({state:'hidden'});
+  assert.equal(await page.locator('#guide-panel').evaluate(node => document.activeElement === node), true);
+  await page.reload();
+  await page.locator('#page-frame:not([hidden]) img').waitFor();
+  await page.getByRole('tab', {name:'GM', exact:true}).click();
+  await fight.waitFor({state:'hidden'});
+  await (await openMenu(page)).getByRole('button', {name:'Character sheet', exact:true}).click();
+  await page.getByRole('dialog', {name:'Character sheet', exact:true})
+    .getByText('Diamonds collected · 3', {exact:true}).waitFor();
+});
 
 test('the installed Android test APK plays all four worlds offline and confines its WebView', {
   skip:!serial && 'Set FERRUM_ANDROID_EMULATOR and FERRUM_ADB after installing the debug APK.',

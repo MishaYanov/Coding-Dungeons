@@ -5,10 +5,11 @@ const lastPageKey = 'ferrum-last-page-v2';
 const selectedHeroKey = 'ferrum-selected-hero-v1';
 const selectedWorldKey = 'ferrum-mobile-world-v1';
 const mobile = import.meta.env?.MODE === 'mobile';
-const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|refactoring$|system-design$|rate-limiter$)/;
+const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|merchant(?:\/|$)|refactoring$|system-design$|rate-limiter$)/;
 const emptyProgress = () => ({
   levels: new Map(), responses: new Map(), attempts: [], workbenchModes: new Map(),
   hardClears: new Set(), hardExerciseClears: new Set(), exerciseClears: null, progressError: '', forgeAnimation: null,
+  merchant: null,
 });
 
 export function pageNumber(value) {
@@ -84,12 +85,17 @@ function savedHero(world) {
   }
 }
 
+export function isDiamondComplete(diamond) {
+  return Boolean(diamond?.encounter?.stages?.length
+    && diamond.encounter.stages.every(stage => diamond.completed?.includes(stage.id)));
+}
+
 export function createGame() {
   let game = {
     ...emptyProgress(), worlds: [], world: null, campaign: {}, campaignError: '',
     hero: null, profile: { callsign: 'Explorer', path: '' }, drafts: new Map(),
     combat: null, combatNotice: '', potionBusy: false, switchingHero: false,
-    diamond: null, diamonds: 0, diamondStarting: false, diamondFocus: false,
+    diamond: null, diamonds: 0, diamondStarting: false, diamondFocus: false, diamondVictory: false,
     runner: '', runnerDetail: '', storage: '', page: null, total: null, zoom: 1, dialog: null,
     loading: true, ready: false, readerMessage: 'Opening the campaign book…',
     pageError: null, toast: '',
@@ -100,6 +106,7 @@ export function createGame() {
   let pageRequest = 0;
   let progressRequest = 0;
   let combatVersion = 0;
+  let merchantVersion = 0;
   let pendingCombat;
   let toastTimer;
   let positionWrites = Promise.resolve();
@@ -178,16 +185,39 @@ export function createGame() {
     try {
       const result = await api(path, {
         ...options, hero, method: 'POST',
-        body: { ...options.body, submissionId: crypto.randomUUID() },
+        body: { ...options.body, submissionId: options.body?.submissionId ?? crypto.randomUUID() },
       });
       if (isCurrentHero(hero)) {
         combatVersion++;
+        if (result.merchant) {
+          merchantVersion++;
+          update({ merchant: result.merchant });
+        }
         if (result.combat) update({ combat: result.combat, combatNotice: combatNotice(result.combatEvent) });
       }
       return result;
     } finally {
       if (pendingCombat === request) pendingCombat = null;
     }
+  }
+
+  async function refreshMerchant() {
+    const hero = game.hero;
+    if (!hero || game.switchingHero) return;
+    const version = ++merchantVersion;
+    const merchant = await api('/api/merchant', { hero });
+    if (isCurrentHero(hero) && version === merchantVersion) update({ merchant });
+  }
+
+  async function equipMerchant(itemId, equipped) {
+    const hero = game.hero;
+    if (!hero || game.switchingHero) return;
+    const result = await api('/api/merchant/equip', { hero, method: 'POST', body: { itemId, equipped } });
+    if (isCurrentHero(hero)) {
+      merchantVersion++;
+      update({ merchant: result.merchant });
+    }
+    return result;
   }
 
   async function drinkPotion() {
@@ -208,6 +238,7 @@ export function createGame() {
     if (!hero) return;
     const request = ++progressRequest;
     const healthVersion = combatVersion;
+    const shopVersion = merchantVersion;
     try {
       const progress = await api('/api/progress', { hero });
       if (!isCurrentHero(hero) || request !== progressRequest) return;
@@ -223,6 +254,7 @@ export function createGame() {
         hardExerciseClears: new Set(progress.workbench?.hardExerciseClears ?? []),
         exerciseClears: Array.isArray(progress.workbench?.clears) ? new Set(progress.workbench.clears) : null,
         ...(healthVersion === combatVersion && progress.combat ? { combat: progress.combat } : {}),
+        ...(shopVersion === merchantVersion && progress.merchant ? { merchant: progress.merchant } : {}),
         progressError: '',
         forgeAnimation: animateForgeLevel,
       });
@@ -264,7 +296,17 @@ export function createGame() {
   }
 
   function setDiamond(diamond) {
-    update({ diamond, diamonds: diamond?.diamonds ?? 0 });
+    // Saved completion is permanent; its victory card belongs only to the live
+    // transition from an unfinished fight, not to every subsequent book page.
+    const victory = isDiamondComplete(diamond) && Boolean(game.diamondVictory
+      || game.diamond?.encounter?.id === diamond.encounter.id && !isDiamondComplete(game.diamond));
+    const earnedMore = (diamond?.diamonds ?? 0) > game.diamonds;
+    update({ diamond, diamonds: diamond?.diamonds ?? 0, diamondVictory: victory });
+    if (earnedMore && game.merchant?.earned !== diamond.diamonds) void refreshMerchant().catch(() => {});
+  }
+
+  function dismissDiamond() {
+    if (isDiamondComplete(game.diamond)) update({ diamondVictory: false, diamondFocus: false });
   }
 
   async function loadDiamond(page, request, hero) {
@@ -286,7 +328,8 @@ export function createGame() {
     update({ diamondStarting: true });
     try {
       const started = await api('/api/diamond/start', { hero, method: 'POST', body: { page: page.page } });
-      if (isCurrentHero(hero)) update({ diamond: started, diamonds: started.diamonds ?? 0, diamondFocus: true });
+      if (isCurrentHero(hero)) update({ diamond: started, diamonds: started.diamonds ?? 0,
+        diamondFocus: true, diamondVictory: false });
     } catch (error) {
       if (isCurrentHero(hero)) toast(error.message);
     } finally {
@@ -304,6 +347,7 @@ export function createGame() {
     update({
       loading: true, pageError: null, readerMessage: `Opening page ${number}…`, forgeAnimation: null,
       diamond: game.diamond?.encounter ? game.diamond : null,
+      diamondVictory: false, diamondFocus: false,
     });
     try {
       const data = await api(`/api/pages/${number}`);
@@ -372,7 +416,7 @@ export function createGame() {
     update({
       ...emptyProgress(), hero, drafts: readDrafts(game.world, hero), combat: hero.combat || null,
       combatNotice: '', potionBusy: false, diamond: null, diamonds: 0,
-      diamondStarting: false, diamondFocus: false, page: null, pageError: null,
+      diamondStarting: false, diamondFocus: false, diamondVictory: false, page: null, pageError: null,
       profile: { callsign: hero.name || 'Explorer', path: hero.path === 'all' ? '' : hero.path || '',
         lastPage: pageNumber(hero.lastPage) },
       ready: false, loading: true, readerMessage: 'Opening your expedition…', toast: '',
@@ -426,7 +470,7 @@ export function createGame() {
         update({
           ...emptyProgress(), hero: null, drafts: new Map(), profile: { callsign: 'Explorer', path: '' },
           combat: null, combatNotice: '', potionBusy: false, diamond: null, diamonds: 0,
-          diamondStarting: false, diamondFocus: false, page: null, pageError: null, ready: false,
+          diamondStarting: false, diamondFocus: false, diamondVictory: false, page: null, pageError: null, ready: false,
           loading: false, dialog: 'hero', toast: '', readerMessage: 'Choose a hero to open the campaign book.',
         });
       }
@@ -497,7 +541,7 @@ export function createGame() {
     actions: {
       api, boot, isCurrentHero, submitExpedition, persistDraft, clearDraft, refreshProgress, setMode, recordResponse,
       openPage, loadPage, readHash, changeZoom, openDialog, closeDialog, selectHero, deleteHero, saveProfile,
-      drinkPotion, startDiamond, setDiamond, toast,
+      drinkPotion, startDiamond, setDiamond, dismissDiamond, refreshMerchant, equipMerchant, toast,
     },
   };
 }

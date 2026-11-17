@@ -826,3 +826,13 @@ dialog::backdrop { background: #050a10b8; }
 }
 
 @media (prefers-reduced-motion: reduce) { .loading-mark { animation: none; } }
+
+.merchant-content, .merchant-room, .merchant-room form { display: grid; gap: 12px; }
+.merchant-balance, .merchant-item { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.merchant-balance { color: var(--teal); }
+.merchant-items { display: grid; gap: 8px; list-style: none; padding: 0; margin: 0; }
+.merchant-item > div { flex: 1 1 190px; }
+.merchant-room form > .button { justify-self: start; }
+.hero-title { color: var(--teal); font-weight: 700; }
+.sheet-hero[data-hero-skin="emerald-cloak"] { background: linear-gradient(135deg, #194839, #17292c); border-color: #ad9563; }
+.profile-mark[data-hero-skin="emerald-cloak"] { background: #194839; border-color: #ad9563; color: #f4d68f; }

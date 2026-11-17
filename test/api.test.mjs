@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline';
 import { DatabaseSync } from 'node:sqlite';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { openStore } from '../lib/store.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const mutationHeaders = { 'Content-Type': 'application/json', 'X-Ferrum-Request': '1' };
@@ -119,6 +120,19 @@ async function createOneLifeHero(name, headers) {
   return hero;
 }
 
+async function seedGoblinVictory(hero) {
+  // Simulate an existing save from before the merchant was released.
+  const {dir, name, ext} = parse(database);
+  const store = await openStore({file:join(dir, `${name}.javascript${ext}`)});
+  try {
+    store.startDiamondEncounter(hero.id, 1);
+    store.recordEncounterStage(hero.id, 'diamond-goblin', 'code', {correct:true, feedback:'Passed.'});
+    store.recordEncounterStage(hero.id, 'diamond-goblin', 'choice', {correct:true, feedback:'Correct.'});
+  } finally {
+    store.close();
+  }
+}
+
 test('the hidden diamond opens a private two-stage ambush and awards the bag once', async () => {
   const headers = javascriptWorld;
   const hero = await createOneLifeHero('Gem Hunter', headers);
@@ -186,6 +200,88 @@ test('the hidden diamond opens a private two-stage ambush and awards the bag onc
   assert.equal(reloaded.sparkle, null);
   assert.equal(reloaded.diamonds, 3);
   assert.deepEqual((await request('/api/progress', {hero, headers})).payload.workbench.clears, []);
+});
+
+test('the merchant spends existing goblin loot once, unlocks a private quiz, and preserves hero isolation', async () => {
+  const headers = javascriptWorld;
+  const hero = await createOneLifeHero('Vault Hunter', headers);
+  const other = await createOneLifeHero('New Vault Scout', headers);
+  const read = async (selected = hero) => (await request('/api/merchant', {hero:selected, headers})).payload;
+  const post = async (action, body, status = 200) => (await request(`/api/merchant/${action}`, {
+    method:'POST', headers, hero, body, status,
+  })).payload;
+  const equip = (itemId, equipped, status) => post('equip', {itemId, equipped}, status);
+  const buy = (itemId, submissionId = randomUUID(), status) => post('purchase', {itemId, submissionId}, status);
+  const quiz = (answers, submissionId = randomUUID(), status) => post('challenge', {answers, submissionId}, status);
+  const correct = {'order-keys':'b', 'zero-quantity':'c'};
+
+  await request('/api/merchant', {headers, status:401});
+  await request('/api/merchant', {hero, headers:{'X-Ferrum-World':'rust'}, status:401});
+  const initial = await read();
+  assert.equal(initial.balance, 0);
+  assert.deepEqual(initial.challenge.questions, []);
+  await quiz(correct, randomUUID(), 409);
+  await buy('vault-key', randomUUID(), 409);
+  await equip('emerald-cloak', true, 409);
+  await post('purchase', {itemId:'potion', submissionId:randomUUID(), price:0}, 400);
+
+  await seedGoblinVictory(hero);
+  assert.equal((await read()).balance, 3);
+  assert.equal((await read(other)).balance, 0);
+
+  const skinId = randomUUID();
+  const purchased = await Promise.all([buy('emerald-cloak', skinId), buy('emerald-cloak', skinId)]);
+  assert.ok(purchased.every(({merchant}) => merchant.balance === 2));
+  assert.equal((await equip('emerald-cloak', true)).merchant.equipped.skin, 'emerald-cloak');
+  assert.equal((await equip('emerald-cloak', false)).merchant.equipped.skin, null);
+  assert.equal((await equip('emerald-cloak', true)).merchant.equipped.skin, 'emerald-cloak');
+  await buy('gemkeeper', skinId, 409);
+  const opened = (await buy('vault-key')).merchant;
+  assert.equal(opened.balance, 0);
+  assert.equal(opened.challenge.unlocked, true);
+  assert.equal(opened.challenge.questions.length, 2);
+  assert.ok(opened.challenge.questions.every(question => !Object.hasOwn(question, 'answer') && !Object.hasOwn(question, 'explanation')));
+  await buy('potion', randomUUID(), 409);
+  const miss = await quiz({...correct, 'order-keys':'a'});
+  assert.equal(miss.report.correct, false);
+  assert.equal(miss.combat.hp, 100);
+  assert.equal(miss.combatEvent.damage, 0);
+  const clearId = randomUUID();
+  const win = await quiz(correct, clearId);
+  assert.equal(win.report.correct, true);
+  assert.equal(win.combat.potions, 1);
+  assert.equal(win.merchant.challenge.cleared, true);
+  const replay = await quiz({'zero-quantity':'c', 'order-keys':'b'}, clearId);
+  assert.deepEqual(replay.report, win.report);
+  await quiz(correct, randomUUID(), 409);
+
+  await stop();
+  await start();
+  const saved = await read();
+  assert.deepEqual(saved, win.merchant);
+  assert.equal(saved.earned, 3);
+  assert.equal(saved.equipped.skin, 'emerald-cloak');
+  assert.equal((await request('/api/progress', {hero, headers})).payload.merchant.challenge.cleared, true);
+  assert.equal((await read(other)).challenge.unlocked, false);
+});
+
+test('concurrent merchant potion retries charge one diamond and grant one usable potion', async () => {
+  const headers = javascriptWorld;
+  const hero = await createOneLifeHero('Potion Merchant Scout', headers);
+  await seedGoblinVictory(hero);
+  const submissionId = randomUUID();
+  const buy = () => request('/api/merchant/purchase', {hero, headers, method:'POST', body:{itemId:'potion', submissionId}})
+    .then(({payload}) => payload);
+  const results = await Promise.all([buy(), buy(), buy()]);
+  assert.ok(results.every(result => result.merchant.balance === 2 && result.combat.potions === 2));
+  assert.deepEqual(results.map(result => result.combatEvent.potionsEarned).sort(), [0, 0, 1]);
+  const sameShop = {hero, headers, method:'POST'};
+  const {payload:miss} = await request('/api/trials/dispatch-floor-trial', {...sameShop,
+    body:{answers:{'relay-order':'a', 'badge-identity':'a'}, submissionId:randomUUID()}});
+  assert.equal(miss.combat.hp, 95);
+  const {payload:healed} = await request('/api/combat/potion', {...sameShop, body:{submissionId:randomUUID()}});
+  assert.equal(healed.combat.hp, 100);
+  assert.equal(healed.combat.potions, 1);
 });
 
 test('One Life charges one wrong answer once and a potion heals only missing HP', async () => {

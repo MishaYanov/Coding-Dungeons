@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import test from 'node:test';
 import rubrics from '../data/gm-rubrics.json' with {type:'json'};
 import { createMobileEngine } from '../lib/mobile/engine.mjs';
@@ -272,6 +273,23 @@ test('TypeScript examples skip type contracts while a full offline submission in
   assert.equal(submitted.combat.potions, 2);
 });
 
+test('mobile backups retain valid drafts above the former 2 MiB per-hero export limit', async () => {
+  const original = fixture();
+  const {hero} = await original.api('/api/heroes', {method:'POST', body:{name:'Draft Keeper'}});
+  const key = mobileReaderKey('javascript', 'ferrum-prompt-drafts-v2', hero.id);
+  const drafts = Object.fromEntries(Array.from({length:47}, (_, index) => [
+    `${index + 1}:notes`, 'x'.repeat(48 * 1024),
+  ]));
+  original.storage.setItem(key, JSON.stringify(drafts));
+  const backup = await original.exportBackup();
+  const restored = fixture();
+  assert.deepEqual(await restored.importBackup(backup), {imported:1, readerRestored:true});
+  const hash = value => value && createHash('sha256').update(value).digest('hex');
+  assert.equal(hash(restored.storage.getItem(key)), hash(JSON.stringify(drafts)));
+  original.storage.setItem(key, '{damaged');
+  await assert.rejects(original.exportBackup(), /Unsent drafts for Draft Keeper could not be included/);
+});
+
 test('Rust and Go retain drafts and backups when code grading is unavailable', async () => {
   for (const worldId of ['rust', 'go']) {
     const {api, calls, exportBackup, storage} = fixture({worldId});
@@ -503,6 +521,119 @@ test('mobile written review matches rubrics to their world', () => {
   assert.ok(reviewWritten(forPrompt('rust', 'training-1-3'), 'The shared borrow ends at the last use.').score > 0);
   assert.ok(reviewWritten(forPrompt('go', 'side-1'), 'len returns two. Iteration yields one rune.').score > 0);
   assert.equal(reviewWritten(forPrompt('javascript', 'side-1'), 'len returns two. Iteration yields one rune.').score, null);
+});
+
+async function earnMerchantDiamonds(api, hero) {
+  const post = (path, body) => api(path, {method:'POST', hero, body});
+  const views = await Promise.all(Array.from({length:8}, (_, index) => api(`/api/diamond?page=${index + 1}`, {hero})));
+  await post('/api/diamond/start', {page:views.findIndex(view => view.sparkle) + 1});
+  await post('/api/diamond/submit', {stageId:'code', code:'correct', submissionId:'merchant-lock'});
+  return post('/api/diamond/submit', {stageId:'choice', optionId:'slice', submissionId:'merchant-riddle'});
+}
+
+test('offline merchant purchases settle once and stay scoped to the hero', async () => {
+  const {api, repository, exportBackup} = fixture();
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Vault Explorer', oneLife:true}});
+  const {hero:other} = await api('/api/heroes', {method:'POST', body:{name:'Another Explorer'}});
+  const merchant = path => `/api/merchant${path ? `/${path}` : ''}`;
+  const post = (path, body) => api(merchant(path), {method:'POST', hero, body});
+  const purchase = (itemId, submissionId) => post('purchase', {itemId, submissionId});
+  const initial = await api(merchant(), {hero});
+  assert.equal(initial.balance, 0);
+  assert.deepEqual(initial.challenge.questions, []);
+  await assert.rejects(purchase('potion', 'no-funds'), {status:409});
+  await assert.rejects(post('equip', {itemId:'emerald-cloak', equipped:true}), {status:409});
+  const {combat:goblinCombat} = await earnMerchantDiamonds(api, hero);
+  await assert.rejects(post('purchase', {itemId:'potion', submissionId:'invalid', price:0}), {status:400});
+  await assert.rejects(post('equip', {itemId:'emerald-cloak'}), {status:400});
+
+  const backup = await exportBackup();
+  backup.heroes.find(record => record.hero.id === hero.id).potions = 10_000;
+  const fullBag = fixture();
+  await fullBag.importBackup(backup);
+  await assert.rejects(fullBag.api(merchant('purchase'), {method:'POST', hero,
+    body:{itemId:'potion', submissionId:'bag-full'}}), {status:409});
+  const unchanged = await fullBag.api('/api/progress', {hero});
+  assert.equal(unchanged.merchant.balance, 3);
+  assert.equal(unchanged.combat.potions, 10_000);
+
+  const [first, replay] = await Promise.all([purchase('potion', 'potion-1'), purchase('potion', 'potion-1')]);
+  assert.equal(first.combat.potions, goblinCombat.potions + 1);
+  assert.equal(first.merchant.balance, 2);
+  assert.deepEqual(replay.merchant, first.merchant);
+  assert.deepEqual(replay.combat, first.combat);
+  assert.deepEqual([first.combatEvent.potionsEarned, replay.combatEvent.potionsEarned].sort(), [0, 1]);
+  await assert.rejects(purchase('vault-key', 'potion-1'), /already been used/);
+
+  const results = await Promise.allSettled([purchase('vault-key', 'key-1'), purchase('emerald-cloak', 'cloak-1')]);
+  assert.equal(results.filter(({status}) => status === 'fulfilled').length, 1);
+  assert.equal(results.find(({status}) => status === 'rejected').reason.status, 409);
+  const current = await api(merchant(), {hero});
+  const wonKey = current.challenge.unlocked;
+  if (!wonKey) {
+    await post('equip', {itemId:'emerald-cloak', equipped:true});
+    assert.equal((await api(merchant(), {hero})).equipped.skin, 'emerald-cloak');
+  }
+  const reloaded = fixture({repository});
+  assert.equal((await reloaded.api('/api/progress', {hero})).merchant.balance, wonKey ? 0 : 1);
+  const replayed = await purchase('potion', 'potion-1');
+  assert.equal(replayed.merchant.balance, wonKey ? 0 : 1);
+  assert.equal(replayed.combat.potions, goblinCombat.potions + 1);
+  assert.equal(replayed.combatEvent.potionsEarned, 0);
+  assert.equal((await api(merchant(), {hero:other})).balance, 0);
+  await earnMerchantDiamonds(api, other);
+  await assert.rejects(api(merchant('purchase'), {method:'POST', hero:other,
+    body:{itemId:'potion', submissionId:'standard-potion'}}), {status:409});
+  assert.equal((await api('/api/diamond?page=1', {hero})).diamonds, 3);
+});
+
+test('mobile vault completion and equipped loot survive backup and legacy goblin rewards stay spendable', async () => {
+  const original = fixture();
+  const {api} = original;
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Vault Keeper', oneLife:true}});
+  const {combat:goblinCombat} = await earnMerchantDiamonds(api, hero);
+  const legacy = await original.exportBackup();
+  delete legacy.heroes[0].merchant;
+  const restored = fixture();
+  await restored.importBackup(legacy);
+  const post = (action, body) => restored.api(`/api/merchant/${action}`, {method:'POST', body, hero});
+  assert.equal((await restored.api('/api/merchant', {hero})).balance, 3);
+  const winningSubmission = {answers:{'order-keys':'b','zero-quantity':'c'}, submissionId:'vault-clear'};
+  await assert.rejects(post('challenge', winningSubmission), {status:409});
+  await post('purchase', {itemId:'gemkeeper', submissionId:'title'});
+  await post('equip', {itemId:'gemkeeper', equipped:true});
+  const {merchant:open} = await post('purchase', {itemId:'vault-key', submissionId:'key'});
+  assert.equal(open.equipped.title, 'gemkeeper');
+  assert.equal(open.balance, 0);
+  assert.equal(open.challenge.questions.length, 2);
+  const attempt = await post('challenge', {answers:{'order-keys':'a','zero-quantity':'c'}, submissionId:'vault-retry'});
+  assert.equal(attempt.report.correct, false);
+  assert.equal(attempt.merchant.challenge.unlocked, true);
+  assert.equal(attempt.combatEvent.damage, 0);
+  assert.equal(attempt.combat.hp, goblinCombat.hp);
+  const cleared = await post('challenge', winningSubmission);
+  assert.equal(cleared.report.correct, true);
+  assert.equal(cleared.combat.potions, goblinCombat.potions);
+  const reversed = Object.fromEntries(Object.entries(winningSubmission.answers).reverse());
+  assert.equal((await post('challenge', {...winningSubmission, answers:reversed})).report.correct, true);
+  const backup = await restored.exportBackup();
+  for (const mutate of [
+    state => { state.potionsBought = 1; },
+    state => { state.owned.push('emerald-cloak'); },
+    state => { state.owned = ['gemkeeper']; },
+    state => { state.skin = 'emerald-cloak'; },
+  ]) {
+    const invalid = structuredClone(backup);
+    mutate(invalid.heroes[0].merchant);
+    await assert.rejects(fixture().importBackup(invalid), /valid JavaScript backup/);
+  }
+  const imported = fixture();
+  await imported.importBackup(backup);
+  const final = await imported.api('/api/merchant', {hero});
+  assert.equal(final.challenge.cleared, true);
+  assert.equal(final.equipped.title, 'gemkeeper');
+  assert.equal(final.balance, 0);
+  assert.equal((await imported.api('/api/merchant/challenge', {method:'POST', hero, body:winningSubmission})).report.correct, true);
 });
 
 test('each World opens a distinct IndexedDB and JavaScript keeps the established database name', async () => {

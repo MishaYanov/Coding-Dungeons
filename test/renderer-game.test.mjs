@@ -69,6 +69,54 @@ function fixture(t, intercept = () => undefined) {
   return { ...createGame(), location, localStorage, sessionStorage, requests };
 }
 
+const goblin = {
+  encounter: {id:'diamond-goblin', stages:[{id:'code'}, {id:'choice'}]},
+  completed:['code'], diamonds:0,
+};
+const defeatedGoblin = {...goblin, completed:['code', 'choice'], diamonds:3};
+
+test('goblin victory can be dismissed without removing progress or reopening on a repeated result', async t => {
+  const game = fixture(t);
+  await game.actions.boot();
+  game.actions.setDiamond(goblin);
+  game.actions.setDiamond(defeatedGoblin);
+  assert.equal(game.getSnapshot().diamondVictory, true);
+  game.actions.dismissDiamond();
+  assert.equal(game.getSnapshot().diamondVictory, false);
+  assert.deepEqual(game.getSnapshot().diamond, defeatedGoblin);
+  assert.equal(game.getSnapshot().diamonds, 3);
+  game.actions.setDiamond(defeatedGoblin);
+  assert.equal(game.getSnapshot().diamondVictory, false);
+});
+
+test('page navigation hides a completed goblin but preserves an unfinished fight', async t => {
+  const game = fixture(t);
+  await game.actions.boot();
+  game.actions.setDiamond(goblin);
+  game.actions.dismissDiamond();
+  await game.actions.loadPage(2);
+  assert.deepEqual(game.getSnapshot().diamond, goblin);
+  game.actions.setDiamond(defeatedGoblin);
+  assert.equal(game.getSnapshot().diamondVictory, true);
+  await game.actions.loadPage(3);
+  assert.equal(game.getSnapshot().diamondVictory, false);
+  assert.equal(game.getSnapshot().diamondFocus, false);
+  assert.deepEqual(game.getSnapshot().diamond, defeatedGoblin);
+  await game.actions.loadPage(2);
+  assert.equal(game.getSnapshot().diamondVictory, false);
+  assert.equal(game.getSnapshot().diamonds, 3);
+});
+
+test('loading a saved goblin victory restores its reward without showing its success card', async t => {
+  const game = fixture(t, ({path}) => path.startsWith('/api/diamond?')
+    ? Response.json(defeatedGoblin) : undefined);
+  await game.actions.boot();
+  await setImmediate();
+  assert.deepEqual(game.getSnapshot().diamond, defeatedGoblin);
+  assert.equal(game.getSnapshot().diamonds, 3);
+  assert.equal(game.getSnapshot().diamondVictory, false);
+});
+
 test('a delayed startup restore cannot replace an explicitly chosen hero or save their page to the old hero', async (t) => {
   const restore = deferredResponse();
   const game = fixture(t, ({ path }) => path === '/api/heroes/load' ? restore.wait() : undefined);

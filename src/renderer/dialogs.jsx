@@ -453,7 +453,7 @@ function RecentRuns({ exercises, attempts, world, actions }) {
 }
 
 function CharacterSheet({ game, actions }) {
-  const { campaign, combat, world, profile, levels, attempts, hardClears } = game;
+  const { campaign, combat, world, profile, levels, attempts, hardClears, merchant } = game;
   const progress = characterProgress({ ...campaign, zones: zonesFor(campaign) }, levels, profile.path);
   const { heroLevel, heroLevelCap, xp, xpMax, nextLevelXp, counts, route, skills } = progress;
   const exercises = campaign.exercises ?? [];
@@ -466,7 +466,7 @@ function CharacterSheet({ game, actions }) {
     <Modal id="log" title="Character sheet" caption="EXPEDITION RECORD" className="drawer sheet-dialog"
       closeLabel="Close character sheet" close={actions.closeDialog}>
       <div id="log-content" className="dialog-content">
-        <div className="sheet-hero">
+        <div className="sheet-hero" data-hero-skin={merchant?.equipped.skin || undefined}>
           <div className="sheet-identity"><div className="sheet-name"><p className="eyebrow">{world.name}</p><h3>{profile.callsign}</h3>
             <p className="fine-print">{route?.name || 'Open expedition'}</p></div>
             <strong className="sheet-level">Hero level {heroLevel} / {heroLevelCap}</strong></div>
@@ -475,6 +475,10 @@ function CharacterSheet({ game, actions }) {
           <div className="sheet-milestones">
             <p>World: {progress.completed} of {progress.total} levels complete</p>
             <p id="diamond-total">Diamonds collected · {game.diamond?.diamonds ?? 0}</p>
+            {merchant && <p>Diamonds to spend · {merchant.balance}</p>}
+            {merchant?.equipped.title === 'gemkeeper' && <p className="hero-title">Gemkeeper</p>}
+            {merchant?.equipped.skin === 'emerald-cloak' && <p>Skin · Emerald Cloak</p>}
+            {merchant?.challenge.cleared && <p>Vault cleared · {merchant.challenge.title}</p>}
             {combat && <p>Trials cleared · {combat.completedTrials.length}</p>}
             {combat?.oneLife && <p>One Life · {combat.hp} / {combat.maxHp} HP · {combat.potions} {combat.potions === 1 ? 'potion' : 'potions'}{combat.fallen ? ' · Fallen' : ''}</p>}
             {route && <p>Active path: {route.completed} of {route.total} levels complete</p>}
@@ -498,6 +502,25 @@ function CharacterSheet({ game, actions }) {
       </div>
     </Modal>
   );
+}
+
+function QuizQuestions({ questions, disabled, answers, choose }) {
+  return <div className="trial-questions">
+    {questions.map(question => <fieldset key={question.id} className="choice-group" disabled={disabled}>
+      <legend>{question.text}</legend>
+      {question.options.map(option => <label className="choice-option trial-option" key={option.id}>
+        <span>{option.text}</span><input type="radio" name={question.id} value={option.id} required
+          checked={answers[question.id] === option.id} onChange={() => choose(question.id, option.id)} />
+      </label>)}
+    </fieldset>)}
+  </div>;
+}
+
+function QuizFeedback({ report }) {
+  if (!report) return null;
+  return <ol className="trial-feedback">{report.feedback.map(item => <li key={item.id}>
+    {item.correct ? 'Correct' : 'Review'} · {item.explanation}
+  </li>)}</ol>;
 }
 
 function TrialForm({ trial, combat, actions }) {
@@ -527,22 +550,15 @@ function TrialForm({ trial, combat, actions }) {
   return (
     <form className="field-card trial-form" onSubmit={submit}>
       <h3>{trial.title}</h3><p className="muted">{trial.description}</p>
-      <div className="trial-questions">
-        {trial.questions.map((question) => <fieldset key={question.id} className="choice-group" disabled={disabled}>
-          <legend>{question.text}</legend>
-          {question.options.map((option) => <label className="choice-option trial-option" key={option.id}>
-            <span>{option.text}</span><input type="radio" name={question.id} value={option.id} required checked={answers[question.id] === option.id}
-              onChange={() => setAnswers((current) => ({ ...current, [question.id]: option.id }))} />
-          </label>)}
-        </fieldset>)}
-      </div>
+      <QuizQuestions questions={trial.questions} disabled={disabled} answers={answers}
+        choose={(id, value) => setAnswers(current => ({ ...current, [id]: value }))} />
       <div className="form-actions">
         <button type="submit" className="button button-primary" disabled={disabled} data-expedition-submit="" data-trial-id={trial.id}>
           {cleared ? 'Trial cleared' : 'Submit trial'}
         </button>
         <p className="inline-status" role="status" data-error={Boolean(error || (report && !report.correct))}>{status}</p>
       </div>
-      {report && <ol className="trial-feedback">{report.feedback.map((item, index) => <li key={index}>{item.correct ? 'Correct' : 'Review'} · {item.explanation}</li>)}</ol>}
+      <QuizFeedback report={report} />
     </form>
   );
 }
@@ -587,6 +603,98 @@ function TrialBoard({ game, actions }) {
   );
 }
 
+function Merchant({ game, actions }) {
+  const {merchant, combat} = game;
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [answers, setAnswers] = useState({});
+  const [report, setReport] = useState(null);
+  const pending = useRef(false);
+  const retry = useRef(null);
+
+  useEffect(() => {
+    let current = true;
+    actions.refreshMerchant().catch(failure => {
+      if (current) setError(failure.message);
+    });
+    return () => { current = false; };
+  }, [actions]);
+
+  async function perform(operation) {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setStatus('');
+    setError('');
+    try {
+      await operation();
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function transact(action, body) {
+    const key = JSON.stringify([action, body]);
+    if (retry.current?.key !== key) retry.current = {key, id:crypto.randomUUID()};
+    const result = await actions.submitExpedition('/api/merchant/' + action,
+      {body:{...body, submissionId:retry.current.id}});
+    retry.current = null;
+    return result;
+  }
+
+  const room = merchant?.challenge;
+  return <Modal id="merchant" title="Diamond merchant" caption="WORLD SHOP" className="drawer merchant-dialog"
+    closeLabel="Close diamond merchant" close={actions.closeDialog} blocked={busy}>
+    <div className="dialog-content merchant-content">
+      {!merchant ? !error && <p>Opening the shop…</p> : <>
+        <div className="merchant-balance" aria-live="polite">
+          <strong>{merchant.balance} {merchant.balance === 1 ? 'diamond' : 'diamonds'} available</strong>
+          {combat?.oneLife && <span>{combat.potions} {combat.potions === 1 ? 'potion' : 'potions'} in your pack</span>}
+        </div>
+        {!merchant.earned && <p className="muted">Defeat the Diamond Goblin in this world to earn your diamonds.</p>}
+        <ul className="merchant-items">
+          {merchant.items.map(item => <li key={item.id} className="field-card merchant-item">
+            <div><h3>{item.name}</h3><p className="muted">{item.description}</p></div>
+            {item.owned && item.kind !== 'key' ? <button type="button" className="button button-quiet" disabled={busy}
+              onClick={() => perform(async () => {
+                await actions.equipMerchant(item.id, !item.equipped);
+                setStatus(`${item.name} ${item.equipped ? 'unequipped' : 'equipped'}.`);
+              })}>{item.equipped ? 'Unequip' : 'Equip'} {item.name}</button> :
+              <button type="button" className="button button-quiet" disabled={busy || !item.available}
+                onClick={() => perform(async () => {
+                  await transact('purchase', {itemId:item.id});
+                  setStatus(`${item.name} purchased.`);
+                })}>{item.owned ? 'Vault unlocked' : `Buy ${item.name} · ${item.price} ${item.price === 1 ? 'diamond' : 'diamonds'}`}</button>}
+          </li>)}
+        </ul>
+        <section className="field-card merchant-room" aria-labelledby="vault-title">
+          <h3 id="vault-title">{room.title}</h3>
+          <p>{room.description}</p>
+          {room.cleared ? <p className="special-victory">Vault cleared</p> : !room.unlocked ?
+            <p className="muted">Buy the Vault Key to enter.</p> : <form onSubmit={event => {
+              event.preventDefault();
+              void perform(async () => {
+                const result = await transact('challenge', {answers});
+                setReport(result.report);
+              });
+            }}>
+              <QuizQuestions questions={room.questions} disabled={busy || combat?.fallen} answers={answers}
+                choose={(id, value) => setAnswers(current => ({...current, [id]:value}))} />
+              <button type="submit" className="button button-primary" disabled={busy || combat?.fallen}>Submit vault answers</button>
+            </form>}
+          {report && <p role="status">{report.passed} / {report.total} correct</p>}
+          <QuizFeedback report={report} />
+        </section>
+      </>}
+      <p className="inline-status" role="status" data-error={Boolean(error)}>{error || (busy ? 'Working…' : status)}</p>
+    </div>
+  </Modal>;
+}
+
 export function Dialogs({ game, actions, mobileControls }) {
   if (game.dialog === 'world') return <WorldPicker game={game} actions={actions} />;
   if (game.dialog === 'hero' && game.world) return <HeroPicker game={game} actions={actions} mobileControls={mobileControls} />;
@@ -596,6 +704,7 @@ export function Dialogs({ game, actions, mobileControls }) {
     case 'profile': return <HeroProfile game={game} actions={actions} />;
     case 'log': return <CharacterSheet game={game} actions={actions} />;
     case 'trial': return <TrialBoard game={game} actions={actions} />;
+    case 'merchant': return <Merchant key={game.hero.id} game={game} actions={actions} />;
     default: return null;
   }
 }

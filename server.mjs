@@ -20,6 +20,7 @@ import { suggestions } from './data/workbench/suggestions.mjs';
 import { evaluateTrial, trialsFor } from './lib/trials.mjs';
 import { diamondExercise, diamondStage, diamondView, evaluateDiamondChoice, evaluateDiamondCode,
   refreshDiamondOutcome, settleDiamond, startDiamond } from './lib/diamond-encounter.mjs';
+import { equipMerchant, merchantView, purchaseMerchant, submitMerchantChallenge } from './lib/merchant.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const desktopToken = process.env.FERRUM_DESKTOP_TOKEN;
@@ -424,6 +425,7 @@ function currentProgress(world, heroId) {
   const progress = world.store.progress(heroId);
   progress.workbench = world.store.workbenchState(heroId);
   progress.combat = publicCombat(world.store.combatState(heroId));
+  progress.merchant = currentMerchant(world, heroId);
   for (const answer of progress.responses) {
     const page = world.pages[answer.page - 1];
     const prompt = page?.prompts.find(item => item.id === answer.promptId);
@@ -703,6 +705,52 @@ async function drinkPotion(request, response, store, heroId) {
   json(response, submissionResult(prior ?? store.consumePotion(heroId, ticket), true));
 }
 
+function currentMerchant(world, heroId) {
+  const {state, ...context} = world.store.merchantState(heroId);
+  return merchantView(world.info.id, state, context);
+}
+
+const merchantFields = new Map([
+  ['/api/merchant/purchase', ['itemId', 'submissionId']],
+  ['/api/merchant/equip', ['itemId', 'equipped']],
+  ['/api/merchant/challenge', ['answers', 'submissionId']],
+]);
+
+async function submitMerchant(request, response, world, heroId, path) {
+  const {store, info:{id:worldId}} = world;
+  const data = await readJson(request);
+  const fields = merchantFields.get(path);
+  if (Object.keys(data).length !== fields.length || !fields.every(field => Object.hasOwn(data, field))) {
+    throw new HttpError(400, 'Send the fields for this merchant action.');
+  }
+  if (path === '/api/merchant/equip') {
+    store.equipMerchant(heroId, state => equipMerchant(state, data.itemId, data.equipped));
+    return json(response, {merchant:currentMerchant(world, heroId)});
+  }
+  const purchase = path === '/api/merchant/purchase';
+  if (!purchase && (!data.answers || typeof data.answers !== 'object' || Array.isArray(data.answers))) {
+    throw new HttpError(400, 'Choose an answer for each vault question.');
+  }
+  const identity = purchase ? ['merchant', 'purchase', data.itemId]
+    : ['merchant', 'challenge', Object.entries(data.answers).sort(([a], [b]) => a.localeCompare(b))];
+  const {ticket, prior} = prepareSubmission(store, heroId, data, identity, true);
+  const outcome = prior ?? store.settleMerchant(heroId, ticket, purchase
+    ? (state, context) => purchaseMerchant(state, data.itemId, context)
+    : state => submitMerchantChallenge(worldId, state, data.answers));
+  return json(response, submissionResult({...outcome, result:{merchant:currentMerchant(world, heroId),
+    ...(purchase ? {} : {report:outcome.result})}}, true));
+}
+
+async function handleMerchant(request, response, world, path) {
+  const heroId = await requireHero(request, world);
+  try {
+    return await submitMerchant(request, response, world, heroId, path);
+  } catch (error) {
+    if ([400, 409].includes(error.status)) throw new HttpError(error.status, error.message);
+    throw error;
+  }
+}
+
 async function revealSuggestion(request, response, world, heroId) {
   const data = await readJson(request);
   const page = pageAt(world, data.page);
@@ -793,6 +841,7 @@ const server = createServer(async (request,response) => {
     if (method === 'GET') {
       if (path === '/api/campaign') return json(response, world.publicCampaign);
       if (path === '/api/trials') return json(response, {trials:trialsFor(world.info.id)});
+      if (path === '/api/merchant') return json(response, currentMerchant(world, await requireHero(request, world)));
       if (path === '/api/diamond') {
         const heroId = await requireHero(request, world);
         const page = pageAt(world, Number(searchParams.get('page'))).page;
@@ -855,6 +904,7 @@ const server = createServer(async (request,response) => {
       }
       if (path === '/api/diamond/submit') return await submitDiamond(request, response, world, await requireHero(request, world));
       if (path === '/api/combat/potion') return await drinkPotion(request, response, store, await requireHero(request, world));
+      if (merchantFields.has(path)) return await handleMerchant(request, response, world, path);
       if (path === '/api/heroes') return await createHero(request, response, world);
       if (path === '/api/heroes/load') return await loadHero(request, response, world);
       if (path === '/api/answers') return await saveAnswer(request, response, world, await requireHero(request, world));
@@ -869,6 +919,7 @@ const server = createServer(async (request,response) => {
     if (error.code === 'DIAMOND_NOT_FOUND') return json(response, {error:error.message}, 404);
     if (error.code === 'DIAMOND_STAGE_INVALID') return json(response, {error:error.message}, 400);
     if (error.code === 'DIAMOND_STAGE_LOCKED') return json(response, {error:error.message}, 409);
+    if (error.code === 'MERCHANT_HERO_MISSING') return json(response, {error:error.message}, 404);
     if (error.code === 'ERR_SQLITE_ERROR' && error.errcode === 787) {
       // A grading request may reach its final write after its hero was deleted.
       const world = worldMap.get(request.headers['x-ferrum-world'] ?? 'rust');
@@ -877,7 +928,7 @@ const server = createServer(async (request,response) => {
         return json(response, {error:'Hero not found.'}, 404);
       }
     }
-    if (['HERO_FALLEN','COMBAT_SUBMISSION_CONFLICT','POTION_UNAVAILABLE','HEALTH_FULL'].includes(error.code)) {
+    if (['HERO_FALLEN','COMBAT_SUBMISSION_CONFLICT','POTION_UNAVAILABLE','HEALTH_FULL','POTION_BAG_FULL'].includes(error.code)) {
       return json(response, {error:error.message}, 409);
     }
     if (!(error instanceof HttpError)) console.error(error.message);

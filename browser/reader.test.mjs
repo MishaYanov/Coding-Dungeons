@@ -741,6 +741,10 @@ test('a hidden diamond starts a saved goblin fight with two graded stages and on
   const submitAnswer = fight.getByRole('button', { name: 'Submit answer', exact: true });
   await submitAnswer.waitFor();
 
+  await jumpTo(page, offPage.number);
+  await submitAnswer.waitFor();
+  await jumpTo(page, visible[1].number);
+
   await page.reload();
   await openBookPage(page, visible[1].number);
   await submitAnswer.waitFor();
@@ -752,17 +756,46 @@ test('a hidden diamond starts a saved goblin fight with two graded stages and on
   await submitAnswer.click();
   await fight.getByText('Goblin defeated', { exact: true }).waitFor();
   await health.getByText('2 potions', { exact: true }).waitFor();
+  await fight.getByRole('button', { name: 'Continue adventure', exact: true }).click();
+  await fight.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#guide-panel').evaluate(node => document.activeElement === node), true);
 
   await page.reload();
   await openBookPage(page, visible[1].number);
+  await fight.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'Character sheet' }).click();
   const sheet = page.getByRole('dialog', { name: 'Character sheet' });
   await sheet.getByText('Diamonds collected · 3', { exact: true }).waitFor();
   await sheet.getByRole('button', { name: 'Close character sheet' }).click();
   await jumpTo(page, visible[0].number);
+  await fight.waitFor({ state: 'hidden' });
   await diamond.waitFor({ state: 'hidden' });
   const saved = await diamondPages(page, 16);
   assert.ok(saved.every(({ sparkle, diamonds }) => !sparkle && diamonds === 3));
+
+  await page.getByRole('button', { name: 'Merchant', exact: true }).click();
+  const shop = page.getByRole('dialog', { name: 'Diamond merchant' });
+  await shop.getByText('3 diamonds available', { exact: true }).waitFor();
+  await shop.getByText('Buy the Vault Key to enter.', { exact: true }).waitFor();
+  await shop.getByRole('button', { name: 'Buy Emerald Cloak · 1 diamond' }).click();
+  await shop.getByRole('button', { name: 'Equip Emerald Cloak', exact: true }).click();
+  await shop.getByRole('button', { name: 'Unequip Emerald Cloak', exact: true }).waitFor();
+  await shop.getByRole('button', { name: 'Buy Vault Key · 2 diamonds' }).click();
+  await shop.getByText('0 diamonds available', { exact: true }).waitFor();
+  assert.equal(await shop.getByRole('button', { name: 'Buy Healing potion · 1 diamond' }).isDisabled(), true);
+  await shop.getByRole('radio', { name: 'Use each object’s id string.', exact: true }).check();
+  await shop.getByRole('radio', { name: 'quantities.has(id)', exact: true }).check();
+  await shop.getByRole('button', { name: 'Submit vault answers', exact: true }).click();
+  await shop.getByText('Vault cleared', { exact: true }).waitFor();
+  await shop.getByText('2 / 2 correct', { exact: true }).waitFor();
+
+  await page.reload();
+  await openBookPage(page, visible[0].number);
+  await page.getByRole('button', { name: 'Character sheet' }).click();
+  await sheet.getByText('Diamonds to spend · 0', { exact: true }).waitFor();
+  await sheet.getByText('Diamonds collected · 3', { exact: true }).waitFor();
+  await sheet.getByText('Vault cleared · The Duplicate Dispatch', { exact: true }).waitFor();
+  assert.equal(await sheet.locator('.sheet-hero').getAttribute('data-hero-skin'), 'emerald-cloak');
 });
 
 test('an offline Rust runner leaves the goblin editor available and preserves Tab indentation', async (t) => {
