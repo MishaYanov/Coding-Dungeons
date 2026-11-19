@@ -125,6 +125,7 @@ test('offline browser JavaScript and TypeScript workers reject the QuickJS buffe
 test('offline browser side quest stages accept references and reject starters in all supported worlds', {timeout:90_000}, async t => {
   const {page, goReady} = await openProbe(t);
   for (const {world:language, catalog} of sideQuestRoutes.values()) {
+    if (language === 'rust') continue; // The Rust worker is exercised by mobile-rust.test.mjs.
     await t.test(catalog.title, {skip:language === 'go' && !goReady ? 'Stage the optional Go compiler pack.' : false}, async () => {
       for (const stage of catalog.stages.filter(stage => stage.kind === 'code')) {
         const carry = catalog.stages.find(previous => previous.id === stage.carryFrom)?.exercise.reference;
