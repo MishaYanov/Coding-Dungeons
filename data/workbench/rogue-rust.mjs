@@ -100,8 +100,8 @@ pub fn retry_delay(
 const retry = exercise({
   id:'rust-rogue-retry-budget', title:'Stop the retry storm', signature:retryTypes,
   starter:`${retryTypes} {
-    let _ = (max_attempts, cap_ms, remaining_ms, jitter, failure, idempotent);
-    Some(base_ms.saturating_mul(attempt as u64))
+    let _ = (attempt, max_attempts, cap_ms, remaining_ms, jitter, failure, idempotent);
+    Some(base_ms)
 }`,
   reference:`${retryTypes} {
     if attempt == 0 || attempt >= max_attempts || base_ms == 0 || cap_ms == 0 {
