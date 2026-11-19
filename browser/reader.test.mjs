@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright-core';
 import { assertDiamondWithinPage, diamondName, diamondPages, diamondSolution, goblinName } from './diamond-fixture.mjs';
+import {sideQuestRoutes} from '../lib/side-quests.mjs';
 
 const project = new URL('../', import.meta.url);
 const pages = JSON.parse(await readFile(new URL('data/pages.json', project), 'utf8'));
@@ -164,7 +165,7 @@ test('the JavaScript world map opens the Relay Ledger refactoring path', async (
   await openBookPage(page, 47);
   const quest = page.getByRole('region', {name:'Refactoring Quest · The Relay Ledger'});
   await quest.getByText('0 / 4 steps complete').waitFor();
-  await quest.getByText('Original ledger code', {exact:true}).click();
+  await quest.getByText('Original system code', {exact:true}).click();
   await quest.locator('pre').waitFor({state:'visible'});
   assert.equal(await quest.getByRole('list', {name:'Refactoring quest steps'}).getByRole('listitem').count(), 4);
 });
@@ -225,6 +226,42 @@ test('the TypeScript and Go World Maps open language-specific side quests', asyn
     await openBookPage(page, target);
     await code.waitFor();
     assert.equal(await code.inputValue(), draft);
+  }
+});
+
+test('the Rust and Go World Maps open the runaway repair story and persist its code draft', async t => {
+  for (const world of ['rust', 'go']) {
+    const endpoint = `/api/rogue-${world}`;
+    const {catalog} = sideQuestRoutes.get(endpoint);
+    const page = await newPage(t, '#page=1', world);
+    await createHero(page, `Midnight Scout ${world}`, 1);
+    const campaign = await page.evaluate(async world => (await fetch('/api/campaign', {
+      headers:{'x-ferrum-world':world},
+    })).json(), world);
+    const target = campaign.sideQuests.find(quest => quest.slug === `rogue-${world}`).page;
+    await page.getByRole('button', {name:'World map', exact:true}).click();
+    await page.getByRole('dialog', {name:'World map', exact:true}).getByRole('link', {name:catalog.title, exact:true}).click();
+    await openBookPage(page, target);
+    const quest = page.getByRole('region', {name:catalog.title, exact:true});
+    await quest.getByText(`0 / ${catalog.stages.length} steps complete`, {exact:true}).waitFor();
+    await quest.getByText('Original system code', {exact:true}).click();
+    await quest.locator('pre').waitFor({state:'visible'});
+    const first = catalog.stages[0];
+    const answer = first.options.find(option => option.id === first.answer).label;
+    await quest.getByRole('radio', {name:answer, exact:true}).check();
+    await quest.getByRole('button', {name:'Check answer', exact:true}).click();
+    await quest.getByText(`1 / ${catalog.stages.length} steps complete`, {exact:true}).waitFor();
+    const editor = quest.getByRole('textbox', {name:`${world === 'rust' ? 'Rust' : 'Go'} side quest code`, exact:true});
+    await editor.waitFor();
+    await quest.getByText(/You can keep editing your draft/).waitFor();
+    assert.equal(await quest.getByRole('button', {name:'Submit solution', exact:true}).isDisabled(), true);
+    const draft = `${await editor.inputValue()}\n// Midnight repair checkpoint.`;
+    await editor.fill(draft);
+    await page.reload();
+    await openBookPage(page, target);
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), draft);
+    await quest.getByText(`1 / ${catalog.stages.length} steps complete`, {exact:true}).waitFor();
   }
 });
 

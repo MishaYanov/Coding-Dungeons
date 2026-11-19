@@ -186,7 +186,7 @@ function QuestPanel({ game, actions, entry, presentation }) {
       <p className="special-description">{quest.description}</p>
       {quest.brief && <p className="side-quest-notes">{quest.brief}</p>}
       {quest.legacyCode && <details className="details-block">
-        <summary>Original ledger code</summary>
+        <summary>Original system code</summary>
         <pre className="test-output">{quest.legacyCode}</pre>
       </details>}
       <ol className="special-steps" aria-label={presentation.stepsLabel}>

@@ -171,7 +171,7 @@ test('TypeScript and Go expose distinct side quests only in their respective wor
   for (const [worldId, slug, page] of expected) {
     const {api} = fixture({worldId});
     const campaign = await api('/api/campaign');
-    assert.deepEqual(campaign.sideQuests.map(({slug, page}) => [slug, page]), [[slug, page]]);
+    assert.ok(campaign.sideQuests.some(quest => quest.slug === slug && quest.page === page));
     assert.equal((await api(`/api/pages/${page}`)).page, page);
   }
 });
@@ -216,6 +216,101 @@ test('offline side quests bind the correct runner and restore completed stages a
     const view = await restored.api(path, {hero});
     assert.deepEqual(view.completed, catalog.stages.map(stage => stage.id));
     assert.equal(view.debrief, catalog.debrief);
+  }
+});
+
+test('the runaway microservice repairs preserve ordering, HP, runner contracts, rewards and backups in Rust and Go', async () => {
+  for (const worldId of ['rust', 'go']) {
+    const options = {worldId, rustRunnerAvailable:true, goRunnerAvailable:true};
+    const original = fixture(options);
+    const {api, calls} = original;
+    const [path, {catalog, page}] = [...localCatalog(worldId).sideQuestMap].find(([path]) => path === `/api/rogue-${worldId}`);
+    const campaign = await api('/api/campaign');
+    assert.ok(campaign.sideQuests.some(quest => quest.slug === `rogue-${worldId}` && quest.page === page));
+    assert.equal((await api(`/api/pages/${page}`)).page, page);
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:`Midnight ${worldId}`, oneLife:true}});
+    const post = body => api(path, {method:'POST', hero, body});
+    const initial = await api(path, {hero});
+    assert.doesNotMatch(JSON.stringify(initial), /"reference"|"answer"|"tests"|"debrief"/);
+    const final = catalog.stages.at(-1);
+    await assert.rejects(post({stageId:final.id, optionId:final.answer, submissionId:'skip-repair'}), /earlier stages/);
+    const first = catalog.stages[0];
+    const miss = {stageId:first.id, optionId:first.options.find(option => option.id !== first.answer).id, submissionId:'incident-miss'};
+    assert.equal((await post(miss)).combat.hp, 95);
+    assert.equal((await post(miss)).combat.hp, 95);
+    assert.equal((await post(miss)).combatEvent.damage, 0);
+    const completed = [];
+    let failedCode = false;
+    let last;
+    for (const stage of catalog.stages) {
+      const body = {stageId:stage.id, submissionId:stage.id,
+        ...(stage.kind === 'code' ? {code:stage.exercise.reference} : {optionId:stage.answer})};
+      if (stage.kind === 'code') {
+        const practice = await post({...body, purpose:'examples'});
+        assert.equal(practice.result.verdict, 'pass');
+        assert.deepEqual(practice.completed, completed);
+        assert.equal(practice.debrief, undefined);
+        assert.equal((await api('/api/progress', {hero})).combat.hp, failedCode ? 90 : 95);
+        assert.equal(calls.at(-1).language, worldId);
+        if (worldId === 'rust') {
+          assert.deepEqual(calls.at(-1).caseIds, stage.exercise.testNames.slice(0, 1));
+          assert.deepEqual(calls.at(-1).exercise, stage.exercise);
+        } else assert.equal(calls.at(-1).tests.length, 1);
+        if (!failedCode) {
+          const failure = {...body, code:'wrong', submissionId:'code-miss'};
+          assert.equal((await post(failure)).combat.hp, 90);
+          assert.equal((await post(failure)).combatEvent.damage, 0);
+          failedCode = true;
+        }
+      }
+      last = await post(body);
+      completed.push(stage.id);
+      assert.deepEqual(last.completed, completed);
+      assert.equal(last.combat.hp, failedCode ? 90 : 95);
+      if (stage.kind === 'code') {
+        assert.equal(last.result.verdict, 'pass');
+        if (worldId === 'rust') assert.deepEqual(calls.at(-1).caseIds, stage.exercise.testNames);
+        else assert.equal(calls.at(-1).tests.length, stage.exercise.tests.length);
+      }
+      if (stage !== final) assert.equal(last.debrief, undefined);
+    }
+    assert.equal(last.debrief, catalog.debrief);
+    assert.equal(last.combat.potions, 2);
+    assert.equal(last.combatEvent.potionsEarned, 1);
+    for (const submissionId of [final.id, 'finished-again']) {
+      const replay = await post({stageId:final.id, optionId:final.answer, submissionId});
+      assert.equal(replay.combat.potions, 2);
+      assert.equal(replay.combatEvent.potionsEarned, 0);
+    }
+    const restored = fixture(options);
+    await restored.importBackup(JSON.parse(JSON.stringify(await original.exportBackup())));
+    const saved = await restored.api(path, {hero});
+    assert.deepEqual(saved.completed, completed);
+    assert.equal(saved.debrief, catalog.debrief);
+    const progress = await restored.api('/api/progress', {hero});
+    assert.deepEqual(progress.levels, []);
+    assert.deepEqual(progress.workbench.clears, []);
+    assert.equal(progress.combat.potions, 2);
+  }
+});
+
+test('an unavailable microservice runner preserves its code draft without HP damage or a repair clear', async () => {
+  for (const worldId of ['rust', 'go']) {
+    const {api, calls} = fixture({worldId});
+    const [path, {catalog}] = [...localCatalog(worldId).sideQuestMap].find(([path]) => path === `/api/rogue-${worldId}`);
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:`Draft ${worldId}`, oneLife:true}});
+    const [first, code] = catalog.stages;
+    const post = body => api(path, {method:'POST', hero, body});
+    await post({stageId:first.id, optionId:first.answer, submissionId:'begin'});
+    const attempt = {stageId:code.id, code:code.exercise.reference, submissionId:'offline'};
+    for (let retry = 0; retry < 2; retry++) {
+      const result = await post(attempt);
+      assert.equal(result.result.verdict, 'unavailable');
+      assert.deepEqual(result.completed, [first.id]);
+      assert.equal(result.stages.find(stage => stage.id === code.id).draft, attempt.code);
+    }
+    assert.deepEqual(calls, []);
+    assert.equal((await api('/api/progress', {hero})).combat.hp, 100);
   }
 });
 

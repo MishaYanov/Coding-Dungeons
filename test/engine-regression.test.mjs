@@ -15,6 +15,7 @@ import refactoring from '../data/workbench/refactoring.mjs';
 import systemDesign from '../data/workbench/system-design.mjs';
 import rateLimiter from '../data/workbench/rate-limiter.mjs';
 import typedNotice from '../data/workbench/typed-notice.mjs';
+import {sideQuestRoutes} from '../lib/side-quests.mjs';
 import { exportSaves, importSaves } from '../desktop/save-transfer.mjs';
 
 const port = 49152;
@@ -29,7 +30,7 @@ before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'dungeons-engine-regression-'));
   database = join(directory, 'ferrum.sqlite');
   const env = {PORT:'0', FERRUM_DB:database, FERRUM_LLM_CLI:process.execPath, FERRUM_LLM_MODEL:process.execPath,
-    FERRUM_DESKTOP_TOKEN:undefined};
+    FERRUM_DESKTOP_TOKEN:undefined, DUNGEONS_NATIVE_RUNNER_DIR:''};
   const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
   function setEnv(values) {
     for (const [key, value] of Object.entries(values)) {
@@ -86,6 +87,49 @@ async function request(url, {body, hero, world, method = body === undefined ? 'G
   return response.value;
 }
 
+test('rogue microservice APIs scope the story, enforce repair order, and save unavailable native attempts without damage', async () => {
+  for (const world of ['rust', 'go']) {
+    const endpoint = `/api/rogue-${world}`;
+    const {catalog} = sideQuestRoutes.get(endpoint);
+    const campaign = await request('/api/campaign', {world});
+    const entry = campaign.sideQuests.find(quest => quest.slug === `rogue-${world}`);
+    assert.ok(entry);
+    assert.equal(entry.title, catalog.title);
+    assert.equal((await request(`/api/pages/${entry.page}`, {world})).page, entry.page);
+    await request(endpoint, {world:'javascript', status:404});
+    await request(endpoint, {world, status:401});
+    const {hero} = await request('/api/heroes', {world, body:{name:`Midnight Repair ${world}`, oneLife:true}, status:201});
+    const submit = (body, status=200) => request(endpoint, {world, hero, body, status});
+    const initial = await request(endpoint, {world, hero});
+    assert.deepEqual(initial.completed, []);
+    assert.doesNotMatch(JSON.stringify(initial), /"reference"|"answer"|"tests"|"debrief"/);
+    const [first, code] = catalog.stages;
+    await submit({stageId:code.id, code:code.exercise.reference, submissionId:randomUUID()}, 409);
+    const miss = {stageId:first.id, optionId:first.options.find(option => option.id !== first.answer).id, submissionId:randomUUID()};
+    assert.equal((await submit(miss)).combat.hp, 95);
+    assert.equal((await submit(miss)).combatEvent.damage, 0);
+    const fixed = await submit({stageId:first.id, optionId:first.answer, submissionId:randomUUID()});
+    assert.deepEqual(fixed.completed, [first.id]);
+    for (const purpose of ['examples', 'submit']) {
+      const attempt = {stageId:code.id, code:code.exercise.reference, purpose,
+        ...(purpose === 'submit' ? {submissionId:randomUUID()} : {})};
+      const checked = await submit(attempt);
+      assert.equal(checked.result.verdict, 'unavailable');
+      assert.deepEqual(checked.completed, [first.id]);
+      assert.equal(checked.debrief, undefined);
+      assert.equal(checked.stages.find(stage => stage.id === code.id).draft, attempt.code);
+      if (purpose === 'submit') assert.equal((await submit(attempt)).result.verdict, 'unavailable');
+    }
+    const persisted = await request(endpoint, {world, hero});
+    assert.deepEqual(persisted.completed, [first.id]);
+    const progress = await request('/api/progress', {world, hero});
+    assert.equal(progress.combat.hp, 95);
+    assert.equal(progress.combat.potions, 1);
+    assert.deepEqual(progress.levels, []);
+    assert.deepEqual(progress.workbench.clears, []);
+  }
+});
+
 test('a scored partial written answer does not damage a One Life hero or mark Forge', async () => {
   const {hero} = await request('/api/heroes', {body:{name:'Writing without damage', oneLife:true}, status:201});
   const body = {page:25, promptId:'training-1-3', submissionId:randomUUID(),
@@ -108,7 +152,7 @@ test('TypeScript and Go side quests bind to their own world and book page', asyn
   ]) {
     const endpoint = `/api/${slug}`;
     const campaign = await request('/api/campaign', {world});
-    assert.deepEqual(campaign.sideQuests.map(({slug, page}) => [slug, page]), [[slug, page]]);
+    assert.ok(campaign.sideQuests.some(quest => quest.slug === slug && quest.page === page));
     assert.equal((await request(`/api/pages/${page}`, {world})).page, page);
     const {hero} = await request('/api/heroes', {world, body:{name:'Side Quest Scout'}, status:201});
     const view = await request(endpoint, {world, hero});
