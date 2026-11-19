@@ -8,6 +8,8 @@ In a code editor, **Tab** inserts four spaces. Press **Escape**, then **Tab** to
 
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
+Under **World Map → Side quests**, open **The Harbor Signal Board** in TypeScript Level 11 to validate unknown data and route typed notices, or **Recall at the Relay** in Go Level 12 to stop on cancellation and resume deliveries safely.
+
 Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world. After victory, choose **Continue adventure** to dismiss the result. Turning a page or reopening the game also hides the completed encounter while keeping your rewards; unfinished fights remain available.
 
 Visit the **Merchant** from the campaign menu or the goblin victory screen. Healing potions for One Life heroes, the Emerald Cloak skin, and the Gemkeeper title each cost one diamond. Buy a Vault Key for two diamonds to open your world's optional two-question challenge. Vault attempts cost no HP and can be retried. Your balance, equipped cosmetics, and vault clear are saved separately for each hero and world.
