@@ -431,7 +431,10 @@ test('world selection opens separate books and restores the right hero and draft
 
   await page.getByRole('button', { name: 'Worlds', exact: true }).click();
   await pick(/World 2 TypeScript/);
-  await page.getByText('Your saved heroes will appear here.').waitFor();
+  const typescriptHeroes = page.getByRole('dialog', {name:'Choose your hero'});
+  await typescriptHeroes.waitFor();
+  await typescriptHeroes.getByText('Loading saved heroes…', {exact:true}).waitFor({state:'hidden'});
+  assert.equal(await typescriptHeroes.locator('.hero-slot').filter({hasText:'World Scout'}).count(), 0);
   await createHero(page, 'World Scout', 1);
   assert.match(await page.locator('#book-page').getAttribute('src'), /\/book\/typescript\/pages\/1\.webp/);
   await page.getByRole('button', { name: 'Worlds', exact: true }).click();
