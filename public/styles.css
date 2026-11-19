@@ -837,3 +837,21 @@ dialog::backdrop { background: #050a10b8; }
 .hero-title { color: var(--teal); font-weight: 700; }
 .sheet-hero[data-hero-skin="emerald-cloak"] { background: linear-gradient(135deg, #194839, #17292c); border-color: #ad9563; }
 .profile-mark[data-hero-skin="emerald-cloak"] { background: #194839; border-color: #ad9563; color: #f4d68f; }
+
+.reader-text {
+  max-width: 68ch;
+  min-width: 0;
+  margin-inline: auto;
+  padding: clamp(12px, 3vw, 32px);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #17232e;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.reader-text > * + * { margin-block-start: 1em; }
+.reader-text h2 { color: var(--copper); font-size: 1.4rem; line-height: 1.25; }
+.reader-text pre { padding: .8em; border: 1px solid var(--line); border-radius: 6px; background: #101923; }
+.reader-text pre, .reader-text code { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.reader-text ul { padding-inline-start: 1.6em; }

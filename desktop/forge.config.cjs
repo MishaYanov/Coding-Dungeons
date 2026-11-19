@@ -29,7 +29,7 @@ const packagedPaths = [
   /^\/desktop(?:\/(?:book-links|engine-lifecycle|main|reader-storage|runtime-config|save-transfer|window-policy)\.mjs|\/preload\.cjs)?$/,
   /^\/lib(?:\/[\w-]+\.mjs)?$/,
   /^\/data(?:\/(?:campaign|exercises|gm-rubrics|pages)\.json|\/workbench(?:\/[\w-]+\.mjs)?|\/worlds(?:\/(?:csharp|go|javascript|typescript)(?:\/(?:campaign|exercises|pages)\.json)?)?)?$/,
-  /^\/dist(?:\/renderer(?:\/(?:index\.html|styles\.css|assets(?:\/[\w-]+\.(?:css|js))?|book(?:\/(?:csharp|go|javascript|typescript))?(?:\/pages(?:\/\d+\.webp)?|\/[\w-]+\.(?:pdf|zip))?))?)?$/,
+  /^\/dist(?:\/renderer(?:\/(?:index\.html|styles\.css|assets(?:\/[\w-]+\.(?:css|js))?|book(?:\/(?:csharp|go|javascript|typescript))?(?:\/pages(?:\/\d+\.webp)?|\/reader-text\.json|\/[\w-]+\.(?:pdf|zip))?))?)?$/,
 ];
 
 function ignorePackagePath(path) {

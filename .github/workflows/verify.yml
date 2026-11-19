@@ -76,3 +76,5 @@ jobs:
           dotnet-version: '10.0.404'
       - name: Run C# field kit programs
         run: python verify-worlds.py csharp --check-csharp
+      - name: Check the reflowable text edition
+        run: python work/scripts/build-reader-text.py --check

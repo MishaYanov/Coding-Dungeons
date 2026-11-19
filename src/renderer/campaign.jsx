@@ -3,6 +3,7 @@ import { createGame } from './game.mjs';
 import { Dialogs } from './dialogs.jsx';
 import { Guide } from './guide.jsx';
 import { DiamondEncounter, DiamondGem, SpecialEncounter, diamondPosition } from './encounters.jsx';
+import { TextReader } from './text-reader.jsx';
 
 const model = createGame();
 const { actions } = model;
@@ -41,7 +42,7 @@ function CampaignActions({ profile, merchant, onSelect, compact }) {
   </>;
 }
 
-function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, onZoom }) {
+function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, onZoom, textMode, toggleText }) {
   const { world, profile } = game;
   const [open, setOpen] = useState(false);
   const drawer = useRef(null);
@@ -99,7 +100,11 @@ function CampaignHeader({ game, compact, tabs, mobileControls: MobileControls, o
             </header>
             <div className="dialog-content campaign-drawer-content">
               <CampaignActions profile={profile} merchant={game.merchant} onSelect={selectDialog} compact />
-              {game.hero && <ZoomControls zoom={game.zoom} onZoom={(zoom) => {
+              {game.hero && <ReaderModeButton textMode={textMode} onClick={() => {
+                closeDrawer();
+                toggleText();
+              }} />}
+              {game.hero && !textMode && <ZoomControls zoom={game.zoom} onZoom={(zoom) => {
                 closeDrawer();
                 onZoom(zoom);
               }} />}
@@ -216,7 +221,13 @@ function ZoomControls({zoom, onZoom = actions.changeZoom}) {
   </div>;
 }
 
-function BookReader({ game, compact, hidden, onDiamond }) {
+function ReaderModeButton({ textMode, onClick }) {
+  return <button type="button" className="button button-quiet" onClick={onClick}>
+    {textMode ? 'Page image' : 'Read as text'}
+  </button>;
+}
+
+function BookReader({ game, compact, hidden, onDiamond, textMode, toggleText }) {
   const { page, hero, zoom, loading, pageError } = game;
   const [width, setWidth] = useState(720);
   const viewport = useRef(null);
@@ -243,7 +254,7 @@ function BookReader({ game, compact, hidden, onDiamond }) {
     if (!page) return;
     viewport.current.scrollTo(0, 0);
     if (compact) window.scrollTo(0, 0);
-  }, [page, compact]);
+  }, [page, compact, textMode]);
   useLayoutEffect(() => {
     if (!hidden && hero && hero !== focusedHero.current && game.ready && !game.dialog && !game.switchingHero) {
       focusedHero.current = hero;
@@ -262,14 +273,19 @@ function BookReader({ game, compact, hidden, onDiamond }) {
         </div>
         <div className="reader-controls">
           <PageControls game={game} /><span className="toolbar-divider" aria-hidden="true" />
-          <ZoomControls zoom={zoom} />
+          {!textMode && <ZoomControls zoom={zoom} />}
+          {hero && <ReaderModeButton textMode={textMode} onClick={toggleText} />}
         </div>
         <div className="keyboard-tip" aria-label="A and D, or left and right arrows, turn pages">
           <kbd>A</kbd><kbd>D</kbd><span>or</span><kbd>←</kbd><kbd>→</kbd><span>turn pages</span>
         </div>
       </div>}
       <div ref={viewport} className="reader-viewport" id="reader-viewport" tabIndex={0} aria-label="Book page view">
-        {page && !loading && !pageError ? <BookPage key={pageValue} game={game} width={width} onDiamond={onDiamond} /> : (
+        {page && !loading && !pageError ? (textMode ? <TextReader key={game.world.id} world={game.world.id}
+          total={game.total} page={pageValue} links={[...new Map((page.links ?? []).map(link => hotspotProps(link, game.total))
+            .filter(Boolean).map(link => [link.href, link])).values()]}
+          diamond={!game.combat?.fallen && Boolean(game.diamond?.sparkle)} diamondStarting={game.diamondStarting} onDiamond={onDiamond} />
+          : <BookPage key={pageValue} game={game} width={width} onDiamond={onDiamond} />) : (
           <div className="reader-placeholder" id="reader-placeholder" aria-live="polite">
             {loading && <span className="loading-mark" aria-hidden="true" />}
             <p>{game.readerMessage}</p>
@@ -337,6 +353,10 @@ export function CampaignReader({ mobileControls: MobileControls }) {
   const game = useSyncExternalStore(model.subscribe, model.getSnapshot);
   const compact = useSyncExternalStore(subscribeToPhoneLayout, () => window.matchMedia(phoneLayout).matches);
   const [panel, setPanel] = useState('book');
+  const [textMode, setTextMode] = useState(() => {
+    try { return localStorage.getItem('ferrum-reading-mode') === 'text'; }
+    catch { return false; }
+  });
   const bookTab = useRef(null);
   const gmTab = useRef(null);
   const guidePanel = useRef(null);
@@ -351,6 +371,13 @@ export function CampaignReader({ mobileControls: MobileControls }) {
   function showPanel(next) {
     setPanel(next);
     if (next !== panel) window.scrollTo(0, 0);
+  }
+
+  function toggleText() {
+    setTextMode(!textMode);
+    try { localStorage.setItem('ferrum-reading-mode', textMode ? 'image' : 'text'); }
+    catch { /* The choice still applies in this tab. */ }
+    if (compact) showPanel('book');
   }
 
   function changeTabWithKey(event) {
@@ -406,6 +433,7 @@ export function CampaignReader({ mobileControls: MobileControls }) {
         }
       } : undefined}>Skip to the field guide</a>
       <CampaignHeader game={game} compact={compact} mobileControls={mobile ? MobileControls : undefined}
+        textMode={textMode} toggleText={toggleText}
         onZoom={(zoom) => { showPanel('book'); actions.changeZoom(zoom); }}
         tabs={<div className="mobile-tabs" role="tablist" aria-label="Reader panels" onKeyDown={changeTabWithKey}>
           <button type="button" id="mobile-book-tab" ref={bookTab} role="tab" aria-controls="book-panel"
@@ -415,7 +443,8 @@ export function CampaignReader({ mobileControls: MobileControls }) {
         </div>} />
       {mobile && !compact && MobileControls && game.hero && <MobileControls game={game} actions={actions} />}
       <main className="workspace">
-        <BookReader game={game} compact={compact} hidden={compact && panel !== 'book'} onDiamond={openDiamond} />
+        <BookReader game={game} compact={compact} hidden={compact && panel !== 'book'} onDiamond={openDiamond}
+          textMode={textMode} toggleText={toggleText} />
         <GameMaster game={game} compact={compact} hidden={compact && panel !== 'gm'} panelRef={guidePanel} />
       </main>
       {compact && game.hero && <nav className="mobile-page-controls" aria-label="Book pages"><PageControls game={game} compact /></nav>}

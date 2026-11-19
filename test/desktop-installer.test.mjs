@@ -12,6 +12,7 @@ test('the desktop package copies only the application and excludes local credent
     '/data/worlds/go/pages.json', '/dist/renderer/book/javascript/pages/1.webp', '/dist/renderer/book/ferrum-expedition.pdf',
     '/data/worlds/csharp/campaign.json', '/data/worlds/csharp/pages.json', '/data/worlds/csharp/exercises.json',
     '/dist/renderer/book/csharp/book.pdf', '/dist/renderer/book/csharp/field-kit.zip', '/dist/renderer/book/csharp/pages/1.webp',
+    '/dist/renderer/book/reader-text.json', '/dist/renderer/book/go/reader-text.json',
     '/dist/renderer/assets/index-Ab23.js', '/lib/quickjs-runtime.mjs',
     '/node_modules/quickjs-emscripten-core/dist/index.js',
     '/node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm']) {
