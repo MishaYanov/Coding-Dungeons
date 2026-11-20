@@ -362,3 +362,27 @@ test('the packaged broker compiles and runs suites from a Windows desktop sessio
     assert.deepEqual(sack.tests.map(item => item.status), ['passed', 'passed', 'passed']);
   });
 });
+
+test('the packaged broker grades every rogue microservice repair and rejects its broken starter', {
+  skip: !process.env.DUNGEONS_TEST_NATIVE_BUNDLE,
+  timeout: 240_000,
+}, async t => {
+  const {sideQuestRoutes} = await import('../lib/side-quests.mjs');
+  const runner = createStandaloneRunner({directory:process.env.DUNGEONS_TEST_NATIVE_BUNDLE});
+  for (const language of ['rust', 'go']) {
+    const quest = sideQuestRoutes.get(`/api/rogue-${language}`).catalog;
+    assert.equal(await runner.status(language), true, `${language} isolation gate`);
+    for (const stage of quest.stages.filter(stage => stage.kind === 'code')) {
+      await t.test(`${language} ${stage.exercise.id}`, async () => {
+        const exercise = stage.exercise;
+        const expected = fixtureMetadata(exercise).map(({id}) => id);
+        const reference = await runner.grade({language, source:exercise.reference, exercise, tests:exercise.tests});
+        assert.equal(reference.status, 'passed', JSON.stringify(reference));
+        assert.deepEqual(reference.tests.map(({id}) => id), expected);
+        const broken = await runner.grade({language, source:exercise.starter, exercise, tests:exercise.tests});
+        assert.equal(broken.status, 'failed', JSON.stringify(broken));
+        assert.ok(broken.tests.some(({status}) => status === 'failed'));
+      });
+    }
+  }
+});

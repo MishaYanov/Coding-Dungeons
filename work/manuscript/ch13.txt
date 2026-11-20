@@ -2,9 +2,9 @@
 
 ## An Iterator Fixes Its Item Type Before Each Call
 
-Iterator is a powerful abstraction partly because its item type is independent of the temporary borrow used to call next. After a call returns, a caller can usually call next again while retaining the earlier item. A collection iterator can yield references into a backing collection because the implementing type already carries the collection's borrow lifetime. The result stays valid across calls that advance the iterator.
+Iterator fixes its item type independently of the temporary receiver borrow used to call next. A caller can usually retain an item while requesting another. A collection iterator carries the backing collection's borrow lifetime in its own type, so advancing the iterator need not invalidate earlier results.
 
-This distinction is easy to miss because both interfaces can look like a loop that returns references. An iterator over a slice hands out access to stable external storage. A streaming parser that reuses one internal buffer hands out access that must end before the parser changes that buffer. The first fits Iterator naturally. The second needs a lending relationship, an owned result, or a callback that limits the borrow's scope.
+Compare two loops returning references. A slice iterator borrows stable external storage. A streaming parser reuses its own buffer, so each view must stop being used before that buffer changes. The slice fits Iterator; the reusable buffer needs lending, owned results, or scoped callbacks.
 
 Generic associated types provide a vocabulary for a family of output types indexed by a lifetime. They do not eliminate borrowing restrictions. They let a trait express precisely the restriction that a returned value may borrow from the current exclusive receiver borrow.
 

@@ -2,7 +2,7 @@
 
 ## A Public Signature Is Only Part of the Contract
 
-A reusable Rust library exposes types, methods, implementations, lifetimes, auto traits, errors, feature behavior, and documented guarantees. Downstream code can depend on all of them. A change that looks internal may alter whether a type is Send, whether an iterator can outlive an input, or whether a trait remains dyn compatible. API design therefore includes deciding which facts should remain stable and which details should stay hidden.
+A library exposes more than methods. Callers can depend on its lifetimes, trait implementations, errors, feature behavior, and documented guarantees. An internal change may remove Send, extend an input borrow, or break dyn compatibility. API design includes choosing which of these relationships should remain stable.
 
 The first useful distinction is between an application boundary and a library boundary. Inside one application, a compiler-guided refactor can update every caller together. A published crate may have callers the author cannot inspect. Its design needs room for evolution, but excessive abstraction can make the current API unpleasant. The aim is a small set of deliberate commitments, not maximum concealment.
 
@@ -186,7 +186,7 @@ The minimum supported Rust version is another compatibility dimension. Declare i
 
 Rustdoc shows signatures well. It cannot infer ordering guarantees, lock behavior, allocation patterns, or the postcondition after an error. Describe these when they affect user decisions. A method named snapshot might clone all data, increment an Arc, or hold a lock-backed view. Those designs have very different latency and lifetime implications.
 
-Examples should exercise the intended path through the API, including construction, operation, failure handling, and cleanup where relevant. Compileable documentation examples are especially useful because they validate that the public surface can express its advertised workflow without private helpers. They should not rely on hidden imports or impossible setup.
+Examples should demonstrate the advertised workflow: construction, operation, failure handling, and cleanup. Compilable documentation examples check that public callers can follow it without private helpers, missing imports, or impossible setup.
 
 Avoid documenting incidental internals as guarantees unless users need them. Promising the exact growth factor of a vector or the exact number of allocations can make future optimization unnecessarily difficult. On the other hand, hiding a linear scan behind a method users expect to be constant time creates performance traps. State complexity and ownership behavior at the level that supports sound application design.
 

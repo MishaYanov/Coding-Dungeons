@@ -12,6 +12,7 @@ from reportlab.platypus import (
 from reportlab.platypus.tableofcontents import TableOfContents
 from pypdf import PdfReader
 import build_book as base
+from book_sources import LAB_NAMES
 
 ROOT=base.ROOT
 DATA=ROOT/'work/gamebook'
@@ -383,7 +384,10 @@ def manual(level):
     source=base.parse_manuscript(base.SOURCE/f'ch{level:02}.txt',level)
     title=re.sub(r'^# Chapter\s+\d+\s+','',
         (base.SOURCE/f'ch{level:02}.txt').read_text(encoding='utf-8').splitlines()[0])
-    first=Paragraph('<font name="Head" size="9">FIELD MANUAL '+str(level)+
+    lab={25:('Async lab','lab_async'),28:('Async lab','lab_async'),
+         36:('Schedule lab','lab_schedules'),42:('Dispatch lab','lab_dispatch')}.get(level)
+    shortcut=(' / '+link(*lab)) if lab else ''
+    first=Paragraph('<font name="Head" size="9">FIELD MANUAL '+str(level)+shortcut+
         '</font><br/>'+base.inline(title),ST['manual'])
     first._bookmark=f'ch{level:02}'
     first._toc_title=title
@@ -410,7 +414,7 @@ def level_entry(q):
     out.append(Paragraph('<b>Mission</b> '+base.inline(q['objective']),ST['body']))
     if q['loadout']:
         out.append(Paragraph('<b>Suggested loadout</b> '+', '.join(
-            link(f'Level {v}',f'level{v:02}') for v in q['loadout'])+
+            link(f'Level {v}',f'ch{v:02}') for v in q['loadout'])+
             '. These are guidance, not locked gates.',ST['small']))
     out.append(para('Mastery Targets','h3'))
     out.extend(bullet(t) for t in q['win_conditions'])
@@ -450,8 +454,9 @@ def route_pages():
         out.append(PageBreak())
         out.append(heading('Choose a Path' if pair==0 else 'Two More Paths',
                            'paths' if pair==0 else 'paths2'))
-        out.append(para('Click any node to enter. Change paths when a '
-                        'different problem catches your attention.','small'))
+        out.append(para('These are thematic routes. Suggested loadout links '
+                        'at each entry open prerequisite manuals. Take a '
+                        'detour when a concept is unfamiliar.','small'))
         for path in PATHS[pair*2:pair*2+2]:
             out.append(heading(path['name'],path['id'],'h2',toc=False))
             out.append(para(path['description']))
@@ -558,6 +563,18 @@ def story(quests,rooms,locations=None):
                     setattr(p,attr,getattr(f,attr))
             index[i]=p
     out.extend(index)
+    # New worked labs follow the original reference section. Existing chapter
+    # and listing identities remain stable even when the edition reflows.
+    out.extend([PageBreak(), heading('Worked Labs: Restore One Service', 'worked_labs', toc=False),
+        para('Run these complete host Rust programs from the field kit. '
+             'They connect the earlier models and include assertions for failure paths. '
+             'Their threads need a host toolchain; the in-game scratchpad saves your variations.')])
+    for name in LAB_NAMES:
+        if name != LAB_NAMES[0]:
+            out.append(PageBreak())
+        blocks=base.parse_manuscript(base.SOURCE/f'{name}.txt')
+        blocks[0]._toc_include=False
+        out.extend(blocks)
     return out
 
 def main():

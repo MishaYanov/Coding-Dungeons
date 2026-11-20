@@ -2,7 +2,7 @@
 
 ## A Callback Is Code Plus State
 
-A closure is easiest to understand as an unnamed struct containing captured state, together with an implementation of one or more call traits. This model explains ownership transfer, thread bounds, lifetime errors, and why two syntactically identical closures still have different types. The compiler constructs the environment type; ordinary Rust rules then apply to its fields.
+Think of a closure as captured fields plus one or more call-trait implementations. The compiler creates a distinct environment type for each closure expression. Ordinary ownership, borrowing, and thread-transfer rules apply to its captures, explaining both lifetime errors and differences between otherwise similar closures.
 
 The environment may own a String, borrow a configuration value, or hold an exclusive borrow of a counter. Capturing a value and consuming it when called are separate questions. The move keyword determines how captures enter the environment. The body determines what kind of access is needed when the closure is invoked.
 
@@ -130,16 +130,16 @@ The object lifetime 'a constrains the environment's captures. It does not requir
 
 Higher-ranked bounds make per-call borrowing explicit when needed. A bound such as for<'a> Fn(&'a Record) -> &'a str requires the callback to preserve the relationship between each input borrow and its result. It cannot return an arbitrary short-lived reference, and it cannot insist on only one particular input lifetime. These contracts are useful for selectors and visitors, though closure inference sometimes benefits from using a named function when the relationship is complex.
 
-## A Complete Deferred Commit Queue
+## A Complete Queue of Deferred Actions
 
 A queue of deferred actions demonstrates why FnOnce is a resource-management abstraction. Each action may own a value that will be consumed exactly when the action executes. The queue owns the environment until then.
 
 ```rust
-struct CommitQueue<'a> {
+struct DeferredActions<'a> {
     actions: Vec<Box<dyn FnOnce() + 'a>>,
 }
 
-impl<'a> CommitQueue<'a> {
+impl<'a> DeferredActions<'a> {
     fn new() -> Self { Self { actions: Vec::new() } }
 
     fn push<F>(&mut self, action: F)
@@ -159,7 +159,7 @@ impl<'a> CommitQueue<'a> {
 fn main() {
     let mut output = Vec::new();
     {
-        let mut queue = CommitQueue::new();
+        let mut queue = DeferredActions::new();
         let message = String::from("committed");
         queue.push(|| output.push(message));
         queue.run();
@@ -170,7 +170,7 @@ fn main() {
 
 The callback captures an exclusive borrow of output and owns message. The queue's lifetime cannot exceed that borrow. run consumes the queue and then consumes each boxed FnOnce. The type prevents running the same action again through this owner. If the queue is dropped without running, the captured values are dropped instead; owning a closure does not imply that its body executes during destruction.
 
-The name CommitQueue is intentionally stronger than the implementation's guarantees. In a production transaction system, merely executing closures sequentially would not provide atomic commit. If an action panics, later actions may never run. If an action performs an external effect and then fails, there is no automatic rollback. This example implements deferred execution with one-shot ownership, not transactional durability. Names and documentation must make that boundary clear in real code.
+DeferredActions promises deferred execution with one-shot ownership. It provides no atomic commit or durability: a panic can prevent later actions from running, and an external effect is not rolled back when an action fails. The name keeps the scheduling mechanism separate from any transaction protocol its caller needs.
 
 Changing the queue to FnMut would complicate the model. The queue would need to preserve environments after calls and define repeated execution. Changing it to Fn would reject actions that move resources into their final destination. The call trait is therefore part of the queue's semantics.
 

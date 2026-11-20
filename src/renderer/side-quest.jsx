@@ -96,6 +96,7 @@ function SideQuestStage({ stage, draft, saveDraft, pending, blocked, fallen, una
 
 function QuestPanel({ game, actions, entry, presentation }) {
   const { hero } = game;
+  const language = game.world.name;
   const { slug } = entry;
   const endpoint = `/api/${slug}`;
   const titleId = `${slug}-title`;
@@ -113,7 +114,7 @@ function QuestPanel({ game, actions, entry, presentation }) {
   const finished = Boolean(quest && !current);
   const draftKey = current?.kind === 'code' ? `${entry.page}:${slug}-${current.id}` : null;
   const unavailable = draftKey && game.runner?.toLowerCase() === 'unavailable'
-    ? game.runnerDetail || 'The local JavaScript runner is unavailable.' : '';
+    ? game.runnerDetail || `The local ${language} runner is unavailable.` : '';
   const blocked = pending || game.switchingHero;
   const fallen = Boolean(game.combat?.fallen);
 
@@ -185,7 +186,7 @@ function QuestPanel({ game, actions, entry, presentation }) {
       <p className="special-description">{quest.description}</p>
       {quest.brief && <p className="side-quest-notes">{quest.brief}</p>}
       {quest.legacyCode && <details className="details-block">
-        <summary>Original ledger code</summary>
+        <summary>Original system code</summary>
         <pre className="test-output">{quest.legacyCode}</pre>
       </details>}
       <ol className="special-steps" aria-label={presentation.stepsLabel}>
@@ -207,12 +208,12 @@ function QuestPanel({ game, actions, entry, presentation }) {
             if (isCurrentHero(hero)) persistDraft(draftKey, value);
           }} {...{ pending, blocked, fallen, unavailable, focusTarget, submit }} />}
         {error ? <p className="inline-status" role="alert" data-error="true">{error}</p> : pending
-          && <p className="inline-status" role="status">{draftKey ? 'Running JavaScript tests…' : 'The GM is checking your answer…'}</p>}
+          && <p className="inline-status" role="status">{draftKey ? `Running ${language} tests…` : 'The GM is checking your answer…'}</p>}
         {finished && <>
           <p className="special-victory" ref={focusTarget} tabIndex={-1}>{presentation.completion}</p>
           {quest.reward && <p className="fine-print">{quest.reward}</p>}
           {quest.debrief && <details className="details-block">
-            <summary>Worked design</summary>
+            <summary>{presentation.debriefLabel ?? 'Worked design'}</summary>
             <p className="side-quest-notes">{quest.debrief}</p>
           </details>}
         </>}
@@ -222,7 +223,15 @@ function QuestPanel({ game, actions, entry, presentation }) {
 }
 
 export function SideQuest({ game, actions, entry }) {
-  const presentation = entry.key === 'refactoring' ? presentations.refactoring : presentations.systemDesign;
   if (!game.hero) return null;
+  const presentation = game.world.id === 'javascript'
+    ? presentations[entry.key] ?? presentations.systemDesign
+    : {
+      codeLabel: `${game.world.name} side quest code`,
+      submitLabel: 'Submit solution',
+      stepsLabel: 'Side quest steps',
+      completion: 'This side quest is complete and saved to your hero.',
+      debriefLabel: 'Quest debrief',
+    };
   return <QuestPanel key={`${game.hero.id}:${entry.key}`} {...{ game, actions, entry, presentation }} />;
 }

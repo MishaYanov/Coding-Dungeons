@@ -8,6 +8,10 @@ In a code editor, **Tab** inserts four spaces. Press **Escape**, then **Tab** to
 
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
+Rust Level 28 and Go Level 14 include **The Runaway Dispatch**, a microservice incident and refactoring story. Repair the service's concurrency controls, idempotency records, retry policy, and shutdown behavior through ordered design decisions and tested code changes. Use the World Map to open the quest. Examples are practice, full suite passes advance the repair, and finishing the story earns one potion for a One Life hero. Progress and rewards are saved independently of the core book's Forge checkpoints.
+
+Under **World Map → Side quests**, open **The Harbor Signal Board** in TypeScript Level 11 to validate unknown data and route typed notices, or **Recall at the Relay** in Go Level 12 to stop on cancellation and resume deliveries safely.
+
 Watch the book for a hidden diamond. It can turn up on any kind of page. Click it to face the Diamond Goblin, then beat a coding challenge and a multiple-choice question to claim its bag of three diamonds. Your character sheet shows the loot. Each hero can clear the ambush once per world. After victory, choose **Continue adventure** to dismiss the result. Turning a page or reopening the game also hides the completed encounter while keeping your rewards; unfinished fights remain available.
 
 Visit the **Merchant** from the campaign menu or the goblin victory screen. Healing potions for One Life heroes, the Emerald Cloak skin, and the Gemkeeper title each cost one diamond. Buy a Vault Key for two diamonds to open your world's optional two-question challenge. Vault attempts cost no HP and can be retried. Your balance, equipped cosmetics, and vault clear are saved separately for each hero and world.
@@ -72,7 +76,7 @@ npm run test:book
 
 The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go reference checks use Go 1.27.4. See the [standalone app PRD](docs/CODING-DUNGEONS-PRD.md) for the release test matrix.
 
-The GitHub Actions **Verify** workflow runs on pushes to `main` and on pull requests. After the workflow is on GitHub's default branch, you can also start it from **Actions → Verify → Run workflow**. It checks npm advisories, runs the app and book tests, and smoke-tests an unpacked Windows build.
+The GitHub Actions **Build & Test** workflow runs on pushes to `main` and `release/**`, on pull requests, and through manual dispatch. **Application Tests** checks advisories, app/browser behavior, a lightweight Windows package, and book assets. **Rust Book Compatibility** checks the examples, labs, and challenge suites independently on Rust 1.99.1 and 1.100.0. The existing `verify` check now requires both jobs to pass. See [CI jobs and required checks](docs/CI.md).
 
 ### Mobile edition
 
@@ -136,7 +140,7 @@ The private Android APK bundles all five books and the four available Workbench 
 
 The wrapper uses Android System WebView and requests neither Internet nor storage permissions. Heroes and drafts stay in the app's private storage. **Save backup** uses Android's document picker to export a world or import into an empty world. Export important saves before uninstalling or clearing app storage; browser/PWA saves and APK saves are separate. The app targets Android 8.0 and later with a compatible WebView. Support on 2 GB phones is not verified.
 
-Version 1.0.17 is a private local build. Its experimental Rust compiler has the same compatibility and redistribution limits as the browser edition: public distribution remains blocked pending complete component notices and verified source provenance. See [mobile Rust limitations](docs/MOBILE-RUST.md).
+Version 1.1.1 is a private local build. Its experimental Rust compiler has the same compatibility and redistribution limits as the browser edition: public distribution remains blocked pending complete component notices and verified source provenance. See [mobile Rust limitations](docs/MOBILE-RUST.md).
 
 On Windows, install Android Studio with SDK Platform 37.0 and Build-Tools 36.0.0. The build script uses Android Studio's bundled JDK and the default SDK location; set `JAVA_HOME` and `ANDROID_HOME` if yours differ. Stage both compiler packs, then build:
 

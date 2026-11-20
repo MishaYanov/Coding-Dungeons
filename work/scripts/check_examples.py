@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from book_sources import checked_sources
 
 ROOT = Path(__file__).resolve().parents[2]
 MANUSCRIPT = ROOT / 'work/manuscript'
@@ -35,7 +36,7 @@ EXPECTED_DIAGNOSTICS = {
 version = subprocess.run([RUSTC, '--version'], capture_output=True,
                          text=True, check=True).stdout.strip()
 rows = []
-for path in sorted(MANUSCRIPT.glob('ch*.txt')):
+for path in checked_sources(MANUSCRIPT):
     text = path.read_text(encoding='utf-8')
     for number, match in enumerate(re.finditer(
             r'^```([^\n]*)\n(.*?)\n```\s*$', text, re.M | re.S), 1):
@@ -68,7 +69,7 @@ def check(row):
         row.update(returncode=None, ok=False, diagnostic='compiler timed out')
     return row
 
-assert {row['chapter'] for row in rows} == {f'ch{n:02}' for n in range(1, 43)}
+assert {row['chapter'] for row in rows if row['chapter'].startswith('ch')} == {f'ch{n:02}' for n in range(1, 43)}
 assert {row['name'] for row in rows if row['expected_fail']} == set(EXPECTED_DIAGNOSTICS)
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
     results = list(pool.map(check, rows))

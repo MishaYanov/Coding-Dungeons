@@ -14,6 +14,8 @@ import { openStore } from '../lib/store.mjs';
 import refactoring from '../data/workbench/refactoring.mjs';
 import systemDesign from '../data/workbench/system-design.mjs';
 import rateLimiter from '../data/workbench/rate-limiter.mjs';
+import typedNotice from '../data/workbench/typed-notice.mjs';
+import {sideQuestRoutes} from '../lib/side-quests.mjs';
 import { exportSaves, importSaves } from '../desktop/save-transfer.mjs';
 
 const port = 49152;
@@ -28,7 +30,7 @@ before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'dungeons-engine-regression-'));
   database = join(directory, 'ferrum.sqlite');
   const env = {PORT:'0', FERRUM_DB:database, FERRUM_LLM_CLI:process.execPath, FERRUM_LLM_MODEL:process.execPath,
-    FERRUM_DESKTOP_TOKEN:undefined};
+    FERRUM_DESKTOP_TOKEN:undefined, DUNGEONS_NATIVE_RUNNER_DIR:''};
   const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
   function setEnv(values) {
     for (const [key, value] of Object.entries(values)) {
@@ -85,6 +87,49 @@ async function request(url, {body, hero, world, method = body === undefined ? 'G
   return response.value;
 }
 
+test('rogue microservice APIs scope the story, enforce repair order, and save unavailable native attempts without damage', async () => {
+  for (const world of ['rust', 'go']) {
+    const endpoint = `/api/rogue-${world}`;
+    const {catalog} = sideQuestRoutes.get(endpoint);
+    const campaign = await request('/api/campaign', {world});
+    const entry = campaign.sideQuests.find(quest => quest.slug === `rogue-${world}`);
+    assert.ok(entry);
+    assert.equal(entry.title, catalog.title);
+    assert.equal((await request(`/api/pages/${entry.page}`, {world})).page, entry.page);
+    await request(endpoint, {world:'javascript', status:404});
+    await request(endpoint, {world, status:401});
+    const {hero} = await request('/api/heroes', {world, body:{name:`Midnight Repair ${world}`, oneLife:true}, status:201});
+    const submit = (body, status=200) => request(endpoint, {world, hero, body, status});
+    const initial = await request(endpoint, {world, hero});
+    assert.deepEqual(initial.completed, []);
+    assert.doesNotMatch(JSON.stringify(initial), /"reference"|"answer"|"tests"|"debrief"/);
+    const [first, code] = catalog.stages;
+    await submit({stageId:code.id, code:code.exercise.reference, submissionId:randomUUID()}, 409);
+    const miss = {stageId:first.id, optionId:first.options.find(option => option.id !== first.answer).id, submissionId:randomUUID()};
+    assert.equal((await submit(miss)).combat.hp, 95);
+    assert.equal((await submit(miss)).combatEvent.damage, 0);
+    const fixed = await submit({stageId:first.id, optionId:first.answer, submissionId:randomUUID()});
+    assert.deepEqual(fixed.completed, [first.id]);
+    for (const purpose of ['examples', 'submit']) {
+      const attempt = {stageId:code.id, code:code.exercise.reference, purpose,
+        ...(purpose === 'submit' ? {submissionId:randomUUID()} : {})};
+      const checked = await submit(attempt);
+      assert.equal(checked.result.verdict, 'unavailable');
+      assert.deepEqual(checked.completed, [first.id]);
+      assert.equal(checked.debrief, undefined);
+      assert.equal(checked.stages.find(stage => stage.id === code.id).draft, attempt.code);
+      if (purpose === 'submit') assert.equal((await submit(attempt)).result.verdict, 'unavailable');
+    }
+    const persisted = await request(endpoint, {world, hero});
+    assert.deepEqual(persisted.completed, [first.id]);
+    const progress = await request('/api/progress', {world, hero});
+    assert.equal(progress.combat.hp, 95);
+    assert.equal(progress.combat.potions, 1);
+    assert.deepEqual(progress.levels, []);
+    assert.deepEqual(progress.workbench.clears, []);
+  }
+});
+
 test('a scored partial written answer does not damage a One Life hero or mark Forge', async () => {
   const {hero} = await request('/api/heroes', {body:{name:'Writing without damage', oneLife:true}, status:201});
   const body = {page:25, promptId:'training-1-3', submissionId:randomUUID(),
@@ -98,6 +143,65 @@ test('a scored partial written answer does not damage a One Life hero or mark Fo
   assert.equal(progress.combat.hp, 100);
   assert.equal(progress.responses[0].assessment.score, 60);
   assert.deepEqual(progress.levels, []);
+});
+
+test('TypeScript and Go side quests bind to their own world and book page', async () => {
+  for (const [world, slug, page, stages] of [
+    ['typescript', 'typed-notice', 44, 4],
+    ['go', 'cancellable-relay', 48, 4],
+  ]) {
+    const endpoint = `/api/${slug}`;
+    const campaign = await request('/api/campaign', {world});
+    assert.ok(campaign.sideQuests.some(quest => quest.slug === slug && quest.page === page));
+    assert.equal((await request(`/api/pages/${page}`, {world})).page, page);
+    const {hero} = await request('/api/heroes', {world, body:{name:'Side Quest Scout'}, status:201});
+    const view = await request(endpoint, {world, hero});
+    assert.equal(view.stages.length, stages);
+    assert.deepEqual(view.completed, []);
+    assert.ok(view.stages.every(stage => !('answer' in stage) && !('exercise' in stage)));
+    assert.equal(view.debrief, undefined);
+    await request(endpoint, {world:'javascript', hero, status:404});
+  }
+});
+
+test('TypeScript side quest examples do not progress, full tests check types, and the final reward settles once', async () => {
+  const world = 'typescript';
+  const endpoint = '/api/typed-notice';
+  const {hero} = await request('/api/heroes', {world, body:{name:'Harbor Runner', oneLife:true}, status:201});
+  const [boundary, decode, route, rollout] = typedNotice.stages;
+  const answer = (stage, submissionId = randomUUID()) => ({stageId:stage.id, optionId:stage.answer, submissionId});
+  const grade = (stage, code, purpose = 'submit') => ({stageId:stage.id, code, purpose, submissionId:randomUUID()});
+  const post = (body, status) => request(endpoint, {world, hero, body, status});
+  await post(grade(decode, decode.exercise.reference), 409);
+  await post(answer(boundary));
+  const examples = await post(grade(decode, decode.exercise.reference, 'examples'));
+  assert.deepEqual(examples.completed, [boundary.id]);
+  assert.equal(examples.result.verdict, 'pass');
+  assert.equal(examples.result.groups.some(group => group.group === 'Type contract'), false);
+  const broadInput = decode.exercise.reference.replace('value: unknown', 'value: any');
+  const unsafe = await post(grade(decode, broadInput));
+  assert.equal(unsafe.result.verdict, 'fail');
+  assert.equal(unsafe.result.groups.find(group => group.group === 'Type contract').failed, 1);
+  assert.equal(unsafe.combat.hp, 95);
+  const decoded = await post(grade(decode, decode.exercise.reference));
+  assert.deepEqual(decoded.completed, [boundary.id, decode.id]);
+  assert.equal(decoded.stages.find(stage => stage.id === route.id).starter,
+    decode.exercise.reference + '\n\n' + route.exercise.starter);
+  const source = decode.exercise.reference + '\n\n' + route.exercise.reference;
+  const routed = await post(grade(route, source));
+  assert.equal(routed.result.verdict, 'pass');
+  assert.deepEqual(routed.completed, [boundary.id, decode.id, route.id]);
+  assert.equal(routed.debrief, undefined);
+  const ticket = answer(rollout);
+  const victory = await post(ticket);
+  assert.equal(victory.combat.potions, 2);
+  assert.equal(victory.debrief, typedNotice.debrief);
+  assert.deepEqual(victory.completed, typedNotice.stages.map(stage => stage.id));
+  assert.equal((await post(ticket)).combatEvent.potionsEarned, 0);
+  const progress = await request('/api/progress', {world, hero});
+  assert.deepEqual(progress.levels, []);
+  assert.deepEqual(progress.workbench.clears, []);
+  assert.equal(progress.combat.hp, 95);
 });
 
 test('a Hard drill does not unlock the same level boss guide', async () => {

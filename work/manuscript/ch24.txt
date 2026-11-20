@@ -1,8 +1,8 @@
 # Chapter 24 Pinning Is an Address Stability Contract
 
-Most Rust values can move whenever ownership moves. A compiler may implement a move by copying bytes, but the semantic point is that the old location no longer contains the owned value and the new location does. References usually prevent invalid moves because a borrowed owner cannot be freely moved while the borrow remains in use. Some abstractions need a stronger, longer lived promise: once a value enters an address sensitive state, it must remain at its location until its destruction protocol finishes.
+Most Rust values can move when ownership transfers. The old place then no longer contains the owned value; the new place does. A live borrow restricts conflicting moves, but some abstractions need a promise that survives one particular borrow: once a value enters an address-sensitive state, it must stay at its location until its destruction protocol finishes.
 
-`Pin` represents that promise through a pointer like owner or reference. It does not make all memory immovable, and it does not change assignment throughout the language. Instead, it restricts safe access through the pinned handle so that code cannot obtain the unrestricted mutable access that would permit moving an address sensitive pointee out. Understanding what is pinned, and which fields inherit that promise, is the heart of using the abstraction correctly.
+`Pin` carries that promise through an owner or reference. It restricts safe access through the pinned handle, preventing unrestricted mutable access that could move an address-sensitive pointee out. Always identify the pointee and the fields that inherit its pinning promise.
 
 ## Pointer Movement and Pointee Movement
 
@@ -56,7 +56,7 @@ Adding `PhantomPinned` does not itself establish a self reference or initialize 
 
 `Unpin` says that a type does not need the pinning restriction for soundness. Most types are `Unpin`. For such a pointee, pinned access may safely become ordinary mutable access. This makes APIs such as `Future::poll` usable by both address sensitive futures and simple movable state machines.
 
-The distinction concerns the pointee type. A pointer wrapper can be movable even when its pointee must remain fixed. `Pin<Box<F>>` is itself an ordinary movable handle; moving it does not move `F` out of its allocation. This is why boxing is a convenient boundary for generic future combinators.
+The distinction concerns the pointee. Moving `Pin<Box<F>>` transfers the handle, while `F` stays in its allocation. A pinned child can therefore remain at one address while a vector rearranges its owning handles.
 
 ```rust
 use std::pin::Pin;
@@ -180,7 +180,15 @@ An allocation is sometimes cheaper than an unsafe proof. Boxing a child future c
 
 At the API level, accept `Pin<&mut F>` when the caller has already established pinning and the operation genuinely needs it. Accept an owned `F` when the implementation can establish its own storage. Requiring `F: Unpin` can simplify an adapter, but it excludes common compiler generated futures; document the reason instead of treating the bound as harmless decoration.
 
-The central question is always which value's location matters and who guarantees that location through destruction. Once those two facts are explicit, the variety of `Pin<Box<T>>`, `Pin<&mut T>`, `Unpin`, and projections becomes a set of ownership arrangements around one contract.
+Keep handle and pointee separate when tracing a move:
+
+```text
+before: local handle ----------> heap F at address A
+after:  vector[0] handle ------> same F at address A
+allowed: move the handle        forbidden: move !Unpin F out
+```
+
+The diagram assumes `F` needs pinning. A pointee that implements `Unpin` permits ordinary mutable access. For one that does not, the owner must preserve the promise through destruction.
 
 ## Exercises
 

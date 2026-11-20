@@ -2,7 +2,7 @@
 
 ## A Trait Is a Promise the Compiler Can Use
 
-Developers often approach a trait as an interface with unfamiliar syntax. That analogy explains method lookup, but it misses the part that shapes advanced Rust: a trait establishes facts about types. A generic function can use those facts without knowing the concrete representation. An implementation supplies evidence that one particular type satisfies the relationship. Associated types, supertraits, and bounds describe the evidence the function may request.
+A trait does more than name an interface: it states relationships among types. A generic function relies on those relationships without knowing each concrete representation. Implementations supply the required items; associated types, supertraits, and bounds describe the facts available to generic code.
 
 Consider a component that accepts jobs and returns receipts. The important question is not whether it has a method named submit. The important questions are whether each component chooses one receipt type, whether callers may choose the job representation, whether submission mutates internal state, and whether failure preserves the original job. A trait declaration fixes these relationships before there is an implementation.
 
@@ -85,7 +85,7 @@ where
 
 The bound on S permits next_item. The bound on S::Item permits formatting. These are different obligations. Source does not promise that every item is printable; summarize requests that additional capability because its own algorithm needs it. Keeping the requirement at the narrowest useful layer allows nonprintable items to participate elsewhere.
 
-This way of reading generic code scales well. Treat each where clause as a local fact table. When the compiler reports that a method is unavailable, ask which fact would justify that method call. The answer may be a missing bound, an unwanted requirement introduced by a derive, or an associated type that differs from the one the algorithm expects. Adding Clone reflexively often obscures the actual relationship.
+Read each where clause as a local fact table. If a method is unavailable, identify the fact needed to call it. Check for a missing bound, an excessive derive requirement, or a mismatched associated type before adding another capability such as Clone.
 
 A function that requires Iterator<Item = Record> is stronger and often easier to use than one that requires Iterator plus several conversion traits on its item. Equality constraints express that the algorithm has already chosen the representation. Conversion bounds express that the algorithm accepts a family of representations. Neither is universally preferable; the signature should reflect where normalization belongs.
 

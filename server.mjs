@@ -5,6 +5,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './lib/store.mjs';
+import { compatibleBookResponse, findBookResponse, remapBookResponses } from './lib/book-revisions.mjs';
 import { encounters, evaluateStage, publicEncounter } from './lib/encounters.mjs';
 import { createWrittenGm } from './lib/written-gm.mjs';
 import { fixtureMetadata, presentWorkbenchRun, runCourseExercise, workbenchSummary } from './lib/workbench-service.mjs';
@@ -13,9 +14,7 @@ import javascriptSuites from './data/workbench/javascript.mjs';
 import typescriptSuites from './data/workbench/typescript.mjs';
 import goSuites from './data/workbench/go.mjs';
 import rustSuites, { rustBossCoverage } from './data/workbench/rust.mjs';
-import refactoringQuest from './data/workbench/refactoring.mjs';
-import systemDesignQuest from './data/workbench/system-design.mjs';
-import rateLimiterQuest from './data/workbench/rate-limiter.mjs';
+import { publicSideQuest, sideQuestRoutes, sideQuestsFor } from './lib/side-quests.mjs';
 import { suggestions } from './data/workbench/suggestions.mjs';
 import { evaluateTrial, trialsFor } from './lib/trials.mjs';
 import { diamondExercise, diamondStage, diamondView, evaluateDiamondChoice, evaluateDiamondCode,
@@ -70,12 +69,6 @@ function authoredTrainingAnswer(worldId, prompt) {
     ? prompt.feedback : null;
 }
 
-const sideQuestRoutes = new Map([
-  ['/api/refactoring', {key:'refactoring', draftPrefix:'refactoring', level:14, catalog:refactoringQuest}],
-  ['/api/system-design', {key:'systemDesign', draftPrefix:'system-design', level:13, catalog:systemDesignQuest}],
-  ['/api/rate-limiter', {key:'rateLimiter', draftPrefix:'rate-limiter', level:12, catalog:rateLimiterQuest}],
-]);
-
 async function loadWorld(spec, number) {
   const {id} = spec;
   const rust = id === 'rust';
@@ -109,19 +102,16 @@ async function loadWorld(spec, number) {
     bookUrl, kitUrl:kit?.isFile() ? kitPath : null,
   };
   const database = parse(rustDatabase);
-  const worldEncounters = encounters.filter(encounter => encounter.world === id);
-  const sideQuests = {};
-  if (id === 'javascript') {
-    for (const {key, draftPrefix, level, catalog} of sideQuestRoutes.values()) {
-      const page = campaign.quests.find(quest => quest.level === level)?.sidePage;
-      if (page) sideQuests[key] = {key, slug:draftPrefix, page, title:catalog.title, description:catalog.description};
-    }
-  }
+  const worldEncounters = encounters.filter(encounter => encounter.world === id).map(encounter => rust
+    ? {...encounter, page:campaign.quests.find(quest => quest.level === encounter.level)?.bossPage ?? encounter.page}
+    : encounter);
+  const sideQuestMap = sideQuestsFor(id, campaign.quests);
+  const sideQuests = [...sideQuestMap.values()].map(publicSideQuest);
   const exercisePages = new Map(pages.flatMap(page => page.prompts
     .filter(prompt => prompt.exerciseId)
     .map(prompt => [prompt.exerciseId, page.page])));
   return {
-    info, pages, rust, sideQuests,
+    info, pages, rust, sideQuestMap,
     cookie:rust ? 'ferrum_hero' : `ferrum_hero_${id}`,
     database:rust ? rustDatabase : join(database.dir, `${database.name}.${id}${database.ext}`),
     pathIds:new Set(['all', '', ...campaign.paths.map(path => path.id)]),
@@ -133,12 +123,12 @@ async function loadWorld(spec, number) {
     gradedLevels:new Set(exercises.map(exercise => exercise.level)),
     publicCampaign:{
       world:info, zones:campaign.zones ?? [],
-      paths:campaign.paths,
+      paths:campaign.paths, labs:campaign.labs ?? [],
       quests:campaign.quests.map(({hint1, hint2, debrief, ...quest}) => quest),
       rooms:campaign.rooms.map(room => ({...room, choices:room.choices.map(({result,...choice}) => choice)})),
       specialEncounters:worldEncounters.map(publicEncounter),
-      ...sideQuests,
-      sideQuests:Object.values(sideQuests),
+      ...Object.fromEntries(sideQuests.map(quest => [quest.key, quest])),
+      sideQuests,
       exercises:exercises.map(exercise => ({...workbenchSummary(exercise), page:exercisePages.get(exercise.id)})),
       levelPages:Object.fromEntries(campaign.quests.map(quest => [quest.level, quest.page])),
       total:pages.length,
@@ -288,7 +278,7 @@ async function profilePatch(request, response, world, heroId) {
   json(response, {ok:true, hero:await store.hero(heroId)});
 }
 
-async function levelPatch(request, response, {questMap, gradedLevels, store}, heroId, level) {
+async function levelPatch(request, response, {questMap, gradedLevels, store, info}, heroId, level) {
   const quest = questMap.get(level);
   if (!quest) throw new HttpError(404, 'Level not found.');
   const data = await readJson(request);
@@ -300,7 +290,8 @@ async function levelPatch(request, response, {questMap, gradedLevels, store}, he
   }
   if ('forge' in changes) {
     if (gradedLevels.has(level)) throw new HttpError(409, 'Passing the code exercise earns Forge on this level.');
-    if (changes.forge && !(await store.response(heroId, quest.bossPage, `boss-${level}`))?.value.trim()) {
+    if (changes.forge && !compatibleBookResponse(info.id, quest.bossPage, `boss-${level}`,
+      (page, promptId) => store.response(heroId, page, promptId))?.value.trim()) {
       throw new HttpError(409, 'Save your boss encounter draft before marking Forge.');
     }
   }
@@ -414,7 +405,7 @@ async function revealAnswer(request, response, world, heroId) {
   const reference = rubric ? writtenGm.reveal(world.info.id, prompt.id, prompt.body) : authoredTrainingAnswer(world.info.id, prompt);
   if (!reference) throw new HttpError(404, 'No example answer is available.');
   if (!world.store.revealWorkbenchAid(heroId, page.level)) {
-    const prior = world.store.progress(heroId).responses.find(answer => answer.page === page.page && answer.promptId === prompt.id);
+    const prior = findBookResponse(world.info.id, world.store.progress(heroId).responses, page.page, prompt.id);
     if (!rubric || prior?.assessment?.score !== 100 || prior.assessment.rubricVersion !== rubric.version) {
       throw new HttpError(403, 'Hard Mode locks the example answer.');
     }
@@ -425,6 +416,7 @@ async function revealAnswer(request, response, world, heroId) {
 
 function currentProgress(world, heroId) {
   const progress = world.store.progress(heroId);
+  progress.responses = remapBookResponses(world.info.id, progress.responses);
   progress.workbench = world.store.workbenchState(heroId);
   progress.combat = publicCombat(world.store.combatState(heroId));
   progress.merchant = currentMerchant(world, heroId);
@@ -561,12 +553,12 @@ async function submitCode(request, response, world, heroId) {
   json(response, report);
 }
 
-function sideQuestView(world, heroId, {key, draftPrefix, catalog}) {
+function sideQuestView(world, heroId, {slug, page, catalog}) {
   const {store} = world;
-  const {page} = world.sideQuests[key];
   const results = store.encounterResults(heroId, catalog.id);
   const completed = completedStages(catalog, results);
-  const draftFor = id => store.response(heroId, page, `${draftPrefix}-${id}`)?.value;
+  const draftFor = id => compatibleBookResponse(world.info.id, page, `${slug}-${id}`,
+    (savedPage, promptId) => store.response(heroId, savedPage, promptId))?.value;
   const stages = catalog.stages.map(({id, kind, title, prompt, options, exercise, carryFrom}) => {
     if (kind === 'choice') return {id, kind, title, prompt, options};
     const {signature, starter, testNames, requiredCases} = workbenchSummary(exercise);
@@ -583,8 +575,7 @@ function sideQuestView(world, heroId, {key, draftPrefix, catalog}) {
 
 async function submitSideQuest(request, response, world, heroId, definition) {
   const {store} = world;
-  const {key, draftPrefix, catalog} = definition;
-  const {page} = world.sideQuests[key];
+  const {slug, page, catalog} = definition;
   const data = await readJson(request);
   const stage = catalog.stages.find(item => item.id === data.stageId);
   if (!stage) throw new HttpError(400, 'Choose a stage of the side quest.');
@@ -604,7 +595,7 @@ async function submitSideQuest(request, response, world, heroId, definition) {
   if (submission?.prior) return respond(submission.prior);
 
   const progress = () => store.encounterResults(heroId, catalog.id);
-  const draftKey = `${draftPrefix}-${stage.id}`;
+  const draftKey = `${slug}-${stage.id}`;
   const previous = store.withEncounter(() => {
     const results = progress();
     if (results.has(stage.id)) return results.get(stage.id);
@@ -768,15 +759,16 @@ async function revealSuggestion(request, response, world, heroId) {
 
 const types = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8',
   '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
-  '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip'};
+  '.webp':'image/webp', '.pdf':'application/pdf', '.zip':'application/zip', '.json':'application/json; charset=utf-8'};
 const publicFiles = new Set(['/index.html', '/styles.css',
   ...worlds.flatMap(({info}) => [info.bookUrl, info.kitUrl].filter(Boolean))]);
 const pageAsset = /^\/book\/(?:(?:javascript|typescript|csharp|go)\/)?pages\/[1-9]\d{0,2}\.webp$/;
+const bookText = /^\/book\/(?:(?:javascript|typescript|csharp|go)\/)?reader-text\.json$/;
 
 async function staticFile(request, response, path) {
   const named = path === '/' ? '/index.html' : path;
   const builtAsset = /^\/assets\/[A-Za-z0-9_-]+\.(?:js|css)$/.test(named);
-  if (!publicFiles.has(named) && !pageAsset.test(named) && !builtAsset) throw new HttpError(404, 'Page not found.');
+  if (!publicFiles.has(named) && !pageAsset.test(named) && !bookText.test(named) && !builtAsset) throw new HttpError(404, 'Page not found.');
   const file = join(named.startsWith('/book/') ? publicDir : rendererDir, named.slice(1));
   const meta = await stat(file).catch(() => null);
   if (!meta?.isFile()) throw new HttpError(404, 'Page asset not found.');
@@ -824,9 +816,9 @@ const server = createServer(async (request,response) => {
       const heroRoute = path.match(/^\/api\/heroes\/([^/]+)$/);
       if (heroRoute) return deleteHero(request, response, world, heroRoute[1]);
     }
-    const sideQuest = sideQuestRoutes.get(path);
-    if (sideQuest && (method === 'GET' || method === 'POST')) {
-      if (!world.sideQuests[sideQuest.key]) throw new HttpError(404, 'This side quest is in JavaScript World 1.');
+    if (sideQuestRoutes.has(path) && (method === 'GET' || method === 'POST')) {
+      const sideQuest = world.sideQuestMap.get(path);
+      if (!sideQuest) throw new HttpError(404, 'Side quest not found in this world.');
       const heroId = await requireHero(request, world);
       if (method === 'POST') return await submitSideQuest(request, response, world, heroId, sideQuest);
       return json(response, sideQuestView(world, heroId, sideQuest));

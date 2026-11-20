@@ -1,11 +1,13 @@
 import {mobileReaderKey} from '../../lib/mobile/input.mjs';
 
+import {remapBookDrafts} from '../../lib/book-revisions.mjs';
+
 const draftKey = 'ferrum-prompt-drafts-v2';
 const lastPageKey = 'ferrum-last-page-v2';
 const selectedHeroKey = 'ferrum-selected-hero-v1';
 const selectedWorldKey = 'ferrum-mobile-world-v1';
 const mobile = import.meta.env?.MODE === 'mobile';
-const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|merchant(?:\/|$)|refactoring$|system-design$|rate-limiter$)/;
+const heroRoutes = /^\/api\/(?:progress(?:\/|$)|profile$|answers(?:\/|$)|grade$|encounters\/|levels\/|workbench\/|combat\/|trials(?:\/|$)|diamond(?:[/?]|$)|merchant(?:\/|$))/;
 const emptyProgress = () => ({
   levels: new Map(), responses: new Map(), attempts: [], workbenchModes: new Map(),
   hardClears: new Set(), hardExerciseClears: new Set(), exerciseClears: null, progressError: '', forgeAnimation: null,
@@ -57,7 +59,7 @@ function removeReaderData(world, id) {
 function readDrafts(world, hero) {
   try {
     const value = JSON.parse(readLocal(readerKey(world, draftKey, hero.id)) || '{}');
-    return new Map(Object.entries(value).filter(([, draft]) => typeof draft === 'string'));
+    return remapBookDrafts(world.id, new Map(Object.entries(value).filter(([, draft]) => typeof draft === 'string')));
   } catch {
     return new Map();
   }
@@ -127,7 +129,8 @@ export function createGame() {
       headers['X-Ferrum-Request'] = '1';
       headers['Content-Type'] = 'application/json';
     }
-    if (heroRoutes.test(path)) {
+    const sideQuest = game.campaign.sideQuests?.some(({slug}) => path === `/api/${slug}`);
+    if (heroRoutes.test(path) || sideQuest) {
       if (!hero) throw new Error('Choose a hero to save your expedition.');
       headers['X-Ferrum-Hero'] = hero.id;
     }

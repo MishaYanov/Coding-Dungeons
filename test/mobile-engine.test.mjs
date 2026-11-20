@@ -75,14 +75,52 @@ test('mobile campaign exposes all World 1 pages and exercise metadata', async ()
 });
 
 test('mobile campaigns expose their full book and local support status', async () => {
-  for (const [worldId, pages, runner] of [['typescript',56,'available'], ['rust',559,'unavailable'], ['go',56,'unavailable']]) {
+  const rustPageCount = localCatalog('rust', identity).pages.length;
+  for (const [worldId, pages, runner] of [['typescript',56,'available'], ['rust',rustPageCount,'unavailable'], ['go',56,'unavailable']]) {
     const {api} = fixture({worldId});
     const campaign = await api('/api/campaign');
     assert.equal(campaign.world.id, worldId);
     assert.equal(campaign.total, pages);
     assert.equal((await api(`/api/pages/${pages}`)).page, pages);
+    await assert.rejects(api(`/api/pages/${pages + 1}`), /Page not found/);
     assert.equal((await api('/api/status')).runner, runner);
   }
+});
+
+test('all three Rust field labs retain safe notebooks and backup drafts without invoking a runner', async () => {
+  const original = fixture({worldId:'rust', rustRunnerAvailable:true});
+  const {api, calls} = original;
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Field Lab Explorer', oneLife:true}});
+  const campaign = await api('/api/campaign');
+  assert.deepEqual(campaign.labs.map(lab => lab.id), ['lab-async', 'lab-dispatch', 'lab-schedules']);
+  const authored = localCatalog('rust', identity).pages;
+  const drafts = [];
+  for (const lab of campaign.labs) {
+    const matches = prompt => prompt.id.startsWith(lab.id + '-') && prompt.type === 'code';
+    const page = authored.find(page => page.prompts.some(matches));
+    assert.ok(page, `${lab.id} notebook exists`);
+    const view = await api(`/api/pages/${page.page}`);
+    const prompt = view.prompts.find(matches);
+    const promptId = prompt.id;
+    assert.equal(prompt.type, 'code');
+    assert.equal(prompt.exerciseId, undefined);
+    const draft = {page:page.page, promptId, value:`// ${lab.title}\n${prompt.starter}`};
+    const saved = await api('/api/answers', {method:'POST', hero, body:draft});
+    assert.equal(saved.correct, null);
+    drafts.push(draft);
+  }
+  assert.deepEqual(calls, []);
+  const restored = fixture({worldId:'rust'});
+  await restored.importBackup(await original.exportBackup());
+  const progress = await restored.api('/api/progress', {hero});
+  for (const draft of drafts) {
+    const response = progress.responses.find(response => response.promptId === draft.promptId);
+    assert.equal(response.page, draft.page);
+    assert.equal(response.value, draft.value);
+  }
+  assert.deepEqual(progress.levels, []);
+  assert.deepEqual(progress.attempts, []);
+  assert.equal(progress.combat.hp, 100);
 });
 
 test('C# supports checkpoints, saved drafts, and self-review without executing source', async () => {
@@ -161,6 +199,157 @@ test('C# goblin predicts code output before its riddle and awards a potion once'
   const restored = fixture({worldId});
   await restored.importBackup(await original.exportBackup());
   assert.equal((await restored.api('/api/merchant', {hero})).balance, 3);
+});
+
+test('TypeScript and Go expose distinct side quests only in their respective worlds', async () => {
+  const expected = [
+    ['typescript', 'typed-notice', 44],
+    ['go', 'cancellable-relay', 48],
+  ];
+  for (const [worldId, slug, page] of expected) {
+    const {api} = fixture({worldId});
+    const campaign = await api('/api/campaign');
+    assert.ok(campaign.sideQuests.some(quest => quest.slug === slug && quest.page === page));
+    assert.equal((await api(`/api/pages/${page}`)).page, page);
+  }
+});
+
+test('offline side quests bind the correct runner and restore completed stages and rewards from backups', async () => {
+  for (const worldId of ['typescript', 'go']) {
+    const options = {worldId, goRunnerAvailable:true};
+    const original = fixture(options);
+    const {api, calls} = original;
+    const [[path, {catalog}]] = localCatalog(worldId).sideQuestMap;
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Relay Scout', oneLife:true}});
+    const post = body => api(path, {method:'POST', hero, body});
+    const firstCode = catalog.stages.find(stage => stage.kind === 'code');
+    await assert.rejects(post({stageId:firstCode.id, code:'right', submissionId:'too-soon'}), /earlier stages/);
+    for (const stage of catalog.stages) {
+      if (stage.kind === 'choice') {
+        await post({stageId:stage.id, optionId:stage.answer, submissionId:stage.id});
+        continue;
+      }
+      const priorCode = catalog.stages.find(item => item.id === stage.carryFrom)?.exercise.reference;
+      const code = [priorCode, stage.exercise.reference].filter(Boolean).join('\n\n');
+      const attempt = {stageId:stage.id, code, submissionId:stage.id};
+      const practice = await post({...attempt, purpose:'examples'});
+      assert.equal(practice.completed.includes(stage.id), false);
+      assert.equal(practice.result.verdict, 'pass');
+      assert.equal(calls.at(-1).language, worldId);
+      assert.equal(calls.at(-1).tests.length, 1);
+      assert.equal(calls.at(-1).typeTests, undefined);
+      const checked = await post(attempt);
+      assert.equal(checked.result.verdict, 'pass');
+      assert.ok(checked.completed.includes(stage.id));
+      assert.equal(calls.at(-1).tests.length, stage.exercise.tests.length);
+      assert.deepEqual(calls.at(-1).typeTests, stage.exercise.typeTests);
+    }
+    const restored = fixture(options);
+    const backup = JSON.parse(JSON.stringify(await original.exportBackup()));
+    assert.equal((await restored.importBackup(backup)).imported, 1);
+    const progress = await restored.api('/api/progress', {hero});
+    assert.deepEqual(progress.levels, []);
+    assert.deepEqual(progress.workbench.clears, []);
+    assert.equal(progress.combat.potions, 2);
+    const view = await restored.api(path, {hero});
+    assert.deepEqual(view.completed, catalog.stages.map(stage => stage.id));
+    assert.equal(view.debrief, catalog.debrief);
+  }
+});
+
+test('the runaway microservice repairs preserve ordering, HP, runner contracts, rewards and backups in Rust and Go', async () => {
+  for (const worldId of ['rust', 'go']) {
+    const options = {worldId, rustRunnerAvailable:true, goRunnerAvailable:true};
+    const original = fixture(options);
+    const {api, calls} = original;
+    const [path, {catalog, page}] = [...localCatalog(worldId).sideQuestMap].find(([path]) => path === `/api/rogue-${worldId}`);
+    const campaign = await api('/api/campaign');
+    assert.ok(campaign.sideQuests.some(quest => quest.slug === `rogue-${worldId}` && quest.page === page));
+    assert.equal((await api(`/api/pages/${page}`)).page, page);
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:`Midnight ${worldId}`, oneLife:true}});
+    const post = body => api(path, {method:'POST', hero, body});
+    const initial = await api(path, {hero});
+    assert.doesNotMatch(JSON.stringify(initial), /"reference"|"answer"|"tests"|"debrief"/);
+    const final = catalog.stages.at(-1);
+    await assert.rejects(post({stageId:final.id, optionId:final.answer, submissionId:'skip-repair'}), /earlier stages/);
+    const first = catalog.stages[0];
+    const miss = {stageId:first.id, optionId:first.options.find(option => option.id !== first.answer).id, submissionId:'incident-miss'};
+    assert.equal((await post(miss)).combat.hp, 95);
+    assert.equal((await post(miss)).combat.hp, 95);
+    assert.equal((await post(miss)).combatEvent.damage, 0);
+    const completed = [];
+    let failedCode = false;
+    let last;
+    for (const stage of catalog.stages) {
+      const body = {stageId:stage.id, submissionId:stage.id,
+        ...(stage.kind === 'code' ? {code:stage.exercise.reference} : {optionId:stage.answer})};
+      if (stage.kind === 'code') {
+        const practice = await post({...body, purpose:'examples'});
+        assert.equal(practice.result.verdict, 'pass');
+        assert.deepEqual(practice.completed, completed);
+        assert.equal(practice.debrief, undefined);
+        assert.equal((await api('/api/progress', {hero})).combat.hp, failedCode ? 90 : 95);
+        assert.equal(calls.at(-1).language, worldId);
+        if (worldId === 'rust') {
+          assert.deepEqual(calls.at(-1).caseIds, stage.exercise.testNames.slice(0, 1));
+          assert.deepEqual(calls.at(-1).exercise, stage.exercise);
+        } else assert.equal(calls.at(-1).tests.length, 1);
+        if (!failedCode) {
+          const failure = {...body, code:'wrong', submissionId:'code-miss'};
+          assert.equal((await post(failure)).combat.hp, 90);
+          assert.equal((await post(failure)).combatEvent.damage, 0);
+          failedCode = true;
+        }
+      }
+      last = await post(body);
+      completed.push(stage.id);
+      assert.deepEqual(last.completed, completed);
+      assert.equal(last.combat.hp, failedCode ? 90 : 95);
+      if (stage.kind === 'code') {
+        assert.equal(last.result.verdict, 'pass');
+        if (worldId === 'rust') assert.deepEqual(calls.at(-1).caseIds, stage.exercise.testNames);
+        else assert.equal(calls.at(-1).tests.length, stage.exercise.tests.length);
+      }
+      if (stage !== final) assert.equal(last.debrief, undefined);
+    }
+    assert.equal(last.debrief, catalog.debrief);
+    assert.equal(last.combat.potions, 2);
+    assert.equal(last.combatEvent.potionsEarned, 1);
+    for (const submissionId of [final.id, 'finished-again']) {
+      const replay = await post({stageId:final.id, optionId:final.answer, submissionId});
+      assert.equal(replay.combat.potions, 2);
+      assert.equal(replay.combatEvent.potionsEarned, 0);
+    }
+    const restored = fixture(options);
+    await restored.importBackup(JSON.parse(JSON.stringify(await original.exportBackup())));
+    const saved = await restored.api(path, {hero});
+    assert.deepEqual(saved.completed, completed);
+    assert.equal(saved.debrief, catalog.debrief);
+    const progress = await restored.api('/api/progress', {hero});
+    assert.deepEqual(progress.levels, []);
+    assert.deepEqual(progress.workbench.clears, []);
+    assert.equal(progress.combat.potions, 2);
+  }
+});
+
+test('an unavailable microservice runner preserves its code draft without HP damage or a repair clear', async () => {
+  for (const worldId of ['rust', 'go']) {
+    const {api, calls} = fixture({worldId});
+    const [path, {catalog}] = [...localCatalog(worldId).sideQuestMap].find(([path]) => path === `/api/rogue-${worldId}`);
+    const {hero} = await api('/api/heroes', {method:'POST', body:{name:`Draft ${worldId}`, oneLife:true}});
+    const [first, code] = catalog.stages;
+    const post = body => api(path, {method:'POST', hero, body});
+    await post({stageId:first.id, optionId:first.answer, submissionId:'begin'});
+    const attempt = {stageId:code.id, code:code.exercise.reference, submissionId:'offline'};
+    for (let retry = 0; retry < 2; retry++) {
+      const result = await post(attempt);
+      assert.equal(result.result.verdict, 'unavailable');
+      assert.deepEqual(result.completed, [first.id]);
+      assert.equal(result.stages.find(stage => stage.id === code.id).draft, attempt.code);
+    }
+    assert.deepEqual(calls, []);
+    assert.equal((await api('/api/progress', {hero})).combat.hp, 100);
+  }
 });
 
 test('mobile choice damage, replay, potion healing and trial reward persist by hero', async () => {

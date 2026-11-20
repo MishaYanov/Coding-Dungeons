@@ -384,6 +384,13 @@ function WorldMap({ game, actions }) {
               <p className="fine-print">{quest.description}</p>
             </div>)}
           </section>}
+          {campaign.labs?.length > 0 && <section className="special-map" aria-label="Worked labs">
+            <h3 className="zone-title">Worked labs</h3>
+            {campaign.labs.map(lab => <div className="special-map-entry" key={lab.id}>
+              <BookLink page={lab.page} actions={actions}>{lab.title}</BookLink>
+              <p className="fine-print">{lab.description}</p>
+            </div>)}
+          </section>}
           {specials.length > 0 && <section className="special-map">
             <h3 className="zone-title">Special encounters</h3>
             {specials.map((special) => <div className="special-map-entry" key={special.id}>

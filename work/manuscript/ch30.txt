@@ -2,7 +2,7 @@
 
 ## A raw pointer postpones obligations
 
-A raw pointer can represent an address without carrying the safe access guarantees of a reference. It can be null, unaligned, stale, or point to storage that does not currently contain an initialized value of its nominal pointee type. Merely having such a pointer is not the same as having permission to dereference it. The obligations become concrete when an operation reads, writes, forms a reference, performs constrained pointer arithmetic, or otherwise relies on a stronger contract.
+A raw pointer can hold an address without the access guarantees of a reference. It can be null, unaligned, stale, or point to storage without an initialized value of its pointee type. Possessing the pointer does not authorize dereferencing it. An operation that reads, writes, forms a reference, or performs constrained pointer arithmetic must satisfy that operation's stronger contract.
 
 This flexibility is useful for implementing allocators, foreign interfaces, collections, and device access. It is also why raw pointers do not solve a borrowing problem by themselves. They remove static enforcement from part of the operation and require the implementation to preserve the same underlying memory safety conditions through another argument.
 
@@ -185,7 +185,7 @@ For each unsafe operation, identify the allocation owner, range, alignment, init
 
 Miri and sanitizers can find important errors in tested executions, including some that ordinary optimized runs appear to tolerate. They do not prove correctness for all clients, targets, and schedules. Use them to challenge a written invariant, and revise the invariant when a failure reveals a missing condition.
 
-The strongest pointer code keeps raw access intervals short and converts back to safe types only after every stronger contract has been established. That local discipline allows the rest of the program to reason with ownership and borrowing instead of repeating the same pointer proof at every call site.
+Keep raw access intervals short. Convert back to safe types only after establishing their stronger contracts. The rest of the program can then use ownership and borrowing without repeating the pointer proof at each call site.
 
 ## Exercises
 

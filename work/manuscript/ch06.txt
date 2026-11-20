@@ -2,7 +2,7 @@
 
 ## Destruction is part of control flow
 
-Resource acquisition is initialization associates resource responsibility with a value. When that value is dropped, its implementation releases the resource. Files, heap allocations, lock guards, temporary directories, and subscription handles can all follow this pattern. The key advantage is compositional cleanup: every early return and ordinary unwind path need not repeat a hand written release sequence.
+`Resource acquisition is initialization` (RAII) ties responsibility for a resource to an initialized value. Dropping that value releases the resource through its implementation. Files, allocations, lock guards, temporary directories, and subscription handles can follow this pattern. Their cleanup composes across early returns and ordinary unwinding without repeating release code at every exit.
 
 Destruction does not mean garbage collection, nor does it guarantee that a business operation completed. A lock guard releasing a mutex makes the mutex available; it does not automatically repair partially updated application state. A file destructor closes a handle, but cannot return a writeback error to the already departing caller. Distinguish releasing resources from establishing the success of an external effect.
 
@@ -91,7 +91,7 @@ Memory safety requires that a panic cannot leave safe code able to cause undefin
 
 An operation can be memory safe while leaving a partially updated list. That may be an acceptable documented contract. A transaction editor may instead need all or nothing behavior. The implementation strategy follows the required guarantee, not the presence of a destructor alone.
 
-One effective strong guarantee is to build new state separately, invoking fallible or user supplied behavior before replacing the old state. The old representation remains established until commit.
+To preserve old state until commit, build its replacement separately. Run fallible operations and user code during preparation, before replacing the existing value.
 
 ```rust
 fn rebuild<T, E, F>(values: &mut Vec<T>, mut make: F) -> Result<(), E>

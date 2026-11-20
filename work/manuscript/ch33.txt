@@ -2,9 +2,9 @@
 
 ## A Calling Convention Does Not Define a Safe API
 
-An FFI declaration connects two systems that may disagree about representation, ownership, failure, and concurrency. extern C selects a calling convention appropriate to the target. It does not establish how long a pointer remains valid, which allocator owns it, whether callbacks can arrive later, or whether a foreign function mutates memory behind an apparently shared reference.
+An FFI declaration connects systems that may disagree about representation, ownership, failure, and concurrency. `extern "C"` selects the target's C calling convention. It does not establish a pointer's lifetime, its allocator, whether callbacks can arrive later, or whether foreign code mutates memory behind an apparently shared reference.
 
-The productive way to design an FFI boundary is as a protocol. Every pointer has an owner and an access duration. Every allocation has a matching destruction operation. Every callback registration has a lifetime and an unregistration rule. Every status code has a postcondition. Write these rules before converting raw pointers into Rust references, because reference creation asserts stronger facts than a foreign pointer alone provides.
+Design the FFI boundary as a protocol. Specify each pointer's owner and access duration, each allocation's matching destruction operation, and each callback registration's lifetime and removal rule. Give every status code a postcondition. Establish those facts before constructing Rust references, because a reference asserts more than a foreign pointer alone provides.
 
 There are two different layers of unsafety. Declaring a foreign signature asserts that its ABI and types match the foreign implementation. Calling it may require additional preconditions about arguments and global state. A safe wrapper must discharge those preconditions for every safe caller, not merely for the examples the author expects.
 

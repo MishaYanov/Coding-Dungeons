@@ -2,7 +2,7 @@
 
 An async operation can stop being polled because its owner drops it. A timeout, a losing branch in a race, a disconnected caller, or service shutdown can all lead to that event. The future's stored values are then destroyed, but statements that would have run after the current suspension point do not run. Cancellation therefore connects control flow directly to ownership and destruction.
 
-The difficult question is what has already happened. Dropping a future can release a local reservation, but it cannot erase a packet already sent or a database commit already accepted. A good cancellation contract identifies the boundary between reversible local preparation and externally visible effects. It also defines what the caller may conclude when that boundary was crossed but no result was received.
+Ask what happened before cancellation. Dropping a future can release a local reservation; it cannot erase a packet or an accepted database commit. Identify where preparation became an external effect, then state what the caller knows if confirmation was lost.
 
 ## Cleanup Must Exist in Stored State
 
@@ -168,7 +168,7 @@ If a checkpoint occurs while a local invariant is temporarily broken, stopping t
 
 ## Dropping a Handle and Stopping Work Differ
 
-A task handle is an ownership relationship with runtime specific semantics. Dropping it might detach the task, request cancellation, or perform some other documented action. Never infer the behavior from the generic word handle. Likewise, requesting an abort may require later scheduling before the task's future is actually destroyed.
+Read the runtime's task-handle contract. Dropping a handle may detach the task or request cancellation; the name handle does not decide. Even an abort request may need another scheduling opportunity before the future is destroyed.
 
 The distinction matters during shutdown. A service that drops every handle may leave background work alive. A service that requests cancellation but never waits may exit before cleanup finishes. A structured owner should retain the capabilities needed to observe termination, collect failures, and release resources in a defined order.
 

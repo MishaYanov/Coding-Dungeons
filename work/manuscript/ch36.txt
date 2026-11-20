@@ -1,6 +1,6 @@
 # Chapter 36 Validation Should Attack the Contract
 
-Rust's compiler establishes important properties before execution, but it does not establish that a parser accepts the intended language, a retry is idempotent, a shutdown completes, or an unsafe abstraction is sound. Validation works best when each technique attacks a specific remaining uncertainty. A unit test checks a concrete observation. A property test explores a relationship over many inputs. A model checks a simplified state machine. An interpreter or sanitizer detects certain invalid executions. None of these should be asked to prove more than its method can support.
+Rust's compiler establishes many properties before execution. It does not establish the intended parser grammar, idempotent retries, completed shutdown, or a sound unsafe abstraction. Choose validation for the remaining uncertainty: unit tests check observations, property tests explore relationships, models check simplified transitions, and interpreters or sanitizers detect certain invalid executions. Keep each conclusion within the method's scope.
 
 Begin by writing the contract in observable terms. A bounded queue never contains more than its capacity, preserves accepted item order, and returns rejected items unchanged. A transaction either commits its intended state or leaves the previous state available. A parser either returns a valid representation or a defined error without losing bytes outside its consumption contract. Such statements generate useful tests because they describe behavior independent of the implementation's private steps.
 
@@ -240,7 +240,7 @@ Do not automatically rewrite correct code merely to silence an unexplained inter
 
 Sleeping for a few milliseconds and hoping another thread reached a state is a fragile test protocol. Use barriers, channels, or controlled hooks to establish the intended interleaving. A test for closing admission should deliberately pause a request around its registration boundary and then run shutdown, rather than rely on a race occurring by chance.
 
-Repeated stress tests can discover real bugs but rarely establish their absence. Schedule exploration tools can systematically vary supported synchronization interleavings within a bounded model. Such tools require using their modeled primitives and have limits on the behaviors explored. The model must include the synchronization edges on which the algorithm's proof depends; replacing only one atomic in a larger protocol is not enough.
+Stress tests can discover bugs without establishing their absence. Lab S enumerates a small admission/shutdown protocol, prints a failing history, and checks the repair. Larger schedule exploration tools vary supported interleavings within a bounded model. Use their modeled primitives for every synchronization edge the proof needs; replacing one atomic in a larger protocol is insufficient.
 
 Memory ordering bugs deserve particular caution. A test on one architecture can pass because that machine's common behavior is stronger than the algorithm's required portable guarantee. Increasing stress iterations does not repair a missing happens before relationship. Combine a written ordering argument with appropriate model exploration and tests for the state machine's visible behavior.
 

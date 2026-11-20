@@ -12,10 +12,14 @@ test('every reader page has a WebP asset tagged with the current PDF revision', 
   const pdf = await readFile(new URL('../public/book/ferrum-expedition.pdf', import.meta.url));
   assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
   const revision = createHash('sha256').update(pdf).digest('hex').slice(0, 16);
-  assert.equal(pages.length, 559);
+  assert.ok(pages.length >= 300, 'The full Rust book retains at least 300 pages');
+  const text = await readJson('../public/book/reader-text.json');
+  assert.equal(text.pdfSha256, createHash('sha256').update(pdf).digest('hex'));
+  assert.equal(text.pages.length, pages.length, 'PDF text and image editions share the same page count');
   for (const [index, page] of pages.entries()) {
     const number = index + 1;
     assert.equal(page.page, number);
+    assert.equal(page.total, pages.length);
     assert.equal(page.image, `/book/pages/${number}.webp?v=${revision}`);
     const file = await open(new URL(`../public${page.image}`, import.meta.url));
     try {
@@ -66,4 +70,29 @@ test('the campaign map, page links, and printed questions stay bound to the read
     assert.equal(ids.get(`side-${quest.level}`), quest.sidePage);
   }
   for (const room of campaign.rooms) assert.equal(ids.get(`room-${room.id}`), room.page);
+});
+
+test('all three field labs link to their exact authored Rust program without claiming a graded clear', async () => {
+  assert.deepEqual(campaign.labs.map(lab => lab.id), ['lab-async', 'lab-dispatch', 'lab-schedules']);
+  for (const [position, lab] of campaign.labs.entries()) {
+    assert.ok(Number.isInteger(lab.page) && lab.page >= 1 && lab.page <= pages.length);
+    assert.ok(lab.title.length > 0 && lab.description.length > 0);
+    assert.ok(pages.some(page => page.links.some(link => link.page === lab.page)), `${lab.id} is linked in the book`);
+    const source = (await readFile(new URL(`../work/manuscript/${lab.id.replace('-', '_')}.txt`, import.meta.url), 'utf8'))
+      .replaceAll('\r\n', '\n');
+    const listings = [...source.matchAll(/^```([^\n]*)\n(.*?)\n```\s*$/gms)];
+    const programs = listings.map((match, index) => ({language:match[1], code:match[2], id:`${lab.id}-${index + 1}`}))
+      .filter(listing => listing.language === 'rust');
+    assert.equal(programs.length, 1, `${lab.id} supplies one complete reference program`);
+    for (const program of programs) {
+      const cards = pages.flatMap(page => page.prompts.filter(prompt => prompt.id === program.id)
+        .map(prompt => ({page:page.page, prompt})));
+      assert.equal(cards.length, 1, `${program.id} has exactly one saved-draft identity`);
+      const [{page, prompt}] = cards;
+      assert.ok(page >= lab.page && page < (campaign.labs[position + 1]?.page ?? pages.length + 1));
+      assert.equal(prompt.type, 'code');
+      assert.equal(prompt.starter, program.code);
+      assert.equal(prompt.exerciseId, undefined, 'Host-only lab programs remain notebooks in the portable reader');
+    }
+  }
 });

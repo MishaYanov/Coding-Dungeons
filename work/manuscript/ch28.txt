@@ -1,6 +1,6 @@
 # Chapter 28 Services Need Owners for Work and Failure
 
-A service is a collection of operations that remain meaningful while callers arrive, disappear, retry, and fail. Its hardest bugs often live between individually correct components: an accept loop can keep creating jobs after shutdown begins, a bounded queue can feed unlimited active tasks, or a supervisor can drop the only handles capable of reporting failures. Rust's ownership model helps when the service assigns explicit owners to admission, active work, results, and termination.
+Service bugs often occur between correct components. An accept loop can admit work during shutdown. A bounded queue can feed unlimited active tasks. A supervisor can lose the handles needed to observe failures. Assign explicit owners to admission, accepted work, results, and termination.
 
 Start with four questions. Who may accept new work? Who owns a request after acceptance? Who observes the operation's final outcome? Who waits for every owned activity to stop? The answers should survive cancellation of any one caller. A service with no answer to the last question tends to accumulate detached tasks and uncertain shutdown behavior. A service with several incompatible answers to the first question tends to admit work during transitions that were intended to close it.
 
@@ -94,7 +94,7 @@ fn main() {
 
 The lease is not cloneable. Acceptance increments the count, and dropping the lease decrements it. Forgetting a lease leaves its capacity charged and can prevent draining. A task should retain the lease with the work even if its caller drops the response receiver, so the count tracks work rather than waiting callers.
 
-This model deliberately does not include a wait notification. An asynchronous service would connect the transition to zero with a suitable notification primitive, using a protocol that cannot lose wakeups. It also chooses to propagate mutex poisoning through panic. A production owner needs a defined failure policy for its state. The important invariant is visible: admission phase and active count change under one guard, and stopping cannot race with an unregistered accepted operation.
+Phase and active count change under one guard, so closure cannot miss an accepted operation. This example omits drain notification and propagates poisoning as a panic. The Async Service Lab supplies a complete, controlled worker-and-future composition. A production service also needs a notification and failure policy appropriate to its runtime.
 
 ## Bound Every Stage That Can Retain Work
 

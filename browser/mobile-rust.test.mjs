@@ -10,6 +10,7 @@ import {chromium, devices} from 'playwright-core';
 import {build, preview} from 'vite';
 import legacy from '../data/exercises.json' with {type:'json'};
 import drills from '../data/workbench/rust.mjs';
+import rogueRust from '../data/workbench/rogue-rust.mjs';
 import {definitions} from '../lib/diamond-content.mjs';
 import {caseExport} from '../lib/standalone-runner-harness.mjs';
 
@@ -18,7 +19,8 @@ const output = join(project, 'out');
 const pack = join(output, 'mobile-rust-pack');
 const execute = promisify(execFile);
 const goblin = {id:'diamond-goblin', ...definitions.rust};
-const catalog = [...legacy, ...drills, goblin];
+const rogueExercises = rogueRust.stages.filter(stage => stage.kind === 'code').map(stage => stage.exercise);
+const catalog = [...legacy, ...drills, goblin, ...rogueExercises];
 
 async function filesIn(folder) {
   return (await readdir(folder, {recursive:true, withFileTypes:true}))
@@ -165,7 +167,7 @@ test('the optional mobile Rust pack compiles real answers and enforces Rust and 
   }
   const page = await openProbe(t);
   const run = (exercise, source, extra = {}) => page.evaluate(request => window.grade(request), {exercise, source, ...extra});
-  const selected = process.env.FERRUM_MOBILE_RUST_SMOKE === '1' ? [drills[0], goblin] : catalog;
+  const selected = process.env.FERRUM_MOBILE_RUST_SMOKE === '1' ? [drills[0], goblin, ...rogueExercises] : catalog;
   const timings = [];
   for (const exercise of selected) await t.test(exercise.id, async () => {
     const start = performance.now();
