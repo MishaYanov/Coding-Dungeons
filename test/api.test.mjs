@@ -11,6 +11,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { openStore } from '../lib/store.mjs';
+import rustPages from '../data/pages.json' with {type:'json'};
+import rustCampaign from '../data/campaign.json' with {type:'json'};
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const mutationHeaders = { 'Content-Type': 'application/json', 'X-Ferrum-Request': '1' };
@@ -111,7 +113,12 @@ function chunkedStatus(path, { headers, chunks = [] }) {
 }
 
 const javascriptWorld = {'X-Ferrum-World':'javascript'};
-const rustChoice = {page:18, promptId:'checkpoint-1', value:'4'};
+function rustQuestion(promptId) {
+  const page = rustPages.find(page => page.prompts.some(prompt => prompt.id === promptId));
+  assert.ok(page, `The Rust book must publish ${promptId}`);
+  return {page:page.page, promptId};
+}
+const rustChoice = {...rustQuestion('checkpoint-1'), value:'4'};
 const jsTrial = 'dispatch-floor-trial';
 const trialAnswers = {'relay-order':'b', 'badge-identity':'c'};
 
@@ -309,7 +316,7 @@ test('One Life charges one wrong answer once and a potion heals only missing HP'
   assert.equal(healedRetry.combatEvent.healing, 0);
   const {payload:progress} = await request('/api/progress', {hero});
   assert.deepEqual(progress.combat, healed.combat);
-  const written = {page:25,promptId:'training-1-3',value:'A draft with no verified score.',submissionId:randomUUID()};
+  const written = {...rustQuestion('training-1-3'),value:'A draft with no verified score.',submissionId:randomUUID()};
   const {payload:unscored} = await request('/api/answers', {method:'POST', hero, body:written});
   assert.equal(unscored.assessment.score, null);
   assert.equal(unscored.combat.hp, 100);
@@ -398,8 +405,8 @@ test('falling at zero HP survives a restart and leaves reading and drafts availa
   await request('/api/combat/potion',{method:'POST',hero,body:{submissionId:randomUUID()},status:409});
   await request('/api/answers',{method:'POST',hero,body:{...rustChoice,submissionId:randomUUID()},status:409});
   await request('/api/progress/1',{method:'PATCH',hero,body:{scout:true},status:409});
-  await request('/api/pages/26',{hero});
-  await request('/api/answers',{method:'POST',hero,body:{page:26,promptId:'boss-1',value:'saved draft'}});
+  await request(`/api/pages/${rustQuestion('boss-1').page}`,{hero});
+  await request('/api/answers',{method:'POST',hero,body:{...rustQuestion('boss-1'),value:'saved draft'}});
 });
 
 test('reader serves the book and blocks access to private project files', async () => {
@@ -414,7 +421,7 @@ test('reader serves the book and blocks access to private project files', async 
   const {response: rendererModule} = await request(asset, {method: 'HEAD'});
   assert.equal(rendererModule.headers.get('Content-Type'), 'text/javascript; charset=utf-8');
 
-  const { payload: image, response: imageResponse } = await request('/book/pages/559.webp');
+  const { payload: image, response: imageResponse } = await request(`/book/pages/${rustPages.length}.webp`);
   assert.equal(imageResponse.headers.get('Content-Type'), 'image/webp');
   assert.equal(image.subarray(0, 4).toString(), 'RIFF');
   assert.equal(image.subarray(8, 12).toString(), 'WEBP');
@@ -429,7 +436,7 @@ test('reader serves the book and blocks access to private project files', async 
   assert.equal(fieldKit.subarray(0, 4).toString('hex'), '504b0304');
   assert.ok(fieldKit.includes('campaign/Quest_Journal.txt'));
 
-  for (const path of ['/data/exercises.json', '/state/ferrum.sqlite', '/book/pages/560.webp', '/app.js',
+  for (const path of ['/data/exercises.json', '/state/ferrum.sqlite', `/book/pages/${rustPages.length + 1}.webp`, '/app.js',
     '/book/%2E%2E/server.mjs', '/book/pages/%2F..%2Findex.html', '/api/not-a-route']) {
     await request(path, { status: 404 });
   }
@@ -438,7 +445,7 @@ test('reader serves the book and blocks access to private project files', async 
 test('public campaign data reveals instructions and questions but excludes answers and tests', async () => {
   const { payload: campaign, response } = await request('/api/campaign');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
-  assert.equal(campaign.total, 559);
+  assert.equal(campaign.total, rustPages.length);
   assert.equal(campaign.quests.length, 42);
   assert.ok(campaign.exercises.length > 0);
   assert.ok(campaign.rooms.length > 0);
@@ -471,16 +478,16 @@ test('public campaign data reveals instructions and questions but excludes answe
   assert.deepEqual(before.workbench.modes, []);
   const { payload: hint } = await request(hintPath, { method: 'POST', hero, body: {} });
   assert.match(hint.text, /owner/);
-  for (const path of ['/api/pages/0', '/api/pages/560', '/api/levels/43/reveal/hint1',
+  for (const path of ['/api/pages/0', `/api/pages/${rustPages.length + 1}`, '/api/levels/43/reveal/hint1',
     '/api/levels/1/reveal/solution']) await request(path, { status: 404 });
 });
 
 test('Hard Mode survives reload and denies guide and authored answer access through the API', async () => {
   const { hero } = await createHero('Hard Reader');
   const { hero: guided } = await createHero('Guided Reader');
-  const question = { page: 25, promptId: 'training-1-3' };
+  const question = rustQuestion('training-1-3');
   const answer = { ...question, value: 'A shared borrow can end after its last use.' };
-  const { payload: page } = await request('/api/pages/25');
+  const { payload: page } = await request(`/api/pages/${question.page}`);
   assert.ok(page.prompts.find(prompt => prompt.id === question.promptId).assessment.version);
   const { payload: mode } = await request('/api/workbench/1/mode', { method: 'PATCH', hero, body: { mode: 'hard' } });
   assert.deepEqual(mode, { mode: 'hard', assisted: false });
@@ -500,6 +507,30 @@ test('Hard Mode survives reload and denies guide and authored answer access thro
   assert.match(revealed.text, /shared borrow/);
   const { payload: guidedProgress } = await request('/api/progress', { hero: guided });
   assert.deepEqual(guidedProgress.workbench.modes, [{ level: 1, mode: 'guided', assisted: true }]);
+});
+
+test('Rust field labs expose authored notebooks and preserve drafts without grading or awarding Forge', async () => {
+  const {hero} = await createHero('Field Lab Scribe');
+  const {payload:campaign} = await request('/api/campaign');
+  assert.deepEqual(campaign.labs.map(lab => lab.id), ['lab-async', 'lab-dispatch', 'lab-schedules']);
+  for (const lab of campaign.labs) {
+    const notebook = rustPages.flatMap(page => page.prompts)
+      .find(prompt => prompt.id.startsWith(lab.id + '-') && prompt.type === 'code');
+    assert.ok(notebook, `${lab.id} publishes a code notebook`);
+    const key = rustQuestion(notebook.id);
+    const {payload:page} = await request(`/api/pages/${key.page}`);
+    const prompt = page.prompts.find(prompt => prompt.id === key.promptId);
+    assert.equal(prompt.type, 'code');
+    assert.equal(prompt.exerciseId, undefined);
+    assert.ok(key.page >= lab.page);
+    const value = `// Saved variation of ${lab.title}\n${prompt.starter}`;
+    const {payload:saved} = await request('/api/answers', {method:'POST', hero, body:{...key, value}});
+    assert.equal(saved.correct, null);
+    const {payload:progress} = await request('/api/progress', {hero});
+    assert.equal(progress.responses.find(response => response.promptId === key.promptId).value, value);
+    assert.deepEqual(progress.levels, []);
+    assert.deepEqual(progress.attempts, []);
+  }
 });
 
 test('Code Workbench runs public examples without victory, then saves a full clear once', async () => {
@@ -572,7 +603,7 @@ test('a prior Guided victory does not unlock hints in an uncleared Hard encounte
 
 test('unscored training submissions reveal the authored answer only on an explicit aid request', async () => {
   const {hero} = await createHero('Training Reader');
-  const {payload:page} = await request('/api/pages/25');
+  const {payload:page} = await request(`/api/pages/${rustQuestion('training-1-2').page}`);
   const prompt = page.prompts.find(item => item.id === 'training-1-2');
   assert.equal(prompt.exampleAnswer, true);
   const key = {page:page.page, promptId:prompt.id};
@@ -637,7 +668,7 @@ test('hero choice, written drafts, progress, and reading position persist in sep
   const { payload: cookieProgress } = await request('/api/progress', { headers: cookieHeaders });
   assert.equal(cookieProgress.profile.id, b.id);
 
-  const answer = { page: 18, promptId: 'checkpoint-1', value: '2' };
+  const answer = { ...rustQuestion('checkpoint-1'), value: '2' };
   const { payload: correct } = await request('/api/answers', {
     method: 'POST', hero: a, headers: cookieHeaders, body: answer,
   });
@@ -651,14 +682,14 @@ test('hero choice, written drafts, progress, and reading position persist in sep
     method: 'POST', hero: a, body: { page: 1, promptId: 'notes', value: 'private notes' },
   });
   assert.equal(written.correct, null);
-  await request('/api/answers', { method: 'POST', hero: a, body: { ...answer, page: 17 }, status: 404 });
+  await request('/api/answers', { method: 'POST', hero: a, body: { ...answer, page: 1 }, status: 404 });
   await request('/api/answers', { method: 'POST', hero: a, body: { ...answer, value: '9' }, status: 400 });
   await request('/api/answers', {
     method: 'POST', hero: a, body: { ...answer, value: 'é'.repeat(10241) }, status: 400,
   });
 
-  await request('/api/profile', { method: 'PATCH', hero: a, body: { lastPage: 19 } });
-  await request('/api/profile', { method: 'PATCH', hero: b, body: { lastPage: 559, path: '' } });
+  await request('/api/profile', { method: 'PATCH', hero: a, body: { lastPage: rustCampaign.quests[0].manualPage + 1 } });
+  await request('/api/profile', { method: 'PATCH', hero: b, body: { lastPage: rustPages.length, path: '' } });
   await request('/api/profile', { method: 'PATCH', hero: b, body: { callsign: a.name }, status: 409 });
   await request('/api/profile', { method: 'PATCH', hero: a, body: { lastPage: '20' }, status: 404 });
   await request('/api/profile', { method: 'PATCH', hero: a, body: {}, status: 400 });
@@ -677,8 +708,8 @@ test('hero choice, written drafts, progress, and reading position persist in sep
   await start();
   const { payload: pa } = await request('/api/progress', { hero: a });
   const { payload: pb } = await request('/api/progress', { hero: b });
-  assert.deepEqual(pa.profile, { id: a.id, callsign: 'Éowyn', path: 'delver', lastPage: 19 });
-  assert.deepEqual(pb.profile, { id: b.id, callsign: 'Warden', path: 'all', lastPage: 559 });
+  assert.deepEqual(pa.profile, { id: a.id, callsign: 'Éowyn', path: 'delver', lastPage: rustCampaign.quests[0].manualPage + 1 });
+  assert.deepEqual(pb.profile, { id: b.id, callsign: 'Warden', path: 'all', lastPage: rustPages.length });
   assert.equal(pa.responses.find(row => row.promptId === 'checkpoint-1').correct, true);
   assert.equal(pb.responses.find(row => row.promptId === 'checkpoint-1').correct, false);
   assert.equal(pa.responses.find(row => row.promptId === 'notes').value, 'private notes');
@@ -692,7 +723,7 @@ test('offline grading validates exercise binding and saves the submission withou
   const { hero } = await createHero('Forge Scout');
   const { payload: status } = await request('/api/status');
   assert.deepEqual(status, { storage: 'SQLite', runner: 'unavailable' });
-  const { payload: page } = await request('/api/pages/26');
+  const { payload: page } = await request(`/api/pages/${rustQuestion('boss-1').page}`);
   const prompt = page.prompts.find(card => card.exerciseId);
   const body = { page: page.page, promptId: prompt.id, exerciseId: prompt.exerciseId, code: 'pub struct Draft;' };
   const grade = { method: 'POST', hero };
@@ -748,7 +779,7 @@ test('deleting a hero is guarded, world scoped, and preserves a shared reader ID
 
 test('saved answers get the current edition feedback without losing the submitted value', async () => {
   const { hero } = await createHero('Returning Reader');
-  const answer = { page: 18, promptId: 'checkpoint-1', value: '2' };
+  const answer = { ...rustQuestion('checkpoint-1'), value: '2' };
   const { payload: current } = await request('/api/answers', { method: 'POST', hero, body: answer });
   const db = new DatabaseSync(database);
   try {
@@ -768,7 +799,7 @@ test('world discovery, reading, and saved progress stay scoped to the selected l
   await request('/api/campaign', {headers: {'X-Ferrum-World': 'unknown'}, status: 404});
   const {payload: legacy} = await request('/api/campaign');
   assert.deepEqual(legacy.world, worlds.find(world => world.id === 'rust'));
-  assert.equal(legacy.total, 559);
+  assert.equal(legacy.total, rustPages.length);
 
   const {hero: rustHero, cookie: rustCookie} = await createHero('Across Worlds');
   const saved = [];
@@ -851,7 +882,7 @@ test('special encounters grade each stage in order and persist separately from F
   assert.deepEqual([hunt.id, hunt.world, hunt.kind, hunt.level, hunt.page],
     ['stale-signal', 'javascript', 'bug-hunt', 12, 38]);
   assert.deepEqual([elite.id, elite.world, elite.kind, elite.level, elite.page],
-    ['ferric-scarab-elite', 'rust', 'elite', 3, 48]);
+    ['ferric-scarab-elite', 'rust', 'elite', 3, rustCampaign.quests.find(quest => quest.level === 3).bossPage]);
   for (const encounter of [hunt, elite]) {
     for (const stage of encounter.stages) {
       assert.deepEqual(Object.keys(stage).filter((key) =>

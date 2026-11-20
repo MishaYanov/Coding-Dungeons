@@ -75,14 +75,52 @@ test('mobile campaign exposes all World 1 pages and exercise metadata', async ()
 });
 
 test('mobile campaigns expose their full book and local support status', async () => {
-  for (const [worldId, pages, runner] of [['typescript',56,'available'], ['rust',559,'unavailable'], ['go',56,'unavailable']]) {
+  const rustPageCount = localCatalog('rust', identity).pages.length;
+  for (const [worldId, pages, runner] of [['typescript',56,'available'], ['rust',rustPageCount,'unavailable'], ['go',56,'unavailable']]) {
     const {api} = fixture({worldId});
     const campaign = await api('/api/campaign');
     assert.equal(campaign.world.id, worldId);
     assert.equal(campaign.total, pages);
     assert.equal((await api(`/api/pages/${pages}`)).page, pages);
+    await assert.rejects(api(`/api/pages/${pages + 1}`), /Page not found/);
     assert.equal((await api('/api/status')).runner, runner);
   }
+});
+
+test('all three Rust field labs retain safe notebooks and backup drafts without invoking a runner', async () => {
+  const original = fixture({worldId:'rust', rustRunnerAvailable:true});
+  const {api, calls} = original;
+  const {hero} = await api('/api/heroes', {method:'POST', body:{name:'Field Lab Explorer', oneLife:true}});
+  const campaign = await api('/api/campaign');
+  assert.deepEqual(campaign.labs.map(lab => lab.id), ['lab-async', 'lab-dispatch', 'lab-schedules']);
+  const authored = localCatalog('rust', identity).pages;
+  const drafts = [];
+  for (const lab of campaign.labs) {
+    const matches = prompt => prompt.id.startsWith(lab.id + '-') && prompt.type === 'code';
+    const page = authored.find(page => page.prompts.some(matches));
+    assert.ok(page, `${lab.id} notebook exists`);
+    const view = await api(`/api/pages/${page.page}`);
+    const prompt = view.prompts.find(matches);
+    const promptId = prompt.id;
+    assert.equal(prompt.type, 'code');
+    assert.equal(prompt.exerciseId, undefined);
+    const draft = {page:page.page, promptId, value:`// ${lab.title}\n${prompt.starter}`};
+    const saved = await api('/api/answers', {method:'POST', hero, body:draft});
+    assert.equal(saved.correct, null);
+    drafts.push(draft);
+  }
+  assert.deepEqual(calls, []);
+  const restored = fixture({worldId:'rust'});
+  await restored.importBackup(await original.exportBackup());
+  const progress = await restored.api('/api/progress', {hero});
+  for (const draft of drafts) {
+    const response = progress.responses.find(response => response.promptId === draft.promptId);
+    assert.equal(response.page, draft.page);
+    assert.equal(response.value, draft.value);
+  }
+  assert.deepEqual(progress.levels, []);
+  assert.deepEqual(progress.attempts, []);
+  assert.equal(progress.combat.hp, 100);
 });
 
 test('C# supports checkpoints, saved drafts, and self-review without executing source', async () => {

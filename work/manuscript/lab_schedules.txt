@@ -70,7 +70,7 @@ fn main() {
 }
 ```
 
-Follow the witness by hand before reading further:
+### Follow the witness by hand
 
 ```text
 step   participant   observation or change

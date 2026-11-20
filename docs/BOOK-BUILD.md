@@ -11,12 +11,13 @@ python build-worlds.py
 
 Edit `data/worlds/<world>/source.json` to change a campaign. Pass `javascript`, `typescript`, `csharp`, or `go` to rebuild only that world. The script generates its campaign and page data beside the source, then writes the PDF, WebP pages, and field kit under `public/book/<world>`. Each PDF also embeds its field kit.
 
-The Rust rebuild also requires Node.js 24 or newer, Rust 1.99.1, and a host linker.
+The Rust rebuild also requires Node.js 24 or newer, Rust 1.99.1 and 1.100.0, and a host linker. The project and packaged runner retain the 1.99.1 baseline; the book is also validated on 1.100.0. The experimental mobile compiler is a separate compatibility target.
 
 ```powershell
 python -m pip install -r requirements-book.txt
+rustup toolchain install 1.99.1 1.100.0 --profile minimal
 python work/scripts/build_campaign.py
-npm run test:book
+python work/scripts/check_book_toolchains.py
 python work/scripts/package_examples.py
 python work/scripts/package_campaign.py
 python work/scripts/verify_campaign.py

@@ -4,6 +4,7 @@ import re
 from zipfile import ZipFile
 from collections import Counter
 from pypdf import PdfReader,PdfWriter
+from book_sources import checked_sources
 
 ROOT=Path(__file__).resolve().parents[2]
 QA=ROOT/'work/qa/campaign'
@@ -92,7 +93,15 @@ assert 'Three Marks of Mastery' in text
 assert 'The Ghost Payment' in text
 assert 'The Debrief Archive' in text
 listing_ids=set(re.findall(r'Listing (\d+\.\d+) (?:Rust example|Rejected example|Sketch)',text))
-assert len(listing_ids)==162,len(listing_ids)
+expected_listing_ids=set()
+for source in sorted((ROOT/'work/manuscript').glob('ch*.txt')):
+    chapter=int(source.stem[2:])
+    count=len(re.findall(r'^```[^\n]*\n.*?\n```\s*$', source.read_text(encoding='utf-8'), re.M|re.S))
+    expected_listing_ids.update(f'{chapter}.{number}' for number in range(1,count+1))
+assert listing_ids==expected_listing_ids,(listing_ids^expected_listing_ids)
+for name in ['lab_async','lab_dispatch','lab_schedules']:
+    assert name in locations,name
+    assert re.search(rf'Listing {name}\.\d+ Rust example',text),name
 result={'pages':len(reader.pages),'levels':42,'paths':4,
         'internal_links':links,'fillable_fields':len(fields),
         'widgets':len(widgets),'progress_roundtrip':'passed',
