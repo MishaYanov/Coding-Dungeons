@@ -100,6 +100,37 @@ async function firstChallenge(page, id, language, number) {
   console.log(`Passed: ${language} full Workbench suite, Forge and reload`);
   if (id === 'javascript' || id === 'typescript') console.log(`Passed: ${language} packaged QuickJS security regressions`);
   if (id === 'javascript') await dismissGoblin(page);
+  if (id === 'rust' || id === 'go') await repairDispatch(page, id, language);
+}
+
+async function repairDispatch(page, id, language) {
+  phase = `${language} rogue microservice quest`;
+  const {default:catalog} = await import(pathToFileURL(join(project, 'data', 'workbench', `rogue-${id}.mjs`)));
+  await page.getByRole('button', {name:'World map', exact:true}).click();
+  await page.getByRole('dialog', {name:'World map', exact:true})
+    .getByRole('link', {name:catalog.title, exact:true}).click();
+  const quest = page.getByRole('region', {name:catalog.title, exact:true});
+  await quest.getByText(`0 / ${catalog.stages.length} steps complete`, {exact:true}).waitFor();
+  for (const [index, stage] of catalog.stages.entries()) {
+    phase = `${language} rogue microservice quest: ${stage.id}`;
+    if (stage.kind === 'choice') {
+      const answer = stage.options.find(option => option.id === stage.answer);
+      assert.ok(answer, `${stage.id} authored choice`);
+      await quest.getByRole('radio', {name:answer.label, exact:true}).check();
+      await quest.getByRole('button', {name:'Check answer', exact:true}).click();
+    } else {
+      await quest.getByRole('textbox', {name:`${language} side quest code`, exact:true}).fill(stage.exercise.reference);
+      await quest.getByRole('button', {name:'Submit solution', exact:true}).click();
+    }
+    const status = index + 1 === catalog.stages.length ? 'Quest complete'
+      : `${index + 1} / ${catalog.stages.length} steps complete`;
+    await quest.getByText(status, {exact:true})
+      .waitFor({timeout:45_000});
+  }
+  await page.reload();
+  await page.getByRole('region', {name:catalog.title, exact:true})
+    .getByText('Quest complete', {exact:true}).waitFor();
+  console.log(`Passed: ${language} packaged full repair story, all three code suites and reload`);
 }
 
 async function dismissGoblin(page) {
