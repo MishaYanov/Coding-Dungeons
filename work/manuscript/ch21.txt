@@ -1,6 +1,6 @@
 # Chapter 21 Channels Define Ownership Protocols
 
-A channel does more than transport values. It defines when a producer relinquishes ownership, how a consumer learns that work exists, and what happens when one side disappears. A message boundary can turn shared mutation into sequential ownership: one component owns state, and other components request operations by sending commands. This often makes invariants easier to inspect because there is one place where they change.
+A channel defines a handoff: when the producer relinquishes a value, how the consumer receives it, and what happens on disconnection. One component can own state while others send it commands. This replaces scattered shared mutation with a single place to inspect transitions.
 
 The simplification has limits. A message can be accepted without being processed. A reply can be lost after an operation commits. A queue can retain more memory than the application can afford. Channels remove some forms of aliasing, but they introduce a temporal protocol. This chapter treats capacity, acknowledgement, disconnection, and cancellation as parts of that protocol rather than incidental API details.
 
@@ -118,7 +118,7 @@ The actor also uses an unbounded request channel for brevity. A real service mus
 
 ## Acceptance Completion and Durability
 
-Name the point represented by an acknowledgement. Enqueued means the channel accepted a value. Started means an owner began work. Committed means the domain transition took effect. Durable means the effect survives a defined class of failures. These are different claims, and a single boolean named `success` obscures the difference.
+Name what an acknowledgement proves. Enqueued means accepted by the channel; started means processing began; committed means the domain transition took effect. Durable adds survival under a defined failure model. One boolean named success hides these distinctions.
 
 For an in memory actor, a successful send usually says nothing about process survival. If the actor panics after receiving a command but before replying, the caller may know only that the reply channel disconnected. It cannot infer whether the operation changed state. Returning a more descriptive error does not recover information that the protocol never recorded.
 

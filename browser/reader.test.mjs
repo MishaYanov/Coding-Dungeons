@@ -11,6 +11,14 @@ import {sideQuestRoutes} from '../lib/side-quests.mjs';
 
 const project = new URL('../', import.meta.url);
 const pages = JSON.parse(await readFile(new URL('data/pages.json', project), 'utf8'));
+const writtenPage = pages.find(page => page.prompts.some(prompt => prompt.id === 'training-1-3'));
+const notesPage = pages.find(page => page.page > 1 && page.prompts.some(prompt => prompt.id === 'notes')
+  && pages[page.page]?.prompts.some(prompt => prompt.id === 'notes'));
+assert.ok(writtenPage, 'The reviewed training response remains in the Rust book');
+assert.ok(notesPage, 'The Rust reader has adjacent notebook pages for navigation checks');
+const nextNotesPage = pages[notesPage.page];
+const notesHotspot = nextNotesPage.links.find(link => link.page && link.page !== nextNotesPage.page);
+assert.ok(notesHotspot, 'The notebook page has an authored internal book link');
 let app;
 let browser;
 let scratch;
@@ -132,8 +140,8 @@ async function indentWithTab(editor, start, end, expected) {
 }
 
 test('the written GM explains its mushroom-juice reviews in an accessible tooltip', async (t) => {
-  const page = await newPage(t, '#page=25');
-  await createHero(page, 'Mushroom Cup Witness', 25);
+  const page = await newPage(t, `#page=${writtenPage.page}`);
+  await createHero(page, 'Mushroom Cup Witness', writtenPage.page);
   const prompt = page.locator('.prompt-form').filter({ has: page.getByRole('heading', { name: 'Training encounter 3', exact: true }) });
   await prompt.getByText(/The GM drank too much mushroom juice/).waitFor();
   const help = prompt.getByRole('button', { name: 'Why the GM can make mistakes' });
@@ -153,7 +161,7 @@ test('the written GM explains its mushroom-juice reviews in an accessible toolti
   await help.press('Enter');
   await tooltip.waitFor({ state: 'visible' });
   assert.equal(await prompt.getByText('Response saved', { exact: true }).count(), 0);
-  assert.equal(new URL(page.url()).hash, '#page=25');
+  assert.equal(new URL(page.url()).hash, `#page=${writtenPage.page}`);
 });
 
 test('the JavaScript world map opens the Relay Ledger refactoring path', async (t) => {
@@ -268,12 +276,12 @@ test('the Rust and Go World Maps open the runaway repair story and persist its c
 test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs', async (t) => {
   const page = await newPage(t, '');
   await createHero(page, 'Keyboard Warden', 1);
-  await jumpTo(page, 15);
+  await jumpTo(page, notesPage.page);
   await page.locator('#reader-viewport').focus();
   await page.keyboard.press('d');
-  await openBookPage(page, 16);
+  await openBookPage(page, nextNotesPage.page);
   await page.keyboard.press('a');
-  await openBookPage(page, 15);
+  await openBookPage(page, notesPage.page);
   const note = page.getByRole('textbox', { name: 'Your written response' }).first();
   await note.focus();
   await note.press('a');
@@ -282,17 +290,17 @@ test('page shortcuts follow focus, preserve typed A/D, and ignore open dialogs',
   await note.press('Tab');
   assert.equal(await note.evaluate((field) => document.activeElement === field), false);
   assert.equal(await note.inputValue(), 'ad');
-  await openBookPage(page, 15);
+  await openBookPage(page, notesPage.page);
   await page.getByRole('button', { name: 'World map' }).click();
   await page.getByRole('dialog', { name: 'World map' }).waitFor();
   await page.keyboard.press('ArrowRight');
   await page.getByRole('button', { name: 'Close world map' }).click();
-  await openBookPage(page, 15);
+  await openBookPage(page, notesPage.page);
   await page.locator('#reader-viewport').focus();
   await page.keyboard.press('ArrowRight');
-  await openBookPage(page, 16);
-  await page.locator('#page-hotspots a[href="#page=6"]').first().click();
-  await openBookPage(page, 6);
+  await openBookPage(page, nextNotesPage.page);
+  await page.locator(`#page-hotspots a[href="#page=${notesHotspot.page}"]`).first().click();
+  await openBookPage(page, notesHotspot.page);
 });
 
 test('reader navigation moves to the header and bottom bar at the phone breakpoint', async t => {
@@ -323,7 +331,7 @@ test('reader navigation moves to the header and bottom bar at the phone breakpoi
 test('hero deletion can be canceled, and confirmed deletion survives reload', async (t) => {
   const page = await newPage(t, '');
   await createHero(page, 'Keeper of the Archive', 1);
-  await jumpTo(page, 15);
+  await jumpTo(page, notesPage.page);
   await page.getByRole('button', {name: 'Switch hero', exact: true}).click();
   await createHero(page, 'Discarded Expedition', 1);
   await page.getByRole('button', {name: 'Switch hero', exact: true}).click();
@@ -345,7 +353,7 @@ test('hero deletion can be canceled, and confirmed deletion survives reload', as
   await picker.getByRole('button', {name: /^Keeper of the Archive/}).waitFor();
   assert.equal(await remove.count(), 0);
   await picker.getByRole('button', {name: /^Keeper of the Archive/}).click();
-  await openBookPage(page, 15);
+  await openBookPage(page, notesPage.page);
 });
 
 test('a hero switch preserves the outgoing page and restores the right answer in a fresh context', async (t) => {
@@ -405,7 +413,7 @@ test('an offline runner leaves the Rust editor available and saves Tab indentati
 test('a delayed save cannot erase a newer draft after revisiting its page', { timeout: 15000 }, async (t) => {
   const page = await newPage(t, '');
   await createHero(page, 'Careful Scribe', 1);
-  await jumpTo(page, 15);
+  await jumpTo(page, notesPage.page);
   const saved = Promise.withResolvers();
   const deliver = Promise.withResolvers();
   await page.route('**/api/answers', async (route) => {
@@ -420,8 +428,8 @@ test('a delayed save cannot erase a newer draft after revisiting its page', { ti
   await note.fill('submitted version');
   await page.getByRole('button', { name: 'Submit response' }).first().click();
   await saved.promise;
-  await jumpTo(page, 16);
-  await jumpTo(page, 15);
+  await jumpTo(page, nextNotesPage.page);
+  await jumpTo(page, notesPage.page);
   await note.fill('newer draft');
 
   const reply = page.waitForResponse('**/api/answers');
@@ -429,7 +437,7 @@ test('a delayed save cannot erase a newer draft after revisiting its page', { ti
   await (await reply).finished();
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   await page.reload();
-  await openBookPage(page, 15);
+  await openBookPage(page, notesPage.page);
   assert.equal(await note.inputValue(), 'newer draft');
 });
 
@@ -499,6 +507,46 @@ test('the active path continues in its authored order and keeps alternate exits 
   await page.getByRole('link', {name:'Continue on Contract Engineer · Level 9', exact:true}).waitFor();
   await jumpTo(page, byLevel(14).page);
   await page.getByRole('link', {name:/Continue on Contract Engineer/}).waitFor({state:'hidden'});
+});
+
+test('Rust path background detours open manuals and preserve the chosen expedition', async t => {
+  const page = await newPage(t, '', 'rust');
+  const campaign = JSON.parse(await readFile(new URL('data/campaign.json', project), 'utf8'));
+  const quest = level => campaign.quests.find(quest => quest.level === level);
+  const path = campaign.paths.find(path => path.id === 'architect');
+  const originQuest = quest(18);
+  const target = quest(33);
+  assert.equal(path.levels[path.levels.indexOf(originQuest.level) + 1], target.level);
+  await page.locator('#hero-path').selectOption(path.id);
+  await createHero(page, 'Architect Background Scout', 1);
+  await jumpTo(page, originQuest.sidePage);
+
+  const background = page.locator(`details[aria-label="Background for Level ${target.level}"]`);
+  await background.locator('summary').click();
+  const expected = target.loadout.map(quest);
+  const label = quest => `Level ${quest.level} · ${quest.topic ?? quest.mission_title}`;
+  const links = background.getByRole('link');
+  assert.deepEqual((await links.allTextContents()).map(text => text.trim()), expected.map(label));
+  for (const entry of expected) {
+    assert.equal(await background.getByRole('link', {name:label(entry), exact:true}).getAttribute('href'),
+      '#page=' + entry.manualPage);
+  }
+  await background.getByRole('link', {name:label(quest(29)), exact:true}).click();
+  await openBookPage(page, quest(29).manualPage);
+
+  await jumpTo(page, originQuest.sidePage);
+  const next = page.getByRole('link', {name:`Continue on ${path.name} · Level ${target.level}`, exact:true});
+  await next.waitFor();
+  assert.equal(await next.getAttribute('href'), '#page=' + target.page);
+  await next.click();
+  await openBookPage(page, target.page);
+  // The same catch-up remains available at the destination's entry briefing.
+  await background.locator('summary').click();
+  await background.getByRole('link', {name:label(quest(29)), exact:true}).waitFor();
+  await page.getByRole('button', {name:'Edit explorer profile', exact:true}).click();
+  await page.getByRole('dialog', {name:'Set your loadout', exact:true}).waitFor();
+  assert.equal(await page.locator('#path-input').inputValue(), path.id);
+  await page.getByRole('button', {name:'Close profile', exact:true}).click();
 });
 
 test('Go beginner checkpoints update the character sheet and survive a reload', async (t) => {
@@ -1008,4 +1056,32 @@ test('book text mode shows prose and indented code without moving the saved read
   await page.getByRole('article', {name:'Book text, page 2'}).waitFor();
   await page.getByRole('button', {name:'Page image', exact:true}).click();
   await openBookPage(page, 2);
+});
+
+test('the Rust field labs open from the World Map and retain notebook variations after reload', async t => {
+  const campaign = JSON.parse(await readFile(new URL('data/campaign.json', project), 'utf8'));
+  assert.deepEqual(campaign.labs.map(lab => lab.id), ['lab-async', 'lab-dispatch', 'lab-schedules']);
+  const page = await newPage(t, '', 'rust');
+  await createHero(page, 'Field Lab Notebook Keeper', 1);
+  for (const lab of campaign.labs) {
+    await page.getByRole('button', {name:'World map', exact:true}).click();
+    await page.getByRole('dialog', {name:'World map', exact:true})
+      .getByRole('link', {name:lab.title, exact:true}).click();
+    await openBookPage(page, lab.page);
+    const matches = prompt => prompt.id.startsWith(lab.id + '-') && prompt.type === 'code';
+    const notebook = pages.find(page => page.prompts.some(matches));
+    assert.ok(notebook, `${lab.id} has an authored code notebook`);
+    if (notebook.page !== lab.page) await jumpTo(page, notebook.page);
+    const prompt = notebook.prompts.find(matches);
+    const form = page.getByRole('form', {name:prompt.title, exact:true});
+    const editor = form.getByRole('textbox', {name:'Rust code', exact:true});
+    const draft = `// My saved ${lab.id} variation\n${prompt.starter}`;
+    await editor.fill(draft);
+    assert.equal(await form.getByRole('button', {name:'Submit solution', exact:true}).count(), 0);
+    await form.getByRole('button', {name:'Save code notes', exact:true}).click();
+    await form.getByText('Response saved', {exact:true}).waitFor();
+    await page.reload();
+    await openBookPage(page, notebook.page);
+    assert.equal(await editor.inputValue(), draft);
+  }
 });

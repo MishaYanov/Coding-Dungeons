@@ -1,6 +1,6 @@
 # Chapter 23 Futures Are Suspended State Machines
 
-Calling an async function constructs a value representing work. Polling that value executes the function until it completes or reaches a point where it cannot currently proceed. The distinction between construction and execution explains many surprising observations: a log at the beginning of an async body may never appear, a borrowed argument remains borrowed while the future exists, and dropping an unpolled future can release resources without running the body.
+Calling an async function constructs a future; polling executes its body. That distinction explains why an initial log message may never appear and why dropping an unpolled future still releases its captured resources. Capturing an argument establishes its ownership or borrowing relationship before the body starts.
 
 Model the future as a state machine. It retains values needed after suspension, including those whose destructors still have to run. A local whose scope ends before the await can be dropped first. The future also keeps the awaited operation and the control state needed to resume. These are obligations the future must preserve, rather than a list of fields at fixed offsets. The compiler chooses the concrete layout and may represent different suspension points differently.
 
@@ -186,7 +186,7 @@ Ordinary blocking operations remain blocking inside an async function. A filesys
 
 This matters most on a single threaded executor, where one blocking operation can stop every other task. On a multithreaded executor, enough blocked tasks can occupy the entire worker pool. Moving blocking work to an appropriate dedicated facility changes scheduling, but the offloaded work's cancellation and shutdown behavior then need their own contract.
 
-The future abstraction is intentionally small. It describes resumable computation and notification. It does not choose a reactor, thread pool, timer service, admission policy, or supervision tree. Keeping those responsibilities distinct helps diagnose whether a failure comes from the future's state machine, the executor's scheduling, or the application's resource protocol.
+Future describes resumable computation and notification. Reactors, timers, thread pools, admission, and supervision are separate responsibilities. When progress stops, ask which layer owns the missing transition: the future, its executor, or the application protocol.
 
 ## Exercises
 

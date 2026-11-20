@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { creatureName, mountCreature } from '../../public/creatures.mjs';
 import { CodeIndentation, useCodeIndentation } from './code-editor.mjs';
 import { SideQuest } from './side-quest.jsx';
+import { prerequisiteBackground } from '../../lib/path-background.mjs';
 
 const promptLabels = { choice: 'CHOICE', text: 'WRITTEN RESPONSE', code: 'CODE WORKBENCH' };
 const mobile = import.meta.env.MODE === 'mobile';
@@ -52,9 +53,23 @@ function PathContinuation({ game, level }) {
   if (index < 0 || index + 1 >= levels.length) return null;
   const next = levels[index + 1];
   const page = levelPage(game, next);
-  return page ? <div className="hint-actions">
+  return page ? <><PrerequisiteLinks game={game} level={next} /><div className="hint-actions">
     <BookLink page={page} className="button button-quiet">Continue on {path.name} · Level {next}</BookLink>
-  </div> : null;
+  </div></> : null;
+}
+
+function PrerequisiteLinks({game, level}) {
+  const background = prerequisiteBackground(game.campaign, level, game.levels);
+  if (!background.length) return null;
+  return <details className="details-block" aria-label={`Background for Level ${level}`}>
+    <summary>Review useful background for Level {level}</summary>
+    <p className="fine-print">Optional detours. Review an unfamiliar concept, then return to your chosen route.</p>
+    <ul>{background.map(quest => <li key={quest.level}>
+      <BookLink page={pageNumber(quest.manualPage) ?? levelPage(game, quest.level)}>
+        Level {quest.level} · {quest.topic ?? quest.mission_title}
+      </BookLink>
+    </li>)}</ul>
+  </details>;
 }
 
 function GuideNotes({ data, game }) {
@@ -69,6 +84,7 @@ function GuideNotes({ data, game }) {
       ? 'Read this page, then follow an encounter or jump to another level from the world map.'
       : 'The book is your campaign map. Turn a page to continue, or open a level from the world map.'}</p>}
     {first ? <div className="hint-actions"><BookLink page={first} className="button button-primary">Begin Level 01</BookLink></div> : null}
+    {Number(findQuest(game, data.level)?.page) === data.page && <PrerequisiteLinks game={game} level={data.level} />}
     <PathContinuation game={game} level={data.level} />
   </section>;
 }

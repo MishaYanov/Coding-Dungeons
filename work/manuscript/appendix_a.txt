@@ -1,10 +1,10 @@
 # Appendix A A Diagnostic Reasoning Guide
 
-Compiler diagnostics are most useful when translated into a missing relationship. The entries below describe recurring advanced situations. They are not a replacement for the exact diagnostic or the smallest reproducing example. Use them to decide which design question to answer before changing a type.
+Translate a compiler diagnostic into the relationship the program has not expressed. These entries cover recurring advanced situations and suggest a design question to answer before changing a type. Keep the exact diagnostic and a small reproducing example beside that reasoning.
 
 ## A Mutable Borrow Appears to Last Too Long
 
-First identify the last use of the value derived from the borrow. A returned reference, iterator, guard, or closure can keep access active after the method call itself ends. If the derived value is needed later, ending the borrow earlier would invalidate that use. If it is not needed, a smaller scope or explicit drop can make the intended boundary clear. Do not assume lexical block size is always the borrow's actual duration; nonlexical lifetime analysis follows uses and constraints.
+Find the last use of the value derived from the borrow. A returned reference, iterator, guard, or closure can retain access after the method returns. If later code needs that value, ending its borrow earlier would invalidate the use. Otherwise, a smaller scope or explicit drop can clarify the boundary. Nonlexical lifetime analysis follows uses and constraints, not simply the enclosing block.
 
 A second possibility is an overly broad method signature. A helper taking `&mut self` claims access to the whole object even if its implementation touches one field. Borrowing disjoint fields directly or passing a narrower field reference can expose the independence the caller needs. The helper's body is not normally substituted into every call site for borrow checking.
 

@@ -2,7 +2,7 @@
 
 ## Move Validation to the Boundary Where Evidence Appears
 
-An application often carries facts in comments and conventions: this identifier has been validated, this request has been authenticated, this connection has completed its handshake. Rust types can carry some of those facts as values that are difficult to construct incorrectly. The goal is not to encode every business rule at compile time. The goal is to make important distinctions survive ordinary refactoring without repeated checks or undocumented assumptions.
+Applications often record facts only in comments: an identifier was validated, a request authenticated, or a handshake completed. A Rust type can preserve some of that evidence through its construction rules. Use it for distinctions that should survive refactoring without repeated checks or undocumented assumptions. Runtime rules still belong at the boundaries where they can be checked.
 
 There are several useful tools. An enum represents a closed set of runtime alternatives. A newtype distinguishes values with the same representation but different meaning. A private constructor protects an invariant. Typestate changes the available operations by changing a type parameter or concrete wrapper after a transition. Each tool answers a different question about what information is known and when.
 
@@ -153,7 +153,7 @@ fn main() {
 
 The PhantomData field records a type-level distinction without storing a runtime state value. The transition moves the existing String and Vec rather than cloning their contents. Only Request<Ready> has dispatch. The compiler therefore rejects dispatch on a draft before any runtime check could be forgotten.
 
-The ready state proves only the validation actually performed. It does not prove that the destination exists, that a network connection will succeed, or that the request remains authorized forever. Types carry bounded evidence. Naming a state Authorized does not make a revocable authorization permanently valid. Time-sensitive facts often need a runtime check at the moment of use.
+The ready state proves only the checks performed by validation. It cannot promise that the destination exists or that permission remains valid later. An Authorized value may carry an expiry or revocation identifier, but the send boundary must still check facts that can change over time.
 
 ## Consumption Prevents Accidental Reuse but Not Every Duplicate
 

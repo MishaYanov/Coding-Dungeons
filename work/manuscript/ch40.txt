@@ -1,6 +1,6 @@
 # Chapter 40 Protocol State Machines and Resource Ownership
 
-Protocol code often begins with an enum named `State` and ends with checks scattered across dozens of methods. A method verifies that negotiation has finished. Another verifies that shutdown has not begun. A third assumes a request identifier has already been assigned. As the protocol grows, the same conditions become duplicated and occasionally disagree.
+A protocol can begin with an enum named `State` and grow into repeated checks across many methods. One checks negotiation, another checks shutdown, and a third assumes an assigned identifier. As the protocol grows, those checks can drift apart. The representation should make their relationship visible.
 
 Rust offers several ways to represent these conditions. An enum can represent a runtime state and force exhaustive handling of its variants. A generic state parameter can make different operations available on different types. Ownership can make a transition consume the previous state, preventing later use of the old capability. These techniques are most useful when they expose the actual protocol, including failure and retry behavior.
 
@@ -170,7 +170,7 @@ fn main() {
 }
 ```
 
-Ownership makes it easy to move payloads between variants without cloning. A transition taking `&mut self` would need a temporary replacement, an `Option`, or a more specialized representation to move out the payload. Such designs can be valid, but the temporary state then becomes part of the panic-safety argument. Taking `self` is often the simplest expression when the caller can accept a returned state.
+Taking ownership lets a transition move payloads between variants without cloning. A transition taking `&mut self` needs a replacement, an `Option`, or another representation to move the payload out. Its temporary state must remain safe if execution panics. Taking `self` is often simpler when the caller can handle the returned state.
 
 Returning `Err(original)` is not always the right policy. A malformed network event may require closing the connection rather than preserving the old state. A timeout may move a request into an indeterminate state because the peer could have accepted it. The return type should express those possibilities directly. Using the same generic error for every failed transition can erase the most important information.
 

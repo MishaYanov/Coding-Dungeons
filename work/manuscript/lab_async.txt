@@ -1,0 +1,233 @@
+# Async Service Lab From Pending to Observed Shutdown
+
+The wakeup and service chapters study one obligation at a time. This lab joins them in one complete program: a caller submits owned work, polls a reply, cancels or expires work at a checkpoint, closes admission, and observes the worker's termination. It uses only the standard library and runs offline.
+
+This is a controlled service model, not a network runtime. One worker owns execution, one permit bounds unfinished accepted work, and a future represents the caller's reply. A test controller pauses the worker at a checkpoint so every run can exercise a real Pending-to-Ready transition without sleeps. Its integer clock advances only when the controller changes it. A production service would use its runtime's monotonic clock, timer and cancellation facilities.
+
+## Trace the Owners Before Running
+
+The service owns its worker handle and request sender. A Job owns the admission permit until the worker records an outcome. The worker and Operation share reply state; that state stores either a result or the current waker. Control belongs to the test driver. Its release message lets the worker cross the checkpoint, and its acknowledgement lets the driver check a known schedule.
+
+```text
+caller -> admission -> Job owns permit -> worker checkpoint
+caller polls Operation -> registers waker -> Pending
+test chooses clock/cancel -> releases worker
+worker records outcome -> drops permit -> wakes -> acknowledges
+caller polls -> Ready; owner closes input and joins worker
+```
+
+The reply lock makes readiness and registration one decision. The executor's separate predicate preserves a wake delivered before it waits. Neither mutex is held while invoking a waker. Cancellation takes priority over deadline expiry in this lab; both are checked before the arithmetic operation.
+
+## Run the Complete Bridge
+
+Save this listing as async_service_lab.rs. Compile with `rustc --edition=2024 async_service_lab.rs -o async_service_lab.exe`, then run the executable. On a non-Windows host, choose an output name without the `.exe` suffix. Every assertion describes part of the contract.
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
+use std::thread::{self, JoinHandle};
+
+#[derive(Debug, PartialEq)]
+enum Outcome { Completed(u32), Cancelled, Expired, Overflow }
+#[derive(Debug)]
+enum Rejected { Closed(u32), Busy(u32), WorkerGone(u32) }
+impl Rejected {
+    fn into_value(self) -> u32 {
+        match self {
+            Self::Closed(value) | Self::Busy(value)
+                | Self::WorkerGone(value) => value,
+        }
+    }
+}
+struct Gate { open: bool, active: usize }
+struct Permit(Arc<Mutex<Gate>>);
+impl Drop for Permit {
+    fn drop(&mut self) { self.0.lock().unwrap().active -= 1; }
+}
+struct Reply { result: Option<Outcome>, waiter: Option<Waker> }
+struct Operation(Arc<Mutex<Reply>>);
+impl Future for Operation {
+    type Output = Outcome;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>)
+        -> Poll<Outcome>
+    {
+        let next = cx.waker().clone();
+        let mut reply = self.0.lock().unwrap();
+        if let Some(result) = reply.result.take() {
+            return Poll::Ready(result);
+        }
+        let old = reply.waiter.replace(next);
+        drop(reply);
+        drop(old);
+        Poll::Pending
+    }
+}
+struct Control {
+    release: Option<SyncSender<()>>,
+    recorded: Receiver<()>,
+    cancel: Arc<AtomicBool>,
+    now: Arc<AtomicU64>,
+}
+impl Control {
+    fn resume_and_observe(&mut self) {
+        self.release.take().unwrap().send(()).unwrap();
+        self.recorded.recv().unwrap();
+    }
+}
+struct Job {
+    value: u32, deadline: u64,
+    permit: Permit, reply: Arc<Mutex<Reply>>,
+    release: Receiver<()>, recorded: SyncSender<()>,
+    cancel: Arc<AtomicBool>, now: Arc<AtomicU64>,
+}
+struct Service {
+    gate: Arc<Mutex<Gate>>,
+    input: SyncSender<Job>, worker: JoinHandle<()>,
+}
+impl Service {
+    fn new() -> Self {
+        let gate = Arc::new(Mutex::new(Gate { open: true, active: 0 }));
+        let (input, jobs) = sync_channel::<Job>(1);
+        let worker = thread::spawn(move || {
+            while let Ok(job) = jobs.recv() {
+                let outcome = if job.release.recv().is_err()
+                    || job.cancel.load(Ordering::Relaxed) {
+                    Outcome::Cancelled
+                } else if job.now.load(Ordering::Relaxed) >= job.deadline {
+                    Outcome::Expired
+                } else {
+                    job.value.checked_mul(2)
+                        .map(Outcome::Completed).unwrap_or(Outcome::Overflow)
+                };
+                let waiter = {
+                    let mut reply = job.reply.lock().unwrap();
+                    reply.result = Some(outcome);
+                    reply.waiter.take()
+                };
+                drop(job.permit);
+                if let Some(waiter) = waiter { waiter.wake(); }
+                let _ = job.recorded.send(());
+            }
+        });
+        Self { gate, input, worker }
+    }
+    fn submit(&self, value: u32, deadline: u64)
+        -> Result<(Operation, Control), Rejected>
+    {
+        {
+            let mut gate = self.gate.lock().unwrap();
+            if !gate.open { return Err(Rejected::Closed(value)); }
+            if gate.active == 1 { return Err(Rejected::Busy(value)); }
+            gate.active += 1;
+        }
+        let permit = Permit(Arc::clone(&self.gate));
+        let reply = Arc::new(Mutex::new(Reply { result: None, waiter: None }));
+        let (release, checkpoint) = sync_channel(1);
+        let (recorded, observed) = sync_channel(1);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let now = Arc::new(AtomicU64::new(0));
+        let job = Job { value, deadline, permit, reply: Arc::clone(&reply),
+            release: checkpoint, recorded, cancel: Arc::clone(&cancel),
+            now: Arc::clone(&now) };
+        self.input.try_send(job).map_err(|_| Rejected::WorkerGone(value))?;
+        Ok((Operation(reply), Control { release: Some(release),
+            recorded: observed, cancel, now }))
+    }
+    fn close(&self) { self.gate.lock().unwrap().open = false; }
+    fn shutdown(self) -> usize {
+        self.close();
+        drop(self.input);
+        self.worker.join().unwrap();
+        self.gate.lock().unwrap().active
+    }
+}
+struct Signal { ready: Mutex<bool>, changed: Condvar }
+impl Wake for Signal {
+    fn wake(self: Arc<Self>) { self.wake_by_ref(); }
+    fn wake_by_ref(self: &Arc<Self>) {
+        *self.ready.lock().unwrap() = true;
+        self.changed.notify_one();
+    }
+}
+fn drive<F: Future>(future: F, mut after_pending: impl FnMut())
+    -> (F::Output, usize)
+{
+    let signal = Arc::new(Signal {
+        ready: Mutex::new(false), changed: Condvar::new() });
+    let waker = Waker::from(Arc::clone(&signal));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    let mut polls = 0;
+    loop {
+        polls += 1;
+        if let Poll::Ready(result) = future.as_mut().poll(&mut context) {
+            return (result, polls);
+        }
+        after_pending();
+        let mut ready = signal.ready.lock().unwrap();
+        while !*ready { ready = signal.changed.wait(ready).unwrap(); }
+        *ready = false;
+    }
+}
+fn scenario(value: u32, now: u64, cancel: bool, expected: Outcome) {
+    let service = Service::new();
+    let (operation, mut control) = service.submit(value, 10).unwrap();
+    let busy = service.submit(9, 10).err().expect("must reject");
+    assert!(matches!(&busy, Rejected::Busy(_)));
+    assert_eq!(busy.into_value(), 9);
+    service.close();
+    let closed = service.submit(8, 10).err().expect("must reject");
+    assert!(matches!(&closed, Rejected::Closed(_)));
+    assert_eq!(closed.into_value(), 8);
+    let (result, polls) = drive(operation, || {
+        control.now.store(now, Ordering::Relaxed);
+        control.cancel.store(cancel, Ordering::Relaxed);
+        control.resume_and_observe();
+    });
+    assert_eq!((result, polls), (expected, 2));
+    assert_eq!(service.shutdown(), 0);
+}
+fn main() {
+    scenario(21, 1, false, Outcome::Completed(42));
+    scenario(21, 1, true, Outcome::Cancelled);
+    scenario(21, 10, false, Outcome::Expired);
+    scenario(u32::MAX, 1, false, Outcome::Overflow);
+    let service = Service::new();
+    let (operation, control) = service.submit(21, 10).unwrap();
+    drop(control);
+    assert_eq!(drive(operation, || {}).0, Outcome::Cancelled);
+    assert_eq!(service.shutdown(), 0);
+    let service = Service::new();
+    let (operation, mut control) = service.submit(21, 10).unwrap();
+    drop(operation);
+    let busy = service.submit(7, 10).err().expect("must reject");
+    assert!(matches!(&busy, Rejected::Busy(_)));
+    assert_eq!(busy.into_value(), 7);
+    control.resume_and_observe();
+    assert_eq!(service.shutdown(), 0);
+}
+```
+
+## Explain the Observed Schedule
+
+The worker cannot pass its checkpoint before Control releases or disconnects it. The first poll therefore registers a waker and returns Pending. The driver's hook changes policy inputs, releases the worker, and waits for its acknowledgement. The worker records the result, releases the permit, and wakes before sending that acknowledgement. The next poll is Ready. The assertion of exactly two polls checks this controlled schedule, not a general promise that every future needs two polls.
+
+The readiness predicate survives the driver's wait. Replacing it with an assumption that a notification will occur after waiting begins would lose this wake-before-wait case. The cancellation and clock atomics are independent policy values; they do not publish a separate data structure. The release channel also orders the controller's preceding actions before the worker crosses the checkpoint.
+
+Closing admission and joining have different jobs. Closure rejects new requests; joining observes the worker finish. A caller can drop Operation while the job continues under the service's ownership. Dropping Control instead disconnects the checkpoint and produces a cancellation result. Every demonstrated path releases its permit, including checked-arithmetic failure.
+
+## State the Limits Before Extending It
+
+This lab bounds unfinished accepted work, not the number of completed replies a caller may retain. It has one worker, no external effects and no process-crash recovery. Its checkpoint is test machinery, not an I/O interface. A logical deadline chooses an outcome at that checkpoint; it does not preempt a blocking call or impose a wall-clock bound on shutdown. Progress still assumes the worker is scheduled and the controller releases or drops its checkpoint capability.
+
+Call shutdown to observe termination. Merely dropping a JoinHandle detaches its thread; Rust does not force the owner to call this method. Lock poisoning and worker panic use fail-fast unwrap calls here. A reusable service must classify those failures, define abandoned reply cleanup, and decide how to handle uncertain external effects. The small executor is unsuitable for futures that require another runtime's reactor.
+
+## Repair Challenges
+
+First remove the shared readiness predicate from the executor. Explain the schedule above in which a wake occurs before the wait, and why a transient notification alone cannot carry that fact. Restore the predicate before continuing.
+
+Next move permit release to the caller's Operation destructor. Use the abandoned-caller case to explain how that would free capacity while work still exists. Keep accounting with the worker instead. Finally add a second bounded processing phase and carry the same absolute logical deadline into it; do not grant a fresh budget merely because the job crossed a function boundary.

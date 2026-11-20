@@ -2,7 +2,7 @@
 
 ## Why a longer lived reference can fit a shorter use
 
-Suppose a function needs a string for one operation. A string literal, available for the program's lifetime, should be acceptable. The function does not need to exploit the literal's full availability. Rust permits a reference with a sufficiently long validity relationship to be used where a shorter one is required. This is lifetime subtyping.
+A function that needs a string for one operation can accept a string literal that remains valid for the program's lifetime. It uses only part of that availability. Lifetime subtyping permits a reference valid for longer to satisfy a shorter reference requirement.
 
 Variance answers whether that substitution remains legal after the reference is placed inside another type. A shared collection of long lived references can often be viewed through shorter lived references. A mutable slot containing a long lived reference cannot freely be treated as a slot for a shorter lived reference, because a caller might write the shorter reference into it. The outer type's operations determine whether the substitution would preserve its promises.
 
@@ -147,7 +147,17 @@ For ordinary application code, the safest approach is to use real owning fields 
 
 Avoid assuming every subtle drop checking rule can be summarized as a single phantom table. Compiler rules and unstable escape hatches have details that should be checked against current documentation when implementing low level containers. Stable safe abstractions let most code avoid those details entirely. The advanced skill is knowing which guarantee the existing abstraction already provides and which guarantee a new unsafe layer must reestablish.
 
-When diagnosing an unexpected lifetime error, draw the nested types and mark reading and writing positions. Shared references generally preserve the direction; exclusive referents and interior mutable storage often make it invariant; function inputs reverse it. Then connect the derived rule to a concrete operation that would become possible if the substitution were allowed. That concrete counterexample is the most reliable explanation.
+For a concrete comparison, assume `'long: 'short`. Each arrow below asks whether the left type may satisfy the right type:
+
+```text
+Type substitution                          Allowed?
+&'long str -> &'short str                    yes
+Vec<&'long str> -> Vec<&'short str>          yes
+&mut &'long str -> &mut &'short str          no
+Cell<&'long str> -> Cell<&'short str>        no
+```
+
+The vector conversion transfers the owner; a caller keeps no mutable alias to its old type. The mutable-slot conversions could let a client write a short borrow into storage still promised as long-lived. This table varies the inner lifetime: shortening the outer borrow of `&mut T` is a separate, valid operation. For nested types, identify the parameter, derive the direction, then try the write that an invalid conversion would permit.
 
 ## Exercises
 

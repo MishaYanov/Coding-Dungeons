@@ -2,7 +2,7 @@
 
 ## Generic Code Is Checked for Every Permitted Type
 
-The hardest generic errors often arise because a programmer reasons from examples while the compiler reasons from a set. If a function accepts every T satisfying a bound, its body must work for every such T. If two implementations overlap for any permitted instantiation, the compiler cannot select a unique relationship merely because today's application never constructs that instantiation.
+A generic body must work for every type its bounds permit. Reasoning from a few current callers is insufficient. Likewise, two implementations cannot overlap merely because today's application never constructs the type combination where both apply.
 
 This set-based view explains why a broad implementation can block a seemingly reasonable specialized one. It also explains why bounds belong in public API review. A bound narrows the set of accepted programs. An implementation occupies part of the set of trait relationships. Publishing either choice can constrain future extensions across several crates.
 
@@ -82,7 +82,7 @@ This is why coherence errors sometimes mention upstream crates. The compiler is 
 
 ## A Newtype Creates a New Implementation Identity
 
-A wrapper is more than syntactic ceremony. It creates a local type whose trait implementations can express a policy that should not apply globally to the underlying representation. It also gives documentation a place to explain the policy.
+A wrapper creates a local type with its own implementation identity. Its traits can express a policy without applying that policy globally to the underlying representation. Document that choice on the wrapper.
 
 ```rust
 use std::fmt::{self, Display};

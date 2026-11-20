@@ -38,7 +38,7 @@ Listings labeled Rejected example intentionally fail type checking. Their surrou
 
 Listings labeled Sketch contain excerpts, manifests, commands, diagrams, or architectural pseudocode. They are not advertised as standalone executable programs. Examples involving a runtime, foreign library, operating-system resource, or larger project identify the surrounding context they require.
 
-The examples use Rust edition 2024. The original compiler pass used rustc 1.97.1. The November 2026 review targets stable Rust 1.99.1. The reader project's audit records the compiler and execution results. Unsafe and concurrent code also requires reasoning about behavior that a type check cannot establish.
+The examples use Rust edition 2024. This edition is checked with Rust 1.99.1 as its baseline and Rust 1.100.0, the stable release checked on November 20, 2026. The field kit records compiler and execution results. Passing these checks does not establish the soundness of an unsafe abstraction or the progress of every concurrent execution.
 
 The book favors stable language features. Nightly tools or unstable experiments are identified where discussed and are not required to understand the main argument. Edition settings and compiler releases are different dimensions: an edition selects certain language compatibility rules, while a compiler release determines the available implementation and stabilized features.
 

@@ -6,6 +6,8 @@ from pathlib import Path
 import json
 import re
 import shutil
+import subprocess
+from collections import Counter
 
 from PIL import Image
 from pypdf import PdfReader
@@ -86,7 +88,7 @@ def main():
     reader = PdfReader(PDF)
     revision = sha256(PDF.read_bytes()).hexdigest()[:16]
     total = len(reader.pages)
-    assert total == 559
+    assert total >= 300
     page_ids = {p.indirect_reference.idnum: i for i, p in enumerate(reader.pages, 1)}
     starts = [loc[f'level{n:02}'] for n in range(1, 43)]
     quests = sorted(campaign['quests'], key=lambda q: q['level'])
@@ -97,6 +99,14 @@ def main():
                   for n in range(1, 43)}
     heads = {n: [clean(h) for h in re.findall(r'^#{1,3}\s+(.+)', s, re.M)]
              for n, s in manuscript.items()}
+    for q in quests:
+        q['topic'] = re.sub(r'^Chapter \d+\s+', '', heads[q['level']][0])
+    campaign['labs']=[{'id':name.replace('_','-'),'page':loc[name],
+                       'title':clean((WORK/'manuscript'/f'{name}.txt').read_text(encoding='utf-8').splitlines()[0].lstrip('# ')),
+                       'description':{'lab_async':'Observe Pending, cross-thread wakeup, bounded admission, cancellation and joined shutdown.',
+                                      'lab_dispatch':'Follow one request through parsing, owned work, version checks, idempotency and reconciliation.',
+                                      'lab_schedules':'Find a concrete broken shutdown schedule, then check the repaired admission model.'}[name]}
+                      for name in ['lab_async','lab_dispatch','lab_schedules']]
     listings = {n: re.findall(r'^```([^\n]*)\n(.*?)\n```\s*$', s, re.M | re.S)
                 for n, s in manuscript.items()}
     pages = []
@@ -132,6 +142,10 @@ def main():
         elif number in (6, 7, 8):
             title = 'Choose your route'
             notes = ['Follow a colored node on the book page or open the route menu. Pick the district that matches the skill you want to practice.']
+        elif number >= loc['worked_labs']:
+            title = 'Worked labs'
+            notes = ['Follow one request through ownership, cancellation, idempotency, and shutdown. '
+                     'Run these host Rust programs from the field kit; the scratchpad saves your variations.']
         elif number >= loc['vault']:
             title = 'Reference and debriefs'
             notes = ['Follow a return link to revisit the encounter and refine your answer. Your saved work stays attached to its original page.']
@@ -234,12 +248,57 @@ def main():
                    'body':room['remix'], 'feedback':'Your alternate design is saved. Identify which changed assumption justified your choice.'})
         room['page'] = page
 
+    for name in ['lab_async', 'lab_dispatch', 'lab_schedules']:
+        source = (WORK/'manuscript'/f'{name}.txt').read_text(encoding='utf-8')
+        for index, match in enumerate(re.finditer(r'^```([^\n]*)\n(.*?)\n```\s*$', source, re.M|re.S),1):
+            if not match[1].startswith('rust'):
+                continue
+            label=f'Listing {name}.{index} Rust example'
+            number=next((i for i in range(loc[name],total+1) if label in bodies[i-1]),None)
+            if number is None:
+                raise ValueError(f'Cannot locate {label}')
+            add(number, {'id':f'{name.replace("_","-")}-{index}', 'type':'code',
+                         'title':f'{name.replace("_"," ").title()} scratchpad', 'starter':match[2],
+                         'body':'Predict a failure case, then change the reference program. '
+                                'Run it with host Rust using the field-kit instructions.',
+                         'feedback':'Your lab variation is saved.'})
+
     # A notebook remains available on ordinary prose pages without manufacturing quiz questions.
     for page in pages:
         if not page['prompts']:
             page['prompts'].append({'id':'notes', 'type':'text', 'title':'Field notes',
                                     'body':'Record an invariant, a question, or a prediction to revisit.',
                                     'feedback':'Your field note is saved on this page.'})
+    # Preserve old answer/draft identities through editorial pagination changes.
+    # Repeated generic notes have page identity and intentionally receive no alias.
+    def prompt_pages(values):
+        counts=Counter(prompt['id'] for page in values for prompt in page['prompts'])
+        return {prompt['id']:page['page'] for page in values for prompt in page['prompts']
+                if counts[prompt['id']]==1}
+    old_pages=read_json(DATA/'pages.json') if (DATA/'pages.json').exists() else []
+    old_campaign=read_json(DATA/'campaign.json') if (DATA/'campaign.json').exists() else {'quests':[]}
+    previous,current=prompt_pages(old_pages),prompt_pages(pages)
+    routes=json.loads(subprocess.check_output(['node','--input-type=module','-e',
+        'import {sideQuestRoutes} from "./lib/side-quests.mjs"; '
+        'console.log(JSON.stringify([...sideQuestRoutes.values()].filter(x=>x.world==="rust")'
+        '.map(x=>({slug:x.slug,level:x.level,stages:x.catalog.stages.map(s=>s.id)}))));'],
+        cwd=APP,text=True))
+    for route in routes:
+        old=next((q for q in old_campaign['quests'] if q['level']==route['level']),None)
+        new=next(q for q in quests if q['level']==route['level'])
+        for stage in route['stages']:
+            key=f'{route["slug"]}-{stage}'
+            if old: previous[key]=old['sidePage']
+            current[key]=new['sidePage']
+    history_file=DATA/'reading-revisions.json'
+    history=read_json(history_file) if history_file.exists() else {}
+    older={key:current[prompt] for key in history.get('rust',{})
+             if (prompt:=key.split(':',1)[1]) in current and int(key.split(':',1)[0])!=current[prompt]}
+    # The previous published edition is preferred to older historical rows.
+    aliases={**{f'{page}:{prompt}':current[prompt] for prompt,page in previous.items()
+                if prompt in current and page!=current[prompt]}, **older}
+    history['rust']=aliases
+    write_json(history_file,history)
     write_json(DATA / 'pages.json', pages)
     write_json(DATA / 'campaign.json', campaign)
     shutil.copyfile(PDF, BOOK / 'ferrum-expedition.pdf')

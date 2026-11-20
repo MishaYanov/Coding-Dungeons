@@ -2,11 +2,11 @@
 
 ## Choose Where Concrete Types Stop Mattering
 
-A generic function preserves the concrete type of its argument through type checking and, ordinarily, through monomorphization. A trait object deliberately forgets that identity and retains a selected interface. This is an architectural choice about how far implementation details travel through a program. Runtime cost is one consequence, but compile time, binary size, dependency boundaries, and ownership are equally relevant.
+Generic code retains concrete type information and ordinarily uses monomorphization. A trait object hides that identity behind a selected interface. Choosing where to erase types shapes runtime cost, compile time, binary size, dependencies, and ownership.
 
 Imagine an application that loads several output destinations from configuration. One destination writes to a file, another buffers in memory, and another forwards to an existing service. The application needs to store them together and choose among them at runtime. A generic parameter cannot vary independently for every element of one homogeneous vector. An enum can represent a closed set of alternatives. A trait object can represent an open set whose members satisfy one dyn-compatible contract.
 
-The open set is not dynamic linking by itself. A boxed trait object inside a program does not establish a stable plugin ABI, and Rust trait object layout is not a portable foreign interface. Type erasure solves a language-level representation problem: callers can own or borrow values without carrying their concrete Rust types in every surrounding signature.
+An open set of implementations does not establish dynamic linking or a stable plugin ABI. Rust trait object layout is not a portable foreign interface. Erasure lets callers own or borrow values without propagating their concrete types through every surrounding signature.
 
 Start by asking which operations remain meaningful after identity is forgotten. Construction, cloning into the same concrete type, and arbitrary generic operations often need information that the erased interface does not retain. Designing the erased boundary first prevents later surprises when a seemingly ordinary trait refuses to become dyn Trait.
 

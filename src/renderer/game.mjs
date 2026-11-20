@@ -1,5 +1,7 @@
 import {mobileReaderKey} from '../../lib/mobile/input.mjs';
 
+import {remapBookDrafts} from '../../lib/book-revisions.mjs';
+
 const draftKey = 'ferrum-prompt-drafts-v2';
 const lastPageKey = 'ferrum-last-page-v2';
 const selectedHeroKey = 'ferrum-selected-hero-v1';
@@ -57,7 +59,7 @@ function removeReaderData(world, id) {
 function readDrafts(world, hero) {
   try {
     const value = JSON.parse(readLocal(readerKey(world, draftKey, hero.id)) || '{}');
-    return new Map(Object.entries(value).filter(([, draft]) => typeof draft === 'string'));
+    return remapBookDrafts(world.id, new Map(Object.entries(value).filter(([, draft]) => typeof draft === 'string')));
   } catch {
     return new Map();
   }

@@ -2,7 +2,7 @@
 
 ## A move changes what can be used
 
-A Rust move is a semantic event: a value is transferred out of a place, and that place is no longer available as an initialized value until an appropriate reinitialization occurs. Whether generated machine code copies bytes, reuses registers, or eliminates the operation is a separate question. Thinking of every move as a heap transfer or a mandatory memory copy makes both correctness and performance harder to understand.
+A Rust move transfers a value out of a place. That place no longer contains an initialized value until it is reinitialized. The generated code may copy bytes, reuse registers, or eliminate the operation. Keep this implementation choice separate from the ownership transfer; a move need not transfer a heap allocation or produce a machine-level copy.
 
 A place is an expression denoting a storage location, such as a local variable, a field, an indexed element, or a dereferenced pointer. The compiler tracks which places are initialized and which accesses are legal. This tracking can be more precise than treating a struct as one indivisible box. Moving one field may leave other fields available. Moving a complete value prevents access through all its fields until it is restored.
 
@@ -50,7 +50,7 @@ fn main() {
 
 The uninitialized period does not contain a valid but unspecified `String`. It contains no initialized `String` at all. Reading it would be rejected. The distinction becomes critical in unsafe code, where manufacturing an invalid `String` and intending to fill it later is already a violation. Safe delayed initialization does not require a value to exist before the assignment.
 
-After a move, reinitialization can make a place usable again. A mutable binding allows assignment; a binding without `mut` can still receive its first initialization, but cannot be assigned a second value after it has already been initialized under the usual assignment rules. Keep first initialization separate from mutation of an established value.
+Reinitialization can make a moved-out place usable again. A mutable binding permits replacement. A binding without `mut` permits its first initialization, but ordinary assignment cannot replace an already initialized value. Initializing storage and mutating an existing value are different operations.
 
 The analysis is conservative at control flow joins. If one branch moves a value and another does not, a later unconditional use cannot assume the value remains initialized. You can often make the intended state explicit with an enum or `Option`, or restructure the branches so that ownership rejoins as a returned value.
 

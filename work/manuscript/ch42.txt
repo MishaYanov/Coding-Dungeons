@@ -1,8 +1,8 @@
 # Chapter 42 Reviewing Rust Through Invariants
 
-Understanding advanced Rust means being able to explain why a design works when the compiler has already accepted it. Type checking removes many invalid programs, but accepted programs can still deadlock, violate domain rules, allocate without bound, duplicate effects, or expose an unsound abstraction. A useful review method follows invariants across ownership boundaries and asks what evidence supports each promise.
+Understanding advanced Rust includes explaining a design after the compiler accepts it. Accepted programs can still deadlock, break domain rules, allocate without bound, duplicate effects, or hide an unsound abstraction. Review follows invariants across ownership boundaries and asks what evidence supports each promise.
 
-This final chapter revisits three small designs. Each is ordinary safe Rust. None needs an exotic language feature. The point is to connect the book's concepts into a practical way of reading code: identify the capability a function receives, the state it changes, the failures it can encounter, and the observations available to callers. When unsafe code appears, the same method continues with additional memory obligations.
+This chapter reviews two small safe Rust designs: a transfer and a cache. Each connects capabilities, state changes, failures, and caller observations. Lab D then follows one request through a parser, bounded dispatch, versioned ledger, peer uncertainty, and drain report. Use that worked bridge before building the final campaign's variation.
 
 ## Begin With the Claim a Caller Relies On
 

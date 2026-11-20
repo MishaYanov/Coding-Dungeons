@@ -1,8 +1,8 @@
 # Chapter 22 Atomics Require an Ordering Argument
 
-An atomic operation makes a particular memory access indivisible according to the atomic model. It does not make a surrounding algorithm indivisible. Two atomic increments do not form one transaction, and an atomic pointer does not keep its pointee alive. The difficult work is identifying which observations must be ordered and which resources must remain valid while another thread can observe them.
+Atomicity applies to a particular memory access, not its surrounding algorithm. Two atomic increments are not one transaction. Loading an atomic pointer does not keep its pointee alive. Identify both the observations that must be ordered and the resources that must remain valid.
 
-Start an atomic design with a proof written in ordinary language. Identify the state, the thread allowed to change each part, the event that publishes a change, and the observation that authorizes another thread to use it. Then choose orderings that establish those relationships. Beginning with a collection of `Relaxed` operations and adding stronger orderings until tests pass reverses the reasoning process.
+Write the proof before choosing orderings. Name each piece of state, who may change it, how it is published, and which observation authorizes a reader to use it. Choose orderings that establish those edges. Passing tests after repeatedly strengthening Relaxed operations is not that proof.
 
 ## Atomicity and Invariants
 

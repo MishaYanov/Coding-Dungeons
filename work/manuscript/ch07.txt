@@ -2,7 +2,7 @@
 
 ## Shared access can include an update protocol
 
-A shared reference normally rules out mutation of ordinary bytes reachable through it while the relevant shared access remains active. Interior mutability provides a deliberate exception through types built around `UnsafeCell`. This permits useful contracts such as a cache updated during a read, a counter changed through a shared handle, or a dynamically checked borrow of a graph node.
+Shared access normally prevents mutation of the ordinary data it covers. Types built around `UnsafeCell` permit controlled interior mutation. They can support a cache populated during a read, a counter updated through a shared handle, or a graph node borrowed under runtime checks.
 
 The exception is local and structured. Wrapping one field in a cell does not make every neighboring field mutable through shared access. `UnsafeCell` relaxes the shared immutability rule for its contents; it does not make simultaneous conflicting exclusive references valid, make raw pointers automatically safe, or provide synchronization between threads.
 
@@ -69,7 +69,7 @@ Nothing guarantees restoration if later code panics or abandons the operation. T
 
 `RefCell<T>` permits shared access to a container while dynamically enforcing compatible inner borrows. A shared borrow returns a `Ref<T>` guard, and an exclusive borrow returns `RefMut<T>`. The guards retain the runtime borrow state until they are dropped. An incompatible request through the panicking API causes a panic; the `try_borrow` variants report failure instead.
 
-This is not a runtime version of data race prevention. `RefCell` is designed for single threaded sharing and is not `Sync`. It addresses access patterns the static checker cannot conveniently express, such as graph navigation where ownership and local mutation are separated. A mutex solves a different concurrency problem and also has different blocking and failure behavior.
+`RefCell` checks borrowing within a thread and is not `Sync`. It suits access patterns the static checker cannot conveniently express, such as graph navigation that separates shared ownership from local mutation. Cross-thread access needs synchronization; a mutex adds its own blocking and failure policy.
 
 ```rust
 use std::cell::{Ref, RefCell};

@@ -32,11 +32,13 @@ campaign/Quest_Journal.txt    Editable evidence and progress log
 campaign/Vault.json           Hints and debriefs; open when wanted
 campaign/Branching_Rooms.json  Three optional decision encounters
 listings/                    Original book examples and validation record
+listings/examples/lab_*.rs    Complete host async, dispatch and schedule labs
 
 LEVEL AND LISTING NUMBERS
 The original Chapter N is now Level N. Listing 24.3 remains Listing 24.3.
 Source filenames retain chNN_listingXX so existing references stay useful.
 These listings match the accompanying edition of the book.
+Worked labs follow the topic index in the PDF and are linked from the app's World Map.
 See listings/README.txt and listings/validation.json for compiler and test results.
 
 Check an accepted unit from the extracted archive:

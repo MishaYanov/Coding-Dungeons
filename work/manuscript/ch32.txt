@@ -2,7 +2,7 @@
 
 ## Storage can exist before a value exists
 
-Low level code often needs to allocate space before it can construct every value that will occupy it. A foreign function may fill an output record. A collection may reserve capacity and initialize elements gradually. A fixed array constructor may fail after producing only a prefix. These situations require representing storage without pretending that a complete `T` already exists.
+Low level code often allocates storage before it can construct every value. A foreign function may fill an output record. A collection may initialize reserved elements gradually. A fixed array constructor may fail after producing a prefix. Each case needs a representation for storage that does not yet contain a complete `T`.
 
 `MaybeUninit<T>` provides such storage. A `MaybeUninit<T>` can be valid even when its bytes do not represent a valid initialized `T`. That permission belongs to the wrapper type, not to `T`. Converting to `T`, obtaining a reference to `T`, or running `T`'s destructor requires proof that the appropriate value has actually been established.
 
@@ -208,7 +208,7 @@ If failure leaves partially initialized owned fields, the status protocol must i
 
 ## Initialization tracking should survive future edits
 
-The dangerous bugs often arise when a previously infallible step gains user code. A counter update once adjacent to a raw write may become separated by logging, allocation, conversion, or a callback. A panic between them can expose a state the original proof never considered.
+A previously infallible step can become a failure boundary after an edit. Logging, allocation, conversion, or a callback may separate a counter update from its raw write. A panic between them can expose a state the original proof never considered.
 
 Keep initialization state updates close to the operations they describe, and explain why their order is correct. Prefer transitions that leave a conservative state on interruption: undercounting an initialized element can leak, while overcounting an uninitialized element can cause undefined behavior during a read or drop. Both deserve repair, but they differ in severity and in the guards needed to recover.
 

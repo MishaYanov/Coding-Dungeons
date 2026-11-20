@@ -10,7 +10,7 @@ This is an advanced Rust book with a campaign structure. The technical field man
 
 The Architect path explores trait relationships, type erasure, API evolution, and library boundaries. The Warden path explores ownership across threads, scheduling, cancellation, and service survival. The Delver path descends into layout, pointer validity, initialization, and unsafe abstractions. The Pathfinder path connects storage choices to complete parsers, stores, pipelines, and protocols.
 
-These are routes through one world, not exclusive classes. Follow a path, leave it for a side quest, and return when a later encounter exposes something you need. Every numbered level on the map is a link. The suggested loadout on a level identifies useful prior knowledge. It does not lock the door or pretend to know what you already understand.
+These are thematic routes through one world, not exclusive classes. Every numbered node is a link. At each entry, Suggested loadout opens useful prerequisite manuals. The interactive reader also offers background links before the next path step. Take a detour when a concept is unfamiliar, then return to your route. These links guide you without locking the door.
 
 The complete campaign is Levels 1 through 42. If you already know a topic, take its boss encounter first. If you can produce the artifact, justify its invariants, and explain the failure cases, mark the level mastered. If you get stuck, enter the field manual at the exact level rather than rereading material at random.
 
@@ -44,7 +44,7 @@ The three branching rooms are optional diagnostic encounters. Choose an action b
 
 Open the field kit ZIP from your PDF viewer's attachments panel or download it from the World Map in the interactive reader. It contains Rust listings, rejected examples, sketches, campaign routes, and an editable quest journal. Listing 24.3 belongs to Level 24 and retains its chapter number in the filename.
 
-The examples use Rust edition 2024. The first compiler pass used rustc 1.97.1, and the November 2026 review targets stable Rust 1.99.1. Some examples define main, and others define library items. Twelve listings are deliberately rejected. The reader project's Rust audit records the checks for the supplied examples.
+The examples use Rust edition 2024 and are checked with Rust 1.99.1 and 1.100.0. Some define main; others define library items. Twelve listings are deliberately rejected. The field kit records the checks. The Worked Labs appendix connects async ownership, request handling, and schedule exploration in complete host programs.
 
 Work with stable Rust unless an encounter explicitly asks you to investigate a tool or an unstable experiment. Runtime-specific and foreign-library sketches identify the context they need. The campaign does not require a particular async runtime or an external service merely to follow its reasoning.
 

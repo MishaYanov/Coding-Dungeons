@@ -2,7 +2,7 @@
 
 ## An Error Type Defines Decisions Callers Can Make
 
-Result is an ownership boundary carrying one of two values. Its advanced design problem is not how to write a question mark. The problem is deciding which information crosses the boundary, which recovery decisions remain possible, and what has already happened when failure is reported.
+Result carries a success value or an error across an ownership boundary. Designing that boundary means choosing what information survives, which recovery decisions remain possible, and what may already have happened when failure is reported.
 
 A storage operation can fail before changing anything, after committing, or while its commit status is unknown. All three cases can use Result. A parser can return a precise byte offset or a string that discards it. A queue can return a rejected job or drop it while returning an error. The enum shape determines what the caller still owns; documentation determines how that ownership relates to external effects.
 
@@ -134,7 +134,7 @@ Returning T can make the error generic and large. That is a reasonable tradeoff 
 
 Treat each fallible operation as a transition with a failure postcondition. For an in-memory update, the postcondition might be unchanged state. For a stream parser, it might be input consumed through a delimiter. For a database transaction, it might be a durable commit or an explicit rollback. The error's meaning depends on this postcondition.
 
-A common robust pattern is validate, prepare, then commit. Validation checks preconditions without mutating shared state. Preparation builds a new owned value that may fail independently. Commit performs a small, ideally infallible replacement. This minimizes the region where state can be partially updated.
+Use three phases when failure must preserve old state: validate preconditions, prepare a replacement, then commit. Keep fallible work in preparation and make the final replacement small and preferably infallible. This reduces the interval in which an operation can expose partial updates.
 
 ```rust
 #[derive(Debug, PartialEq, Eq)]

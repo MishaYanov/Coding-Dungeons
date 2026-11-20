@@ -1,6 +1,6 @@
 # Appendix B A Glossary of Relationships
 
-These entries emphasize the relationship a term describes. The topic index points to chapters that develop the corresponding rules, examples, and limitations.
+Each entry names the relationship behind a term. Use the topic index for the chapter that develops its rules, examples, and limits.
 
 ## Address Sensitive State
 
@@ -8,7 +8,7 @@ A state whose correctness depends on a value remaining at a particular memory lo
 
 ## Affine Ownership
 
-A useful description of ownership that permits a value to be consumed at most once through a particular noncopyable binding while also allowing it to be discarded. Rust does not generally require every value to be used exactly once or every destructor to execute.
+Ownership described as at-most-once consumption of a value through a particular noncopyable binding, with discarding also permitted. Rust does not generally require each value to be used exactly once or guarantee that every destructor executes.
 
 ## Aliasing
 

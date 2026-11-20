@@ -69,6 +69,12 @@ jobs:
           npm run test:desktop
       - name: Run Rust examples
         run: npm run test:book
+      - name: Check book and Rust challenge compatibility on 1.100.0
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python work/scripts/check_book_toolchains.py 1.100.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check book assets
         run: python verify-worlds.py --check-typescript
       - uses: actions/setup-dotnet@2016bd2012dba4e32de620c46fe006a3ac9f0602 # v5.0.1

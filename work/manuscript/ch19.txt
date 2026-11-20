@@ -1,8 +1,8 @@
 # Chapter 19 Thread Boundaries as Type Boundaries
 
-Concurrency changes the meaning of ownership. Inside one thread, a value may contain assumptions about the thread that manipulates it, the references that alias it, or the mechanism that counts its owners. Moving that value to another thread can invalidate those assumptions even though the move itself copies no application data. Rust therefore asks two separate questions: may ownership cross a thread boundary, and may access through a shared reference cross that boundary? The answers are represented by `Send` and `Sync`.
+A value can depend on the thread using it, its aliases, or the mechanism counting its owners. Transferring it to another thread may violate those assumptions even without copying its application data. Rust separates two questions: may ownership cross a thread boundary (`Send`), and may a shared reference cross it (`Sync`)?
 
-These traits are useful beyond getting a thread example to compile. They let a library publish a concurrency contract without mentioning a particular scheduler. A type can be usable from a worker thread, shareable between workers, neither, or both. Understanding the distinction prevents the common mistake of adding `Arc` and `Mutex` until an error disappears without understanding what the resulting architecture permits.
+These traits publish a concurrency contract independent of a scheduler. A type can be transferable, shareable, both, or neither. Establish the needed relationship before adding Arc or Mutex: each changes the architecture, rather than merely silencing a diagnostic.
 
 ## Transfer and Shared Access
 

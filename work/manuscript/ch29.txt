@@ -2,13 +2,13 @@
 
 ## A type is more than its visible fields
 
-When Rust code remains within ordinary safe operations, a struct's layout can usually remain an implementation detail. The compiler locates its fields, constructs valid values, and applies the calling convention. Low level interfaces change the question. A foreign function, memory mapped record, device register, or custom allocator may require a precise account of size, alignment, field placement, and which bit patterns represent valid values.
+In ordinary safe Rust, a struct's layout can usually remain an implementation detail. The compiler locates fields, constructs valid values, and applies the calling convention. Low level interfaces need a more precise account. A foreign function, memory mapped record, device register, or custom allocator may depend on size, alignment, field placement, and valid bit patterns.
 
 These properties must be considered separately. Two types can have equal size and different alignment. Two types can have equal size and alignment but different field order. Two equally laid out types can have different valid bit patterns or calling conventions. A successful `size_of` assertion proves only the property it actually checks.
 
 The default Rust representation deliberately leaves substantial freedom to the compiler. Field order in memory is not a portable serialization contract. A compiler can choose layouts that reduce padding or support enum optimizations. Observing one layout in a debugger does not convert it into a stable promise for another compiler, target, or instantiation.
 
-The advanced habit is to distinguish a guaranteed property from a measured property. A benchmark may legitimately report the size of a particular build. An unsafe implementation needs guarantees sufficient to justify every access it makes. A file format needs a specification independent of the process that writes it.
+Distinguish a guaranteed property from a measured one. A benchmark can report the size of one build. An unsafe implementation needs guarantees that justify every access. A file format needs a specification independent of the process that writes it.
 
 ## Size and alignment describe different obligations
 
