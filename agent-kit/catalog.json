@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "references": ["references/repository-map.md", "references/validation-matrix.md"],
+  "repositoryFiles": ["package.json", "server.mjs", "docs/BOOK-BUILD.md", "docs/CI.md", "docs/MOBILE-RUST.md", "docs/SECURITY-REVIEW.md", "rust-toolchain.toml", ".github/workflows/verify.yml", "work/scripts/check_book_toolchains.py"],
+  "skills": [
+    {"name":"book-reviewer","path":"skills/book-reviewer/SKILL.md"},
+    {"name":"book-authoring","path":"skills/book-authoring/SKILL.md"},
+    {"name":"game-engine","path":"skills/game-engine/SKILL.md"},
+    {"name":"offline-runners","path":"skills/offline-runners/SKILL.md"},
+    {"name":"security-review","path":"skills/security-review/SKILL.md"},
+    {"name":"mobile-desktop","path":"skills/mobile-desktop/SKILL.md"},
+    {"name":"release-validation","path":"skills/release-validation/SKILL.md"},
+    {"name":"ci-maintenance","path":"skills/ci-maintenance/SKILL.md"}
+  ],
+  "agents": [
+    {"name":"project-coordinator","path":"agents/project-coordinator.md","skills":["book-authoring","game-engine","release-validation","ci-maintenance"]},
+    {"name":"book-editor","path":"agents/book-editor.md","skills":["book-reviewer","book-authoring"]},
+    {"name":"language-validator","path":"agents/language-validator.md","skills":["book-reviewer","book-authoring","offline-runners"]},
+    {"name":"game-engine-engineer","path":"agents/game-engine-engineer.md","skills":["game-engine"]},
+    {"name":"runner-security-reviewer","path":"agents/runner-security-reviewer.md","skills":["offline-runners","security-review"]},
+    {"name":"mobile-desktop-engineer","path":"agents/mobile-desktop-engineer.md","skills":["mobile-desktop","game-engine"]},
+    {"name":"qa-release-engineer","path":"agents/qa-release-engineer.md","skills":["release-validation","security-review"]},
+    {"name":"ci-maintainer","path":"agents/ci-maintainer.md","skills":["ci-maintenance"]}
+  ]
+}

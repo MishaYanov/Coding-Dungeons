@@ -78,6 +78,10 @@ The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go re
 
 The GitHub Actions **Build & Test** workflow runs on pushes to `main` and `release/**`, on pull requests, and through manual dispatch. **Application Tests** checks advisories, app/browser behavior, a lightweight Windows package, and book assets. **Rust Book Compatibility** checks the examples, labs, and challenge suites independently on Rust 1.99.1 and 1.100.0. The existing `verify` check now requires both jobs to pass. See [CI jobs and required checks](docs/CI.md).
 
+### Project agent kit
+
+The [agent kit](agent-kit/README.md) contains reusable project skills, eight agent role briefs, a repository map, and a validation matrix. Start with its catalog and assign only the roles needed for the task. Run `node agent-kit/scripts/validate.mjs` to check its structure and links. The kit is stored in the repository; it does not change global agent configuration.
+
 ### Mobile edition
 
 The optional mobile Rust compiler is a local experimental prototype. Public distribution of a Rust-enabled build is blocked on matching component notices and exact compiler source provenance; see [mobile Rust status and validation](docs/MOBILE-RUST.md).
