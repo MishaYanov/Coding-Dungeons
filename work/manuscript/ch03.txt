@@ -2,7 +2,7 @@
 
 ## A borrow has a useful region
 
-The lexical scope of a variable answers where its name can be written. The region for which a borrow must remain valid answers where a particular access promise is needed. These are related but different. Modern Rust can often end a borrow before the enclosing block ends, because later code no longer uses the borrowed result. This is commonly called nonlexical lifetimes.
+A variable's lexical scope determines where its name is available. A borrow's required region follows the uses that need its access promise. Rust can often end that region before the enclosing block ends when the borrowed result has no later use. This is commonly called nonlexical lifetimes.
 
 The practical consequence is that local reasoning should follow uses rather than counting braces. A reference created early in a function does not necessarily reserve access until the function returns. Conversely, a reference stored in another object or captured by a closure may keep access reserved longer than the nearby statements suggest. The checker follows the relationships between values through control flow.
 
@@ -166,7 +166,7 @@ When a borrow appears to last too long, trace the result rather than only the in
 
 ## Refactoring around permission phases
 
-A useful pattern is to divide an operation into an observation phase, a decision phase, and a mutation phase. First read enough state to compute an owned decision: an index, enum, key, or small summary. End the borrowed observation. Then acquire exclusive access to perform the update. This is not a requirement to copy all data; it is a way to make the actual dependency small.
+Separate observation, decision, and mutation. Read enough state to produce an owned index, enum, key, or summary. Once that observation borrow ends, acquire exclusive access for the update. Copy only the decision data the next phase needs.
 
 For example, finding the position of a record and then modifying that position can be easier than keeping a reference from a search alive while also trying to change the collection. The index must be used before an intervening structural change invalidates its meaning. If other operations can remove or reorder records between phases, use a generation checked identifier or a synchronization boundary. Borrowing correctness does not automatically prove that a remembered index still denotes the intended record.
 

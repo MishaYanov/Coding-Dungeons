@@ -2,7 +2,7 @@
 
 ## Compile Time Is an Execution Environment With Rules
 
-Rust can evaluate selected expressions during compilation. A const context requires this evaluation; an ordinary runtime context may merely offer an optimization opportunity. Understanding that distinction prevents two common mistakes: assuming const fn always runs during compilation, and assuming an optimizer's ability to fold an expression makes it legal in a const context.
+Rust can evaluate selected expressions during compilation. A const context requires that evaluation. An ordinary call to const fn may instead run at runtime. Optimizer folding is a separate question: an expression the optimizer can simplify is not necessarily legal in a const context.
 
 Constant evaluation uses the language's compile-time rules, with restrictions on operations, references, destruction, and generic expressions. It is not a general permission to run arbitrary application code during the build. Reading a configuration file, consulting a network service, or allocating an unrestricted runtime object graph belongs to another mechanism. The fact that a build script can execute those operations does not make them constant evaluation.
 
@@ -223,7 +223,7 @@ Choose the mechanism that matches the input. Pure fixed Rust data is often suita
 
 ## Compile Time Work Still Has a Cost
 
-Moving computation into compilation does not remove it from the engineering system. Large tables can increase compile time and binary size. Many const-generic instantiations can increase generated code. A complex const parser may produce difficult build diagnostics. A small runtime calculation executed once at startup may be cheaper overall than a large compile-time framework.
+Compile-time work still consumes resources. Large tables can increase build time and binary size; many const-generic instantiations can generate more code. Complex const parsing can also make diagnostics harder to understand. Compare those costs with a small calculation performed once at startup.
 
 Measure the dimension that matters. Embedded firmware may prioritize zero dynamic allocation and predictable storage. A frequently rebuilt developer tool may prioritize incremental compile time. A server may amortize a small startup cost over days of execution. The same const-generic design can be appropriate in one setting and burdensome in another.
 

@@ -1,10 +1,10 @@
 # Chapter 38 Building a Versioned In Memory Store
 
-A versioned store connects ownership, shared data, errors, and concurrency in one small design. Readers want stable views. Writers want to make changes without exposing half a transaction. The program must decide when a snapshot becomes stale, what a conflict means, and whether retrying an operation is safe. Rust can help enforce exclusive access to a commit operation, but it cannot choose the consistency model for us.
+A versioned store connects ownership, errors, shared data, and concurrency. Readers need stable views; writers must avoid publishing half a transaction. The design must define stale snapshots, conflicts, and safe retries. Rust can enforce exclusive access to commit, but it cannot choose the consistency model.
 
 We will build a process-local key-value store with immutable snapshots and optimistic transactions. The implementation is intentionally conservative. Every committed write advances one global version. A transaction can commit only when that version still matches the version from which it began. This rejects some nonconflicting writes, but makes the validation rule easy to state and inspect. It is a useful first design because its correctness argument fits in a few explicit steps.
 
-The store is not durable. It has no write-ahead log, crash recovery, replication, or remote transaction protocol. A successful commit means that this in-memory object accepted a new state. Calling that operation durable would be an application bug even if every Rust reference were valid.
+This store is not durable: it has no write-ahead log, crash recovery, replication, or remote transaction protocol. Commit means only that this in-memory object accepted a state. Valid Rust references cannot turn that result into durable acceptance.
 
 ## State the Consistency Contract First
 

@@ -1,10 +1,10 @@
 # Chapter 37 Designing a Borrowing Parser
 
-A parser is an unusually good test of whether an ownership design matches the problem. The input already contains most of the information that the output needs. Copying every field into a new allocation may be unnecessary, but returning references introduces a relationship between the input buffer and the parsed result. Streaming introduces another relationship: the buffer may need to change while callers still want to retain records. Neither relationship is a syntax problem. Each is an architectural choice about which component controls the storage.
+A parser tests whether ownership matches the problem. The input already contains most of the output's information. Borrowing fields can avoid copies, but ties their use to the input owner. Streaming adds a conflict when the buffer must change while callers retain records. Choosing who owns the retained bytes is an architectural decision, not a syntax repair.
 
 This chapter starts with one configuration line at a time. Split a document into lines before calling the parser. Each line contains an ASCII identifier, an equals sign, and a UTF-8 value. Identifiers use letters, digits, and underscores and begin with a letter or underscore. Both fields must be nonempty after trimming Unicode whitespace.
 
-The objective is to preserve a clear chain of responsibility. The caller owns the input. A successful parse borrows slices from that input. An error owns its diagnostic position and classification, so reporting the error does not require retaining an invalid parse. A later conversion can deliberately allocate when the record must outlive the input.
+Keep the responsibility chain explicit. The caller owns the input; a successful parse borrows slices from it. An error owns its position and classification, so reporting it need not retain the input. Allocate deliberately when a successful record must outlive that input.
 
 ## Start With the Output Contract
 

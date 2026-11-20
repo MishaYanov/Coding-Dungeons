@@ -70,19 +70,29 @@ fn run<F: Future>(future: F) -> F::Output {
 }
 
 fn main() {
-    assert_eq!(run(async { 6 * 7 }), 42);
+    let mut polls = 0;
+    let result = run(std::future::poll_fn(|context| {
+        polls += 1;
+        if polls == 1 {
+            context.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            Poll::Ready(42)
+        }
+    }));
+    assert_eq!((result, polls), (42, 2));
 }
 ```
 
-Analyze the important race. A future can call `wake_by_ref` during its poll and then return pending. The boolean is already true when `wait` acquires the mutex, so the executor does not sleep. If the notification occurs while `wait` is about to block, the condition variable's release and wait operation coordinates with the same mutex protected predicate. Spurious wakeups are harmless because the predicate is checked in a loop.
+The first poll records a wake and returns `Pending`. `wait` then sees the true predicate and returns without sleeping. The second poll produces the answer. If another thread notifies while `wait` is about to block, the condition variable coordinates releasing the mutex and waiting. Its predicate loop also handles spurious wakeups.
 
-There is no queue of tasks here, no timer wheel, no I/O reactor, and no worker stealing. The implementation is intentionally narrow: one pinned future, one notification state, one waiting thread. It demonstrates why the readiness predicate must survive the timing of the notification. A production executor adds many responsibilities without changing that basic requirement.
+This is a one-future executor, with no task queue, timer service, or I/O reactor. Its assertion exercises a wake that precedes waiting. The Async Service Lab adds controlled completion on a worker thread and connects notification to admission, cancellation, and shutdown.
 
 This executor must not be used to wait on an operation that assumes a different runtime is driving its reactor. A future's trait implementation does not imply independence from runtime services. A runtime specific timer may need registration with that runtime, and an I/O object may require its reactor. The generic polling interface is shared; the surrounding environment can still have requirements.
 
 ## Registering a Waker Without Losing Readiness
 
-The resource side needs a complementary protocol. A naive implementation checks whether a result exists, then stores a waker, then returns pending. If another thread produces the result between the check and registration, it may find no waker to notify. The consumer then sleeps despite the result already being available.
+The resource side must coordinate readiness with registration. If it checks for a result and only later stores the waker, a producer can complete between those steps, find nobody to wake, and leave the consumer asleep. The result exists, but the scheduling opportunity was lost.
 
 One straightforward solution protects readiness and registration with the same mutex. This library example defines a one shot completion pair. It focuses on successful completion; a production version would also define sender disappearance and receiver cancellation.
 
@@ -196,7 +206,16 @@ impl Future for SumRange {
 
 The wrapping addition makes overflow behavior explicit. The progress budget is arbitrary and would need measurement in a real workload. A budget measured in items is not a reliable time bound if item costs vary dramatically. The important property is that the future retains partial progress, arranges another poll, and returns control after bounded local work.
 
-An executor can still provide unfair scheduling despite a cooperative future. For example, repeatedly putting a self waking task at the front of a queue can starve peers. Fairness is a relationship between task behavior and scheduling policy. A library can avoid monopolizing a poll, while the executor remains responsible for how runnable tasks are selected.
+Cooperation alone does not establish fairness. An executor that repeatedly puts a self-waking task at the front can starve peers. The future limits its work per poll; the executor chooses which runnable task gets the next turn.
+
+The first listing's race can be read as a timeline. `notified` stores the fact that another poll is needed; the wake is not a result value.
+
+```text
+poll #1       wake_by_ref -> notified = true
+              return Pending
+executor      wait sees true -> clears it, does not sleep
+poll #2       return Ready(42)
+```
 
 ## Why Concurrent Polling Is Forbidden by Ownership
 

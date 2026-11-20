@@ -2,7 +2,7 @@
 
 ## Lifetimes relate uses rather than schedule destruction
 
-A lifetime annotation is a statement about relationships that must hold for references to be used safely. It does not extend an allocation, prevent a resource from being destroyed by magic, or tell the runtime when to free memory. The compiler uses the annotation while checking that the actual owners and uses satisfy the relationship.
+A lifetime annotation states a relationship required for safe reference use. It neither extends an allocation nor schedules its destruction. The compiler checks that the actual owners and uses satisfy the declared relationship.
 
 For a function returning a borrowed result, the central question is which input owner must remain available for that result. A signature such as `fn field<'a>(input: &'a str) -> &'a str` states that the result is usable within the region authorized by the input borrow. It does not promise that the result uses the complete input, nor that it must remain in use for that entire region. A caller can use it briefly and release the dependency.
 
@@ -156,9 +156,21 @@ Be precise about trait objects as well. A bound on the erased object's contained
 
 ## Solving lifetime errors as a graph problem
 
-Start with ownership nodes: where is each allocation or resource owned? Add edges for references stored in values and returned by functions. Then mark operations that need exclusive access or destroy an owner. A lifetime error usually says one edge would need to cross an incompatible mutation or destruction point.
+Draw each owner, then add arrows for stored and returned borrows. The earlier cursor example has this shape after its first call:
 
-There are four common repairs. Shorten the use of a reference when it is no longer needed. Return owned data when the result must outlive the source. Move the source owner into a longer lived component. Or revise the signature to remove an accidental relationship, as with the lookup key and cursor receiver above. Adding annotations is appropriate only for the last category or for exposing a real relationship that elision cannot express.
+```text
+text: String ----owns----> input allocation
+cursor.remaining ---borrows---> remaining suffix
+first --------------borrows---> first word
+
+call next_word  | use first | call next_word | use both
+cursor &mut     [---]             [---]
+input borrow   [------------------------------------]
+```
+
+The graph shows the first call's result. The second call returns another word borrowed from `text`; it does not invalidate `first`. Each exclusive cursor borrow ends after its call. Dropping `text` before either word's later use is rejected. With reusable internal storage, word borrows would instead prevent the cursor from overwriting that buffer.
+
+Four repairs recur: end an unnecessary reference use, return owned data, move the owner to a component that lives long enough, or remove an accidental signature dependency. The lookup key and cursor receiver illustrate the last repair. Add annotations to express a real relationship, not to invent longer-lived storage.
 
 Avoid turning every error into a request for `'static`. Leaking an allocation can manufacture a static reference, but it changes resource behavior and usually conceals the missing ownership decision. Reference counting can be a legitimate owner transfer strategy, but it also changes retention, sharing, and synchronization choices. Pick those designs deliberately.
 

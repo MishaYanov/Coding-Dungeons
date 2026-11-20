@@ -1,6 +1,6 @@
 # Chapter 39 A Bounded Worker Pipeline
 
-Concurrency becomes easier to understand when every queue and owner has a name. A worker pipeline is a useful case study because its apparent simplicity hides several independent contracts. Who owns work while it is queued? What happens when a worker fails? Which component drains results while the producer is blocked? Does shutdown discard work or finish it? Is the memory bound expressed in messages or in bytes?
+Name every queue and owner before designing a worker pipeline. Who owns queued work? What happens when a worker fails? Who drains results while the producer is blocked? Does shutdown discard work or finish it? Is the bound in messages or bytes? These are independent contracts hidden by the pipeline's simple shape.
 
 We will build a finite pipeline using standard-library scoped threads and bounded channels. A coordinator distributes numeric jobs among workers. Each worker computes one result and sends it to a collector. The collector reduces results into a summary instead of retaining every result. This makes the buffering behavior visible and avoids requiring a runtime or an external channel implementation.
 
@@ -163,7 +163,7 @@ Tests should assert observable contracts under deliberately constrained conditio
 
 Avoid tests that require a particular interleaving merely because it happened once. A sleep can encourage an interleaving but is a weak synchronization primitive. Barriers, additional test channels, or instrumented hooks can establish the exact state before triggering a failure. For example, wait until a worker has received a job, then close the result receiver and verify the worker handles a failed send.
 
-Track queued jobs, active jobs, completed jobs, job failures, abandoned jobs, and wait times. Count admission rejections separately. After shutdown, every accepted job needs one disposition. In this process-local model, accepted equals completed plus failed plus abandoned. If an external effect is possible, add an uncertain category until the outcome can be resolved.
+Track queued, active, completed, failed, and abandoned jobs, plus admission rejections and wait times. After shutdown, every accepted job needs a disposition. Here, accepted equals completed plus failed plus abandoned. External effects need an uncertain category until reconciled. Lab D carries that accounting through one request's full path.
 
 ## Exercises
 

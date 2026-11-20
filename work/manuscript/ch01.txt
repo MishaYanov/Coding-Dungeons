@@ -2,7 +2,7 @@
 
 ## The question behind an ownership error
 
-An experienced developer usually meets Rust with an existing model of objects: an object has an identity, several parts of the program can refer to it, and the runtime or the programmer arranges its eventual cleanup. Rust asks for a more explicit account. Which operation currently has permission to destroy the value? Which operations may inspect its storage? Which operation may change that storage? What must remain true until those permissions expire? An ownership error is often the compiler reporting that two proposed answers cannot both be true.
+Developers often approach Rust with a familiar object model: several parts of a program refer to an object, and a runtime or programmer arranges its cleanup. Rust asks for a more explicit account. Who may destroy the value? Who may inspect or change its storage? What must remain true while that access is available? An ownership error often reports that two proposed answers cannot both hold.
 
 This perspective is more useful than memorizing a collection of prohibitions. A database transaction, a file descriptor, an allocated buffer, and a lock guard have different behavior, but all can be represented by a value whose owner controls a permission. Passing that value by value transfers the permission. Borrowing makes a temporary promise about how the owner will behave. Destruction releases whatever the permission represents.
 
@@ -54,7 +54,7 @@ fn main() {
 }
 ```
 
-The interesting detail is not the checksum algorithm. `finish` consumes the authority to modify a `Draft`, and produces authority to submit a `Ready`. There is no remaining draft handle through which the checksum could be invalidated. The compiler does not understand checksums; it understands that a consumed owner cannot be used again. We connect that general rule to the domain invariant through the API.
+`finish` consumes the authority to modify a `Draft` and produces the authority to submit a `Ready`. No draft handle remains through which the bytes could change and invalidate the checksum. The compiler checks the ownership transfer; the API connects that rule to the checksum invariant.
 
 This technique also changes the error path. If finishing can fail, a return type such as `Result<Ready, (Draft, Error)>` can return the permission to edit. Returning only `Error` deliberately destroys the draft on failure. Neither policy is universally correct. The signature should make the product decision visible: whether rejected work is recoverable, whether recovery is cheap, and which component owns it after rejection.
 

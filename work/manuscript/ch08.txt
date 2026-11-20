@@ -2,13 +2,13 @@
 
 ## Object relationships need not be ownership relationships
 
-A graph can contain cycles, multiple incoming edges, and references that outlive the operation that created them. Representing every edge as a Rust borrow often creates an impossible lifetime puzzle because the graph's logical topology is being asked to determine allocation ownership. Those are separate structures.
+A graph may have cycles and several edges leading to one node. If every edge is a Rust borrow, its logical connections can become entangled with allocation ownership. Decide who owns the nodes separately from how the graph connects them.
 
 One owner can hold all nodes while edges store identifiers. Removing a node is then an operation on that owner, and following an edge requires a fresh checked lookup. Alternatively each node can be reference counted, and some edges can be weak so cycles do not retain the entire structure. Another design owns nodes in a region that is destroyed all at once. Each architecture selects a different deletion, sharing, and lifetime policy.
 
 The first step is to answer how nodes should disappear. If the whole graph dies together, a central arena is simple. If individual records are deleted and identifiers can survive, identifiers need stale reference detection. If independent components genuinely share ownership, reference counting may be appropriate. If ownership is hierarchical but navigation is cyclic, separate strong parent to child ownership from weak child to parent navigation.
 
-Borrowing then becomes a temporary operation on that architecture. A lookup lends a node for one use. A mutation lends it exclusively. The long lived graph relationships remain identifiers or owned handles rather than permanent language references into movable containers.
+Once ownership is settled, a lookup can lend a node for one use and a mutation can borrow it exclusively. Persistent edges remain identifiers or owned handles, so local borrowing need not encode the graph's entire lifetime.
 
 ## A central owner makes cycles ordinary data
 

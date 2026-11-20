@@ -2,11 +2,11 @@
 
 ## Generate Repetition Without Hiding the Contract
 
-A macro operates on Rust syntax and produces more Rust syntax. The generated program still has to satisfy name resolution, type checking, borrowing, and all ordinary validity requirements. Macros are useful when the repeated structure is syntactic: a family of implementations, a small domain notation, or a declaration that should generate several mutually consistent items. They are less useful when an ordinary function can express the same ownership and control-flow behavior clearly.
+A macro transforms Rust syntax into more Rust syntax. Its output must still pass name resolution, type checking, and borrowing. Use macros for repeated declarations, families of implementations, or a small domain notation. Prefer a function when it expresses the same ownership and control flow clearly.
 
 The strongest reason to introduce a macro is often consistency. A command table can generate both an enum and its numeric decoder from one list. A test matrix can generate named cases with the same setup. A tracing macro can capture source locations and format arguments without evaluating disabled arguments. These operations need access to syntax or call-site context that a normal function does not receive.
 
-The cost is a second language at the API boundary. Users must understand the macro's grammar, expansion behavior, diagnostics, and dependencies. A macro that saves six lines but obscures a move or repeats a side effect may make code harder to review. Design the generated Rust first, then decide whether a macro makes that structure easier to maintain.
+A macro adds a grammar and expansion rules that users must learn. Saving a few lines is a poor trade if the expansion hides a move or repeats a side effect. Design the resulting Rust first, then decide whether generation makes it easier to maintain.
 
 Treat the expansion as the real implementation. Review which expressions run, how many times they run, which names are introduced, which paths are resolved, what gets moved, and where control flow goes. A clean invocation cannot compensate for an unclear expansion.
 

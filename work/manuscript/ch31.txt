@@ -2,9 +2,9 @@
 
 ## Soundness quantifies over safe clients
 
-An unsafe operation is justified by a set of preconditions. A safe abstraction is sound when every client using only its safe interface is prevented from violating those preconditions. This is stronger than saying the current application happens to call it correctly. A public safe method must remain memory safe under surprising inputs, unusual call orders, panics, forgotten values, and every legal implementation of generic parameters it accepts.
+An unsafe operation requires specific preconditions. A sound safe abstraction preserves them for every legal use of its safe interface, not just the author's intended call sequence. Its public safe methods must remain memory safe under unusual inputs, panics, forgotten values, and every legal implementation of the generic parameters they accept.
 
-The scope of the proof is therefore the whole safe interface. A constructor might establish an invariant that a later mutator accidentally breaks. A destructor might assume the invariant after another method has partially changed it. A derived implementation might expose copying or comparison behavior that does not fit the ownership model. Reviewing isolated unsafe blocks misses these interactions.
+The proof covers the whole safe interface. A constructor can establish an invariant that a mutator later breaks. A destructor can encounter partially changed state. A derived implementation can expose copying or comparison that conflicts with ownership. Reviewing only the unsafe blocks misses these interactions.
 
 Start by writing the representation invariant in ordinary language. State which allocation is owned, which elements are initialized, which pointer is authoritative, what counts as an active borrow, and when destruction is permitted. Then classify every method as establishing, preserving, temporarily changing, or consuming that invariant. A temporary change is acceptable only when no safe observation can exploit an invalid state and every failure path remains sound.
 

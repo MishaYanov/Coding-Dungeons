@@ -1,0 +1,97 @@
+# Lab S Find the Shutdown Counterexample
+
+Stress tests can miss a bad schedule even when every operation is memory safe. This lab makes the scheduling choices explicit. An admission participant checks whether a service is open and then registers one active request. A shutdown participant closes admission and decides whether zero active requests means it can report Stopped.
+
+The broken implementation separates the check from registration. Its report can be correct at the instant of observation and become false when a request registers afterward. The invariant we want is: once Stopped is reported, no request can become active.
+
+## Enumerate the Small State Space
+
+Each participant preserves its own operation order. Interleaving two admission steps with two shutdown steps gives six histories. The complete program enumerates all six and finds one that violates the invariant. The repair groups the open check and registration into one admission transition. Interleaving that transition with the two shutdown steps gives three histories; all preserve the modeled invariant.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Event { Check, Register, Admit, Close, Observe }
+
+fn interleavings(left: &[Event], right: &[Event]) -> Vec<Vec<Event>> {
+    if left.is_empty() { return vec![right.to_vec()]; }
+    if right.is_empty() { return vec![left.to_vec()]; }
+    let mut histories = Vec::new();
+    for mut tail in interleavings(&left[1..], right) {
+        tail.insert(0, left[0]);
+        histories.push(tail);
+    }
+    for mut tail in interleavings(left, &right[1..]) {
+        tail.insert(0, right[0]);
+        histories.push(tail);
+    }
+    histories
+}
+
+fn safe_at_end(history: &[Event]) -> bool {
+    let mut open = true;
+    let mut checked_open = false;
+    let mut active = 0;
+    let mut stopped = false;
+    for event in history {
+        match event {
+            Event::Check => checked_open = open,
+            Event::Register => {
+                if checked_open { active += 1; }
+            }
+            Event::Admit => {
+                if open { active += 1; }
+            }
+            Event::Close => open = false,
+            Event::Observe => {
+                if active == 0 { stopped = true; }
+            }
+        }
+        // No completion event exists in this model, so a late registration
+        // remains visible in the final state as well as at this boundary.
+        if stopped && active != 0 { return false; }
+    }
+    true
+}
+
+fn main() {
+    use Event::*;
+    let broken = interleavings(&[Check, Register], &[Close, Observe]);
+    assert_eq!(broken.len(), 6);
+    let witness = vec![Check, Close, Observe, Register];
+    assert!(broken.contains(&witness));
+    assert!(!safe_at_end(&witness));
+    assert_eq!(broken.iter().filter(|h| !safe_at_end(h)).count(), 1);
+    println!("counterexample: {witness:?}");
+
+    let repaired = interleavings(&[Admit], &[Close, Observe]);
+    assert_eq!(repaired.len(), 3);
+    assert!(repaired.iter().all(|history| safe_at_end(history)));
+    println!("repair: all three modeled histories preserve admission");
+}
+```
+
+Follow the witness by hand before reading further:
+
+```text
+step   participant   observation or change
+1      admission     remembers open = true
+2      shutdown      open becomes false
+3      shutdown      sees active = 0, reports Stopped
+4      admission     uses old check, active becomes 1
+```
+
+No individual read has to be a data race for this protocol to fail. Putting separate reads and writes behind separate lock acquisitions can still permit this history. The repair must protect the relationship between checking open and increasing the active count. In a mutex design, both happen while holding the same guard; shutdown uses that mutex when it closes intake and observes the count.
+
+The three repaired histories have straightforward meanings. If Admit runs first, the count is one and shutdown must wait. If Close runs first, Admit rejects the request. Moving Observe before or after that rejected Admit cannot create active work after Stopped. The model does not assert that shutdown finishes while accepted work remains.
+
+## Keep the Conclusion Inside the Model
+
+This is a hand-written sequential state explorer, not Loom and not an implementation of Rust's memory model. It exhausts only the listed atomic transitions for one request and one shutdown. The grouping of Admit is an assumption that the implementation must justify with synchronization. Merely naming a function Admit would not make its body atomic.
+
+The model has no completion, cancellation, capacity, panic, or notification transitions. It proves no fairness or liveness result and tests no weak-memory behavior. Extend the model when one of those facts participates in the real invariant. A completed task also needs a correct decrement and a notification protocol that cannot lose a wakeup; that is separate evidence from rejecting late admission.
+
+For a larger implementation, a tool such as [Loom](https://docs.rs/loom/latest/loom/) can explore interleavings using its modeled synchronization primitives. Follow the tool's requirements and limitations, including its relaxed-memory caveats and state-space bounds. A passing bounded model supports its modeled claim; it does not certify every safe caller or every deployment.
+
+## Repair One More Boundary
+
+Add a completion event and allow shutdown to observe the count both before and after completion. Define which transition can publish Stopped, and assert that no accepted request is lost. Then add a waiter-registration step and look for a lost wakeup. Do not use a sleep as a substitute for either transition: the useful output is a reproducible history and an invariant that explains the repair.

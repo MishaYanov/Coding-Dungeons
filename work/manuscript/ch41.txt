@@ -1,10 +1,10 @@
 # Chapter 41 Shipping a Coherent Rust Crate
 
-A crate is more than the code that compiles in the author's preferred configuration. It is a set of public promises: which types downstream code may name, which compiler versions are supported, which feature combinations work, which platforms are tested, and what happens when a dependency changes. These promises are part of the architecture because downstream programs compile against them.
+A crate makes promises beyond compiling in the author's preferred configuration. Downstream users depend on its public types, supported compilers, feature combinations, platforms, and dependency compatibility. Those promises are part of the architecture because other programs compile against them.
 
 This chapter follows a fictional protocol library named `framecore`. Its central algorithm validates and describes frames. Some users run it in a server with the standard library. Others want the same frame logic in a constrained environment without operating-system services. The goal is to share a coherent semantic core while keeping transport integration and deployment policy outside that core.
 
-The interesting questions are not how to run `cargo new`. They are where a boundary belongs, how a feature changes obligations, and what evidence supports a compatibility claim. Build configuration is executable architecture: a field in a manifest can enable code paths that the ordinary development build never checks.
+The design questions begin after `cargo new`: where should a boundary sit, which obligations does a feature change, and what evidence supports compatibility? Build configuration is executable architecture. One manifest field can enable paths the usual development build never checks.
 
 ## Choose Boundaries From Responsibilities
 

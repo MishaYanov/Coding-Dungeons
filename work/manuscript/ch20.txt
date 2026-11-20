@@ -1,6 +1,6 @@
 # Chapter 20 Locks Protect Invariants Over Time
 
-A mutex is often introduced as permission to mutate shared data. That description misses the hardest part of using it well. A mutex protects a relationship between operations over an interval. The interval begins when a guard is acquired and ends when the guard is dropped. During that interval, intermediate states may exist that other threads must not observe. Good lock design starts by naming those states and the invariant that must hold whenever the guard becomes available to another thread.
+A mutex does more than permit mutation. While one participant holds its guard, others following the same locking protocol cannot inspect intermediate states. Name the invariant that must hold before the guard is released. Then place every field needed by that invariant under the appropriate synchronization boundary.
 
 Suppose an account has an available balance and a reserved balance. Protecting each number with a separate mutex makes each update individually race free, but a reservation changes both values. A reader that observes the fields separately can see an impossible combination. Thread safety at the field level does not imply consistency at the operation level. The correct synchronization boundary is usually the smallest boundary containing the entire invariant.
 
@@ -36,7 +36,7 @@ fn main() {
 
 The helper returns owned data. It does not return a reference into the queue, so it can release the guard before processing begins. This is more than a performance adjustment: callbacks or downstream work cannot accidentally reenter the queue while its lock is held. The API's ownership decision enforces a useful concurrency boundary.
 
-Returning a guard is sometimes appropriate, but then the caller controls the critical section. That exposes lock ordering and contention to code outside the abstraction. A library should make that tradeoff consciously. Methods such as `with_state` also expose a risk: user supplied closures can block, panic, recursively call the library, or invoke foreign code while the guard is held. A closure API does not make the critical section inherently short.
+Returning a guard lets the caller choose the critical section's duration and lock order. A `with_state` callback also gives user code time under the lock: it may block, panic, or reenter the library. Choose that exposure deliberately; a closure does not make the critical section short.
 
 ## Atomic Operations at the Domain Level
 

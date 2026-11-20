@@ -1,6 +1,6 @@
 # Chapter 35 Performance Is a Measured Property of a Design
 
-Rust gives a programmer unusually direct control over ownership, allocation, representation, and dispatch. That control can remove unnecessary work, but it does not make every Rust program fast or every low level implementation better. Performance belongs to a workload running in an environment. A claim such as faster needs an operation, an input distribution, a build configuration, and a measurement boundary before it becomes useful engineering information.
+Rust gives developers direct control over ownership, allocation, representation, and dispatch. That control can remove work, but neither Rust nor low level code is automatically fast. A useful performance claim identifies the operation, input distribution, build configuration, environment, and measurement boundary.
 
 The strongest optimizations often change a design constraint. Borrowing a view can remove a copy when the consumer does not need ownership. Batching can reduce synchronization when immediate delivery is unnecessary. Immutable snapshots can shorten read lock duration when readers accept versioned state. These improvements arise from understanding what the application requires. Rewriting an iterator as a loop is much less likely to matter if both compile to similar machine code and allocation dominates the request.
 
@@ -14,7 +14,7 @@ Choose a boundary that matches the decision. If considering a parser implementat
 
 Input distribution matters as much as size. A branch predictor can perform well on uniform data and poorly on a mixed production distribution. A hash table with short repeated keys behaves differently from one with long unique keys. A parser receiving mostly valid records may take a different path from one defending against malformed input. Use representative distributions and include adversarial boundaries that the service must handle acceptably.
 
-State what remains outside the experiment. A warm in memory benchmark excludes cold filesystem behavior. A single threaded loop excludes contention. A steady state run excludes startup and code loading. These limitations are not flaws if they match the question, but they must not disappear when reporting the result. A narrow experiment supports a narrow conclusion.
+State what the experiment excludes. A warm in memory benchmark excludes cold filesystem behavior; a single threaded loop excludes contention; a steady state run excludes startup and code loading. Those limits are acceptable when they match the question. Keep them visible when reporting the conclusion.
 
 ## Build Configuration Changes the Program
 

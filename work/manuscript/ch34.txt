@@ -2,13 +2,13 @@
 
 ## Choose a Representation for the Whole Workload
 
-Collection choice is an ownership and access-pattern decision before it is a complexity-table decision. A Vec stores a contiguous sequence and moves elements when it reallocates. A HashMap organizes keyed lookup without promising iteration order. A BTreeMap maintains sorted keys and supports ordered ranges. A VecDeque represents efficient operations at both ends while its logical sequence may wrap across two contiguous regions.
+Choose a collection for its ownership and access patterns as well as its complexity. A Vec stores a contiguous sequence whose elements can move on reallocation. A HashMap supports keyed lookup without promising iteration order. A BTreeMap maintains sorted keys and ordered ranges. A VecDeque supports efficient operations at both ends; its logical sequence may wrap across two contiguous regions.
 
 These structures differ in allocation behavior, locality, stable-address properties, destruction cost, and the kinds of borrowing their APIs permit. A linked structure with attractive insertion complexity may lose to a vector because traversal follows scattered allocations. A hash table with expected constant-time lookup may be inferior for a tiny fixed set where hashing costs more than a short scan. A sorted vector can provide compact lookup for data built once and read many times.
 
 Begin with the workload's phases. How is data constructed? How often does it change? Are reads sequential or random? Is ordering observable? How long are references retained? Is peak memory or tail latency more important than average throughput? A representation suitable for one phase may be worth converting before the next.
 
-Avoid optimizing a single method in isolation. Reducing lookup time by keeping a second index increases update work and creates a consistency invariant between structures. Sharing strings through Arc reduces repeated content allocation but adds reference counting and indirection. Every representation buys some operations by charging others.
+Account for the whole workload. A second index can reduce lookup time while increasing update work and creating a consistency invariant. Sharing strings through Arc reduces repeated content allocation but adds reference counting and indirection. Every representation charges for the operations it makes cheaper.
 
 ## Length Capacity and Ownership Are Different Facts
 
