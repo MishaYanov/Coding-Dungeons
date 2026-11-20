@@ -5,6 +5,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './lib/store.mjs';
+import { compatibleBookResponse, findBookResponse, remapBookResponses } from './lib/book-revisions.mjs';
 import { encounters, evaluateStage, publicEncounter } from './lib/encounters.mjs';
 import { createWrittenGm } from './lib/written-gm.mjs';
 import { fixtureMetadata, presentWorkbenchRun, runCourseExercise, workbenchSummary } from './lib/workbench-service.mjs';
@@ -101,7 +102,9 @@ async function loadWorld(spec, number) {
     bookUrl, kitUrl:kit?.isFile() ? kitPath : null,
   };
   const database = parse(rustDatabase);
-  const worldEncounters = encounters.filter(encounter => encounter.world === id);
+  const worldEncounters = encounters.filter(encounter => encounter.world === id).map(encounter => rust
+    ? {...encounter, page:campaign.quests.find(quest => quest.level === encounter.level)?.bossPage ?? encounter.page}
+    : encounter);
   const sideQuestMap = sideQuestsFor(id, campaign.quests);
   const sideQuests = [...sideQuestMap.values()].map(publicSideQuest);
   const exercisePages = new Map(pages.flatMap(page => page.prompts
@@ -120,7 +123,7 @@ async function loadWorld(spec, number) {
     gradedLevels:new Set(exercises.map(exercise => exercise.level)),
     publicCampaign:{
       world:info, zones:campaign.zones ?? [],
-      paths:campaign.paths,
+      paths:campaign.paths, labs:campaign.labs ?? [],
       quests:campaign.quests.map(({hint1, hint2, debrief, ...quest}) => quest),
       rooms:campaign.rooms.map(room => ({...room, choices:room.choices.map(({result,...choice}) => choice)})),
       specialEncounters:worldEncounters.map(publicEncounter),
@@ -275,7 +278,7 @@ async function profilePatch(request, response, world, heroId) {
   json(response, {ok:true, hero:await store.hero(heroId)});
 }
 
-async function levelPatch(request, response, {questMap, gradedLevels, store}, heroId, level) {
+async function levelPatch(request, response, {questMap, gradedLevels, store, info}, heroId, level) {
   const quest = questMap.get(level);
   if (!quest) throw new HttpError(404, 'Level not found.');
   const data = await readJson(request);
@@ -287,7 +290,8 @@ async function levelPatch(request, response, {questMap, gradedLevels, store}, he
   }
   if ('forge' in changes) {
     if (gradedLevels.has(level)) throw new HttpError(409, 'Passing the code exercise earns Forge on this level.');
-    if (changes.forge && !(await store.response(heroId, quest.bossPage, `boss-${level}`))?.value.trim()) {
+    if (changes.forge && !compatibleBookResponse(info.id, quest.bossPage, `boss-${level}`,
+      (page, promptId) => store.response(heroId, page, promptId))?.value.trim()) {
       throw new HttpError(409, 'Save your boss encounter draft before marking Forge.');
     }
   }
@@ -401,7 +405,7 @@ async function revealAnswer(request, response, world, heroId) {
   const reference = rubric ? writtenGm.reveal(world.info.id, prompt.id, prompt.body) : authoredTrainingAnswer(world.info.id, prompt);
   if (!reference) throw new HttpError(404, 'No example answer is available.');
   if (!world.store.revealWorkbenchAid(heroId, page.level)) {
-    const prior = world.store.progress(heroId).responses.find(answer => answer.page === page.page && answer.promptId === prompt.id);
+    const prior = findBookResponse(world.info.id, world.store.progress(heroId).responses, page.page, prompt.id);
     if (!rubric || prior?.assessment?.score !== 100 || prior.assessment.rubricVersion !== rubric.version) {
       throw new HttpError(403, 'Hard Mode locks the example answer.');
     }
@@ -412,6 +416,7 @@ async function revealAnswer(request, response, world, heroId) {
 
 function currentProgress(world, heroId) {
   const progress = world.store.progress(heroId);
+  progress.responses = remapBookResponses(world.info.id, progress.responses);
   progress.workbench = world.store.workbenchState(heroId);
   progress.combat = publicCombat(world.store.combatState(heroId));
   progress.merchant = currentMerchant(world, heroId);
@@ -552,7 +557,8 @@ function sideQuestView(world, heroId, {slug, page, catalog}) {
   const {store} = world;
   const results = store.encounterResults(heroId, catalog.id);
   const completed = completedStages(catalog, results);
-  const draftFor = id => store.response(heroId, page, `${slug}-${id}`)?.value;
+  const draftFor = id => compatibleBookResponse(world.info.id, page, `${slug}-${id}`,
+    (savedPage, promptId) => store.response(heroId, savedPage, promptId))?.value;
   const stages = catalog.stages.map(({id, kind, title, prompt, options, exercise, carryFrom}) => {
     if (kind === 'choice') return {id, kind, title, prompt, options};
     const {signature, starter, testNames, requiredCases} = workbenchSummary(exercise);
