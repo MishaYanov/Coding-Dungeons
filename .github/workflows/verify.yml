@@ -1,8 +1,8 @@
-name: Verify
+name: Build & Test
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
   workflow_dispatch:
 
@@ -14,7 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  application:
+    name: Application Tests
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -40,8 +41,11 @@ jobs:
       - name: Install dependencies
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install -r requirements-book.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustup show
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check npm advisories
         run: npm audit --audit-level=high
       - name: Test the reader
@@ -67,14 +71,6 @@ jobs:
           npm run desktop:package
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:desktop
-      - name: Run Rust examples
-        run: npm run test:book
-      - name: Check book and Rust challenge compatibility on 1.100.0
-        run: |
-          rustup toolchain install 1.100.0 --profile minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python work/scripts/check_book_toolchains.py 1.100.0
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check book assets
         run: python verify-worlds.py --check-typescript
       - uses: actions/setup-dotnet@2016bd2012dba4e32de620c46fe006a3ac9f0602 # v5.0.1
@@ -84,3 +80,45 @@ jobs:
         run: python verify-worlds.py csharp --check-csharp
       - name: Check the reflowable text edition
         run: python work/scripts/build-reader-text.py --check
+
+  rust_book:
+    name: Rust Book Compatibility (${{ matrix.toolchain }})
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.99.1", "1.100.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install the selected Rust toolchain
+        run: rustup toolchain install "${{ matrix.toolchain }}" --profile minimal
+      - name: Test book examples, labs, and game challenge suites
+        run: python work/scripts/check_book_toolchains.py "${{ matrix.toolchain }}"
+
+  # Retain the existing required check name while gating both testing jobs.
+  verify:
+    needs: [application, rust_book]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require both test jobs to pass
+        shell: bash
+        env:
+          APPLICATION_RESULT: ${{ needs.application.result }}
+          RUST_BOOK_RESULT: ${{ needs.rust_book.result }}
+        run: |
+          if [[ "$APPLICATION_RESULT" != "success" || "$RUST_BOOK_RESULT" != "success" ]]; then
+            printf 'Application tests: %s; Rust book compatibility: %s\n' "$APPLICATION_RESULT" "$RUST_BOOK_RESULT"
+            exit 1
+          fi
+          printf 'Application tests and Rust book compatibility passed.\n'
