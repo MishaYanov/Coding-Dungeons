@@ -76,7 +76,7 @@ npm run test:book
 
 The book test uses the pinned Rust toolchain, Python 3, and a host linker. Go reference checks use Go 1.27.4. See the [standalone app PRD](docs/CODING-DUNGEONS-PRD.md) for the release test matrix.
 
-The GitHub Actions **Verify** workflow runs on pushes to `main` and on pull requests. After the workflow is on GitHub's default branch, you can also start it from **Actions → Verify → Run workflow**. It checks npm advisories, runs the app and book tests, and smoke-tests an unpacked Windows build.
+The GitHub Actions **Build & Test** workflow runs on pushes to `main` and `release/**`, on pull requests, and through manual dispatch. **Application Tests** checks advisories, app/browser behavior, a lightweight Windows package, and book assets. **Rust Book Compatibility** checks the examples, labs, and challenge suites independently on Rust 1.99.1 and 1.100.0. The existing `verify` check now requires both jobs to pass. See [CI jobs and required checks](docs/CI.md).
 
 ### Mobile edition
 
