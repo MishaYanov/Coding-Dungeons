@@ -6,6 +6,8 @@ Open **Code Workbench** on a graded challenge. Run Examples to practice, then Su
 
 In a code editor, **Tab** inserts four spaces. Press **Escape**, then **Tab** to move focus forward. On selected Guided challenges, **Show code suggestion** offers an authored snippet you can apply or undo.
 
+In **World 4 · Rust**, open **Ask the Rust GM** at the bottom of the GM tab. Try “How do I remove empty strings from my vector?” or enter a method name such as `Vec::retain`. Choose **Open offline docs** for the signature, ownership behavior, and an excerpt from the Rust 1.99.1 standard library. The panel searches selected references locally, including in Hard Mode. Looking up an API keeps your unaided clear eligible. For APIs outside the selection, you can open the full Rust standard library in your browser. [Reference coverage and sources](docs/RUST-GM-REFERENCE.md)
+
 The World Map also links to special encounters. Break the Ironbound Scarab's three locks in Rust Level 3, or diagnose, reproduce, and repair a stale-request bug in JavaScript Level 12. Each step is saved for your hero.
 
 Rust Level 28 and Go Level 14 include **The Runaway Dispatch**, a microservice incident and refactoring story. Repair the service's concurrency controls, idempotency records, retry policy, and shutdown behavior through ordered design decisions and tested code changes. Use the World Map to open the quest. Examples are practice, full suite passes advance the repair, and finishing the story earns one potion for a One Life hero. Progress and rewards are saved independently of the core book's Forge checkpoints.

@@ -288,6 +288,24 @@ test('the installed Android test APK dismisses goblin victory while keeping its 
     .getByText('Diamonds collected · 3', {exact:true}).waitFor();
 });
 
+test('the installed Android test APK opens Rust API references from the GM tab offline', {
+  skip:!serial && 'Set FERRUM_ANDROID_EMULATOR and FERRUM_ADB after installing the debug APK.',
+  timeout:60_000,
+}, async t => {
+  const {page} = await attach(t);
+  await createHero(page, worlds.find(world => world.id === 'rust'), `Archivist ${Date.now().toString(36)}`);
+  await page.getByRole('tab', {name:'GM', exact:true}).click();
+  const panel = page.getByRole('region', {name:'Ask the Rust GM', exact:true});
+  await panel.getByRole('button', {name:'Ask the Rust GM'}).click();
+  await panel.getByRole('searchbox').fill('remove empty strings from a vector');
+  await panel.getByRole('button', {name:'Ask', exact:true}).click();
+  const card = panel.getByRole('article').filter({has:page.getByRole('heading', {name:'Vec::retain', exact:true})});
+  await card.getByText('Open offline docs', {exact:true}).click();
+  assert.match(await card.innerText(), /&mut self/);
+  assert.match(await card.innerText(), /Rust 1\.99\.1/);
+  assert.equal(new URL(page.url()).origin, origin);
+});
+
 test('the installed Android test APK bundles the C# book and saves code drafts offline', {
   skip:!serial && 'Set FERRUM_ANDROID_EMULATOR and FERRUM_ADB after installing the debug APK.',
   timeout:90_000,

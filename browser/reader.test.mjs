@@ -139,9 +139,77 @@ async function indentWithTab(editor, start, end, expected) {
   assert.deepEqual(state, { focused: true, value: expected, selection: [start + 4, start + 4] });
 }
 
+test('Rust docs load for a Rust hero and a missing reference chunk leaves the guide usable', async t => {
+  const otherWorld = await newPage(t, '#page=1', 'javascript');
+  await createHero(otherWorld, 'Archive Visitor', 1);
+  const loadedDocs = page => page.evaluate(() => performance.getEntriesByType('resource')
+    .filter(entry => /\/assets\/rust-reference-[^/]+\.js$/.test(new URL(entry.name).pathname)).length);
+  assert.equal(await loadedDocs(otherWorld), 0);
+
+  const page = await newPage(t, '#page=1');
+  assert.equal(await loadedDocs(page), 0);
+  let attempts = 0;
+  await page.route('**/assets/rust-reference-*.js', route => {
+    attempts++;
+    return route.abort();
+  });
+  await createHero(page, 'Archive Keeper', 1);
+  await page.getByText(/the offline Rust reference could not load/i).waitFor();
+  assert.equal(attempts, 1);
+  await jumpTo(page, notesPage.page);
+  const draft = page.locator('.prompt-form textarea').first();
+  await draft.fill('Keep reading while the reference is unavailable.');
+  assert.equal(await draft.inputValue(), 'Keep reading while the reference is unavailable.');
+});
+
+test('the Rust GM finds documentation in Hard Mode without sending the question or disturbing the draft', async t => {
+  const {quests:[quest]} = JSON.parse(await readFile(new URL('data/campaign.json', project), 'utf8'));
+  const page = await newPage(t, '#page=1');
+  await createHero(page, 'Reference Librarian', 1);
+  await jumpTo(page, quest.bossPage);
+  await page.getByRole('button', {name:'Hard Mode', exact:true}).click();
+  await page.getByText('Coaching is locked for this encounter.', {exact:true}).waitFor();
+  const draft = page.getByRole('textbox', {name:'Rust code', exact:true});
+  await draft.fill('// Keep my place while I read the docs');
+  const panel = page.getByRole('region', {name:'Ask the Rust GM', exact:true});
+  const input = panel.getByRole('searchbox', {name:'Rust documentation question'});
+  const url = page.url();
+  const network = [];
+  const record = request => network.push({url:request.url(), body:request.postData()});
+  page.on('request', record);
+  await input.pressSequentially('How do I remove empty strings from my vector?');
+  await input.press('Enter');
+  const card = panel.getByRole('article').filter({has:page.getByRole('heading', {name:'Vec::retain', exact:true})});
+  await card.getByText('Open offline docs', {exact:true}).click();
+  assert.match(await card.innerText(), /&mut self/);
+  assert.match(await card.innerText(), /Rust 1\.99\.1/);
+  assert.equal(await card.getByRole('link', {name:/official rust documentation/i}).getAttribute('href'),
+    'https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.retain');
+  await input.fill('map');
+  await panel.getByRole('button', {name:'Ask', exact:true}).click();
+  await panel.getByRole('button', {name:'Option', exact:true}).click();
+  await panel.getByRole('heading', {name:'Option::map', exact:true}).waitFor();
+  await input.fill('quuxfrobnicate');
+  await input.press('Enter');
+  const index = panel.getByRole('link', {name:/full Rust standard library/i});
+  assert.equal(await index.getAttribute('href'), 'https://doc.rust-lang.org/1.99.1/std/');
+  assert.equal(page.url(), url);
+  assert.equal(await draft.inputValue(), '// Keep my place while I read the docs');
+  assert.equal(await page.getByRole('button', {name:'Hint one', exact:true}).count(), 0);
+  page.off('request', record);
+  assert.deepEqual(network.filter(({url, body}) => new URL(url).origin !== origin
+    || /remove.empty.strings|quuxfrobnicate/i.test(url + body)), []);
+
+  await page.getByRole('button', {name:'Switch hero', exact:true}).click();
+  await createHero(page, 'Second Librarian', 1);
+  assert.equal(await input.inputValue(), '');
+  assert.equal(await panel.getByRole('region', {name:'Rust documentation results'}).count(), 0);
+});
+
 test('the written GM explains its mushroom-juice reviews in an accessible tooltip', async (t) => {
-  const page = await newPage(t, `#page=${writtenPage.page}`);
-  await createHero(page, 'Mushroom Cup Witness', writtenPage.page);
+  const page = await newPage(t, '#page=1');
+  await createHero(page, 'Mushroom Cup Witness', 1);
+  await jumpTo(page, writtenPage.page);
   const prompt = page.locator('.prompt-form').filter({ has: page.getByRole('heading', { name: 'Training encounter 3', exact: true }) });
   await prompt.getByText(/The GM drank too much mushroom juice/).waitFor();
   const help = prompt.getByRole('button', { name: 'Why the GM can make mistakes' });

@@ -28,6 +28,7 @@ const packagedPaths = [
   /^\/node_modules(?:\/|$)/,
   /^\/desktop(?:\/(?:book-links|engine-lifecycle|main|reader-storage|runtime-config|save-transfer|window-policy)\.mjs|\/preload\.cjs)?$/,
   /^\/lib(?:\/[\w-]+\.mjs)?$/,
+  /^\/data\/rust-docs-reference\.json$/,
   /^\/data(?:\/(?:campaign|exercises|gm-rubrics|pages|reading-revisions)\.json|\/workbench(?:\/[\w-]+\.mjs)?|\/worlds(?:\/(?:csharp|go|javascript|typescript)(?:\/(?:campaign|exercises|pages)\.json)?)?)?$/,
   /^\/dist(?:\/renderer(?:\/(?:index\.html|styles\.css|assets(?:\/[\w-]+\.(?:css|js))?|book(?:\/(?:csharp|go|javascript|typescript))?(?:\/pages(?:\/\d+\.webp)?|\/reader-text\.json|\/[\w-]+\.(?:pdf|zip))?))?)?$/,
 ];

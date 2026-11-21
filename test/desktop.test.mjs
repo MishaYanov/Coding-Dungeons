@@ -85,11 +85,16 @@ test('utility configuration selects private saves and omits ambient application 
   });
 });
 
-test('only exact HTTPS documentation links from the installed books are approved', async () => {
+test('only exact HTTPS documentation links from the installed books and Rust reference are approved', async () => {
   const links = await trustedBookLinks(fileURLToPath(new URL('../', import.meta.url)));
   const reference = 'https://doc.rust-lang.org/reference/expressions.html';
   assert.ok(links.has(reference));
   assert.equal(links.has(reference + '?redirect=elsewhere'), false);
   assert.equal(links.has('https://doc.rust-lang.org/synthetic-link.html'), false);
   assert.equal(links.has(reference.replace('https:', 'http:')), false);
+  const retain = 'https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.retain';
+  assert.ok(links.has(retain));
+  assert.ok(links.has('https://doc.rust-lang.org/1.99.1/std/'));
+  assert.equal(links.has(retain.replace('method.retain', 'method.made_up')), false);
+  assert.equal(links.has(retain.replace('#', '?question=private#')), false);
 });

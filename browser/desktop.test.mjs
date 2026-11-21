@@ -179,9 +179,27 @@ test('Windows package protects its engine, runs the required Workbenches, and re
       await chooseWorldHero(page, /^World 5 Go\b/, 'Go smoke hero');
       await winFirstWorkbench(page, 'go', 'Go', go[0].reference);
     }
-    if (process.env.FERRUM_DESKTOP_REQUIRE_GM === '1' || process.env.FERRUM_DESKTOP_REQUIRE_NATIVE === '1') {
-      await chooseWorldHero(page, /^World 4 Rust\b/, 'Rust smoke hero');
-    }
+    await chooseWorldHero(page, /^World 4 Rust\b/, 'Rust smoke hero');
+    const docs = page.getByRole('region', {name:'Ask the Rust GM', exact:true});
+    await docs.getByRole('searchbox').fill('Vec::retain');
+    await docs.getByRole('button', {name:'Ask', exact:true}).click();
+    await docs.getByText('Open offline docs', {exact:true}).click();
+    const officialSource = docs.getByRole('link', {name:/Official Rust documentation/});
+    // Exercise the trusted-click bridge without launching the machine's default browser.
+    await application.evaluate(({shell}) => {
+      globalThis.testSourceLinks = [];
+      shell.openExternal = async url => { globalThis.testSourceLinks.push(url); };
+    });
+    await officialSource.click();
+    const retainedUrl = 'https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.retain';
+    // The storage call is synchronous IPC to the same main process, so it also
+    // waits for the earlier open-link event before inspecting the captured URLs.
+    await page.evaluate(() => window.codingDungeonsStorage.get('ferrum-reading-mode'));
+    assert.deepEqual(await application.evaluate(() => globalThis.testSourceLinks), [retainedUrl]);
+    await officialSource.evaluate(link => { link.href += '-unlisted'; });
+    await officialSource.click();
+    await page.evaluate(() => window.codingDungeonsStorage.get('ferrum-reading-mode'));
+    assert.deepEqual(await application.evaluate(() => globalThis.testSourceLinks), [retainedUrl]);
     if (process.env.FERRUM_DESKTOP_REQUIRE_GM === '1') {
       const input = page.locator('#page-number');
       await input.fill('25');

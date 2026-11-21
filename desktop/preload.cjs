@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('codingDungeonsStorage', {
 
 document.addEventListener('click', (event) => {
   if (!event.isTrusted || event.button !== 0 || event.defaultPrevented) return;
-  const anchor = event.target?.closest?.('a.page-hotspot[target="_blank"]');
+  const anchor = event.target?.closest?.('a:is(.page-hotspot, .rust-docs-source)[target="_blank"]');
   if (!anchor) return;
   event.preventDefault();
   ipcRenderer.send('ferrum-reader:open-link', anchor.href);

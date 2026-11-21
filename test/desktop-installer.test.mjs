@@ -9,7 +9,8 @@ import forgeConfig from '../desktop/forge.config.cjs';
 test('the desktop package copies only the application and excludes local credentials', () => {
   const ignore = forgeConfig.packagerConfig.ignore;
   for (const path of ['', '/server.mjs', '/desktop/preload.cjs', '/lib/standalone-runner.mjs',
-    '/data/worlds/go/pages.json', '/dist/renderer/book/javascript/pages/1.webp', '/dist/renderer/book/ferrum-expedition.pdf',
+    '/data/worlds/go/pages.json', '/data/rust-docs-reference.json',
+    '/dist/renderer/book/javascript/pages/1.webp', '/dist/renderer/book/ferrum-expedition.pdf',
     '/data/worlds/csharp/campaign.json', '/data/worlds/csharp/pages.json', '/data/worlds/csharp/exercises.json',
     '/dist/renderer/book/csharp/book.pdf', '/dist/renderer/book/csharp/field-kit.zip', '/dist/renderer/book/csharp/pages/1.webp',
     '/dist/renderer/book/reader-text.json', '/dist/renderer/book/go/reader-text.json',

@@ -396,6 +396,30 @@ test('mobile worlds keep their own saves, offline books, and code grading capabi
     await tap(gm);
     const code = page.getByRole('textbox', {name:language + ' code', exact:true});
     const submit = page.getByRole('button', {name:'Submit solution', exact:true});
+    const reference = page.getByRole('button', {name:'Ask the Rust GM', exact:true});
+    if (world === 'rust') {
+      assert.equal(await reference.getAttribute('aria-expanded'), 'false');
+      await tap(reference);
+      const query = page.getByRole('searchbox', {name:'Rust documentation question'});
+      await query.fill('Vec::retain');
+      await query.press('Enter');
+      const card = page.getByRole('article').filter({has:page.getByRole('heading', {name:'Vec::retain', exact:true})});
+      await tap(card.getByText('Open offline docs', {exact:true}));
+      assert.match(await card.innerText(), /&mut self/);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      const controls = page.getByRole('navigation', {name:'Book pages'});
+      const pager = await controls.boundingBox();
+      const panel = await page.getByRole('region', {name:'Ask the Rust GM', exact:true}).boundingBox();
+      assert.ok(panel && pager && panel.y + panel.height <= pager.y + 1);
+      assert.ok(await controls.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      }));
+      await tap(reference);
+      assert.equal(await query.isVisible(), false);
+    } else {
+      assert.equal(await reference.count(), 0);
+    }
     if (world === 'rust' && rustBundled) {
       await page.getByText('Rust runner ready', {exact:true}).waitFor();
       assert.match(await page.locator('#runner-status').getAttribute('title'), /Experimental Rust/);

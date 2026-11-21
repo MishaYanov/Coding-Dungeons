@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import rustReference from '../data/rust-docs-reference.json' with { type: 'json' };
 
 const books = [
   'data/pages.json',
@@ -10,7 +11,8 @@ const books = [
 ];
 
 export async function trustedBookLinks(appPath) {
-  const urls = new Set();
+  const urls = new Set(rustReference.items.map(entry => entry.url));
+  urls.add(rustReference.indexUrl);
   for (const file of books) {
     const data = await readFile(join(appPath, file), 'utf8');
     const pages = JSON.parse(data.replace(/^\uFEFF/, ''));

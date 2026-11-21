@@ -9,6 +9,11 @@ const model = createGame();
 const { actions } = model;
 const mobile = import.meta.env.MODE === 'mobile';
 const phoneLayout = '(max-width: 800px)';
+const RustReferencePanel = React.lazy(() => import('./rust-reference.jsx').catch(() => ({
+  default: () => <section className="rust-reference" aria-label="Rust documentation">
+    <p className="fine-print" role="status">The offline Rust reference could not load. Save your draft and reopen the reader to try again.</p>
+  </section>,
+})));
 
 function subscribeToPhoneLayout(notify) {
   const query = window.matchMedia(phoneLayout);
@@ -345,6 +350,11 @@ function GameMaster({ game, compact, hidden, panelRef }) {
       </header>
       <CombatStatus game={game} />
       <Guide game={game} actions={actions} SpecialEncounter={SpecialEncounter} DiamondEncounter={DiamondEncounter} />
+      {world?.id === 'rust' && hero && <React.Suspense key={hero.id ?? hero} fallback={
+        <p className="rust-reference fine-print" role="status">Opening the offline Rust reference…</p>
+      }>
+        <RustReferencePanel compact={compact} />
+      </React.Suspense>}
     </section>
   );
 }
@@ -401,7 +411,7 @@ export function CampaignReader({ mobileControls: MobileControls }) {
       if (!page || loading || switchingHero || dialog || event.defaultPrevented || event.isComposing || event.keyCode === 229
         || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.target.isContentEditable
         || document.querySelector('.campaign-drawer[open]')
-        || event.target.closest?.('input, textarea, select, [role=textbox], [role=combobox], [role=radio], [role=slider]')) return;
+        || event.target.closest?.('.rust-reference, input, textarea, select, [role=textbox], [role=combobox], [role=radio], [role=slider]')) return;
       const key = !event.code || event.code === 'Unidentified' ? event.key.toLowerCase() : '';
       const direction = event.key === 'ArrowLeft' || event.code === 'KeyA' || key === 'a' ? -1
         : event.key === 'ArrowRight' || event.code === 'KeyD' || key === 'd' ? 1 : 0;
