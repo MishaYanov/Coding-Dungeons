@@ -1,0 +1,576 @@
+{
+  "version": "1.99.1",
+  "indexUrl": "https://doc.rust-lang.org/1.99.1/std/",
+  "sourceArchive": "https://static.rust-lang.org/dist/2026-10-15/rust-docs-1.99.1-x86_64-pc-windows-msvc.tar.xz",
+  "sha256": "c4db27f2be81ea3df3672ae0211f12c47b9e0676e18d38d797f802bc4d77cb0c",
+  "license": "Copyright (c) The Rust Project Contributors\n\nPermission is hereby granted, free of charge, to any\nperson obtaining a copy of this software and associated\ndocumentation files (the \"Software\"), to deal in the\nSoftware without restriction, including without\nlimitation the rights to use, copy, modify, merge,\npublish, distribute, sublicense, and/or sell copies of\nthe Software, and to permit persons to whom the Software\nis furnished to do so, subject to the following\nconditions:\n\nThe above copyright notice and this permission notice\nshall be included in all copies or substantial portions\nof the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF\nANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED\nTO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A\nPARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT\nSHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY\nCLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\nOF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR\nIN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER\nDEALINGS IN THE SOFTWARE.",
+  "items": [
+    {
+      "id": "std::cell::RefCell::try_borrow_mut",
+      "title": "RefCell::try_borrow_mut",
+      "receiver": "RefCell",
+      "signature": "pub fn try_borrow_mut(&self) -> Result<RefMut<'_, T>, BorrowMutError>",
+      "since": "1.13.0",
+      "excerpt": "Mutably borrows the wrapped value, returning an error if the value is currently borrowed.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/cell/struct.RefCell.html#method.try_borrow_mut"
+    },
+    {
+      "id": "std::collections::HashMap::entry",
+      "title": "HashMap::entry",
+      "receiver": "HashMap",
+      "signature": "pub fn entry(&mut self, key: K) -> Entry<'_, K, V, A>",
+      "since": "1.0.0",
+      "excerpt": "Gets the given key’s corresponding entry in the map for in-place manipulation.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/collections/struct.HashMap.html#method.entry"
+    },
+    {
+      "id": "std::collections::HashMap::get",
+      "title": "HashMap::get",
+      "receiver": "HashMap",
+      "signature": "pub fn get<Q>(&self, k: &Q) -> Option<&V> where K: Borrow<Q>, Q: Hash + Eq + ?Sized",
+      "since": "1.0.0",
+      "excerpt": "Returns a reference to the value corresponding to the key.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/collections/struct.HashMap.html#method.get"
+    },
+    {
+      "id": "std::collections::HashMap::insert",
+      "title": "HashMap::insert",
+      "receiver": "HashMap",
+      "signature": "pub fn insert(&mut self, k: K, v: V) -> Option<V>",
+      "since": "1.0.0",
+      "excerpt": "Inserts a key-value pair into the map.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/collections/struct.HashMap.html#method.insert"
+    },
+    {
+      "id": "std::collections::hash_map::Entry::or_insert",
+      "title": "Entry::or_insert",
+      "receiver": "Entry",
+      "signature": "pub fn or_insert(self, default: V) -> &'a mut V",
+      "since": "1.0.0",
+      "excerpt": "Ensures a value is in the entry by inserting the default if empty, and returns a mutable reference to the value in the entry.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/collections/hash_map/enum.Entry.html#method.or_insert"
+    },
+    {
+      "id": "std::collections::hash_map::Entry::or_insert_with",
+      "title": "Entry::or_insert_with",
+      "receiver": "Entry",
+      "signature": "pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V",
+      "since": "1.0.0",
+      "excerpt": "Ensures a value is in the entry by inserting the result of the default function if empty, and returns a mutable reference to the value in the entry.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/collections/hash_map/enum.Entry.html#method.or_insert_with"
+    },
+    {
+      "id": "std::iter::Iterator::collect",
+      "title": "Iterator::collect",
+      "receiver": "Iterator",
+      "signature": "fn collect<B>(self) -> B where B: FromIterator<Self::Item>, Self: Sized",
+      "since": "1.0.0",
+      "excerpt": "Transforms an iterator into a collection.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/iter/trait.Iterator.html#method.collect"
+    },
+    {
+      "id": "std::iter::Iterator::enumerate",
+      "title": "Iterator::enumerate",
+      "receiver": "Iterator",
+      "signature": "fn enumerate(self) -> Enumerate<Self> where Self: Sized",
+      "since": "1.0.0",
+      "excerpt": "Creates an iterator which gives the current iteration count as well as the next value.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/iter/trait.Iterator.html#method.enumerate"
+    },
+    {
+      "id": "std::iter::Iterator::filter",
+      "title": "Iterator::filter",
+      "receiver": "Iterator",
+      "signature": "fn filter<P>(self, predicate: P) -> Filter<Self, P> where Self: Sized, P: FnMut(&Self::Item) -> bool",
+      "since": "1.0.0",
+      "excerpt": "Creates an iterator which uses a closure to determine if an element should be yielded.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/iter/trait.Iterator.html#method.filter"
+    },
+    {
+      "id": "std::iter::Iterator::filter_map",
+      "title": "Iterator::filter_map",
+      "receiver": "Iterator",
+      "signature": "fn filter_map<B, F>(self, f: F) -> FilterMap<Self, F> where Self: Sized, F: FnMut(Self::Item) -> Option<B>",
+      "since": "1.0.0",
+      "excerpt": "Creates an iterator that both filters and maps.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/iter/trait.Iterator.html#method.filter_map"
+    },
+    {
+      "id": "std::iter::Iterator::find",
+      "title": "Iterator::find",
+      "receiver": "Iterator",
+      "signature": "fn find<P>(&mut self, predicate: P) -> Option<Self::Item> where Self: Sized, P: FnMut(&Self::Item) -> bool",
+      "since": "1.0.0",
+      "excerpt": "Searches for an element of an iterator that satisfies a predicate.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/iter/trait.Iterator.html#method.find"
+    },
+    {
+      "id": "std::iter::Iterator::fold",
+      "title": "Iterator::fold",
+      "receiver": "Iterator",
+      "signature": "fn fold<B, F>(self, init: B, f: F) -> B where Self: Sized, F: FnMut(B, Self::Item) -> B",
+      "since": "1.0.0",
+      "excerpt": "Folds every element into an accumulator by applying an operation, returning the final result.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/iter/trait.Iterator.html#method.fold"
+    },
+    {
+      "id": "std::iter::Iterator::map",
+      "title": "Iterator::map",
+      "receiver": "Iterator",
+      "signature": "fn map<B, F>(self, f: F) -> Map<Self, F> where Self: Sized, F: FnMut(Self::Item) -> B",
+      "since": "1.0.0",
+      "excerpt": "Takes a closure and creates an iterator which calls that closure on each element.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/iter/trait.Iterator.html#method.map"
+    },
+    {
+      "id": "std::mem::replace",
+      "title": "mem::replace",
+      "receiver": "mem",
+      "signature": "pub const fn replace<T>(dest: &mut T, src: T) -> T",
+      "since": "1.0.0",
+      "excerpt": "Moves src into the referenced dest, returning the previous dest value.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/mem/fn.replace.html"
+    },
+    {
+      "id": "std::mem::take",
+      "title": "mem::take",
+      "receiver": "mem",
+      "signature": "pub fn take<T>(dest: &mut T) -> T where T: Default",
+      "since": "1.40.0",
+      "excerpt": "Replaces dest with the default value of T, returning the previous dest value.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/mem/fn.take.html"
+    },
+    {
+      "id": "std::option::Option::and_then",
+      "title": "Option::and_then",
+      "receiver": "Option",
+      "signature": "pub fn and_then<U, F>(self, f: F) -> Option<U> where F: FnOnce(T) -> Option<U>",
+      "since": "1.0.0",
+      "excerpt": "Returns None if the option is None, otherwise calls f with the wrapped value and returns the result.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/option/enum.Option.html#method.and_then"
+    },
+    {
+      "id": "std::option::Option::as_ref",
+      "title": "Option::as_ref",
+      "receiver": "Option",
+      "signature": "pub const fn as_ref(&self) -> Option<&T>",
+      "since": "1.0.0",
+      "excerpt": "Converts from &Option<T> to Option<&T>.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/option/enum.Option.html#method.as_ref"
+    },
+    {
+      "id": "std::option::Option::map",
+      "title": "Option::map",
+      "receiver": "Option",
+      "signature": "pub fn map<U, F>(self, f: F) -> Option<U> where F: FnOnce(T) -> U",
+      "since": "1.0.0",
+      "excerpt": "Maps an Option<T> to Option<U> by applying a function to a contained value (if Some) or returns None (if None).",
+      "url": "https://doc.rust-lang.org/1.99.1/std/option/enum.Option.html#method.map"
+    },
+    {
+      "id": "std::option::Option::ok_or_else",
+      "title": "Option::ok_or_else",
+      "receiver": "Option",
+      "signature": "pub fn ok_or_else<E, F>(self, err: F) -> Result<T, E> where F: FnOnce() -> E",
+      "since": "1.0.0",
+      "excerpt": "Transforms the Option<T> into a Result<T, E>, mapping Some(v) to Ok(v) and None to Err(err()).",
+      "url": "https://doc.rust-lang.org/1.99.1/std/option/enum.Option.html#method.ok_or_else"
+    },
+    {
+      "id": "std::option::Option::take",
+      "title": "Option::take",
+      "receiver": "Option",
+      "signature": "pub const fn take(&mut self) -> Option<T>",
+      "since": "1.0.0",
+      "excerpt": "Takes the value out of the option, leaving a None in its place.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/option/enum.Option.html#method.take"
+    },
+    {
+      "id": "std::option::Option::unwrap_or_else",
+      "title": "Option::unwrap_or_else",
+      "receiver": "Option",
+      "signature": "pub fn unwrap_or_else<F>(self, f: F) -> T where F: FnOnce() -> T",
+      "since": "1.0.0",
+      "excerpt": "Returns the contained Some value or computes it from a closure.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/option/enum.Option.html#method.unwrap_or_else"
+    },
+    {
+      "id": "std::primitive::slice::chunks",
+      "title": "slice::chunks",
+      "receiver": "slice",
+      "signature": "pub fn chunks(&self, chunk_size: usize) -> Chunks<'_, T>",
+      "since": "1.0.0",
+      "excerpt": "Returns an iterator over chunk_size elements of the slice at a time, starting at the beginning of the slice.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.chunks"
+    },
+    {
+      "id": "std::primitive::slice::get",
+      "title": "slice::get",
+      "receiver": "slice",
+      "signature": "pub fn get<I>(&self, index: I) -> Option<&<I as SliceIndex<[T]>>::Output> where I: SliceIndex<[T]>",
+      "since": "1.0.0",
+      "excerpt": "Returns a reference to an element or subslice depending on the type of index.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.get"
+    },
+    {
+      "id": "std::primitive::slice::get_mut",
+      "title": "slice::get_mut",
+      "receiver": "slice",
+      "signature": "pub fn get_mut<I>(&mut self, index: I) -> Option<&mut <I as SliceIndex<[T]>>::Output> where I: SliceIndex<[T]>",
+      "since": "1.0.0",
+      "excerpt": "Returns a mutable reference to an element or subslice depending on the type of index (see get) or None if the index is out of bounds.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.get_mut"
+    },
+    {
+      "id": "std::primitive::slice::iter",
+      "title": "slice::iter",
+      "receiver": "slice",
+      "signature": "pub fn iter(&self) -> Iter<'_, T>",
+      "since": "1.0.0",
+      "excerpt": "Returns an iterator over the slice.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.iter"
+    },
+    {
+      "id": "std::primitive::slice::iter_mut",
+      "title": "slice::iter_mut",
+      "receiver": "slice",
+      "signature": "pub fn iter_mut(&mut self) -> IterMut<'_, T>",
+      "since": "1.0.0",
+      "excerpt": "Returns an iterator that allows modifying each value.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.iter_mut"
+    },
+    {
+      "id": "std::primitive::slice::len",
+      "title": "slice::len",
+      "receiver": "slice",
+      "signature": "pub const fn len(&self) -> usize",
+      "since": "1.0.0",
+      "excerpt": "Returns the number of elements in the slice.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.len"
+    },
+    {
+      "id": "std::primitive::slice::sort_by_key",
+      "title": "slice::sort_by_key",
+      "receiver": "slice",
+      "signature": "pub fn sort_by_key<K, F>(&mut self, f: F) where F: FnMut(&T) -> K, K: Ord",
+      "since": "1.7.0",
+      "excerpt": "Sorts the slice in ascending order with a key extraction function, preserving initial order of equal elements.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.sort_by_key"
+    },
+    {
+      "id": "std::primitive::slice::split_at_mut",
+      "title": "slice::split_at_mut",
+      "receiver": "slice",
+      "signature": "pub const fn split_at_mut(&mut self, mid: usize) -> (&mut [T], &mut [T])",
+      "since": "1.0.0",
+      "excerpt": "Divides one mutable slice into two at an index.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.slice.html#method.split_at_mut"
+    },
+    {
+      "id": "std::primitive::str::chars",
+      "title": "str::chars",
+      "receiver": "str",
+      "signature": "pub fn chars(&self) -> Chars<'_>",
+      "since": "1.0.0",
+      "excerpt": "Returns an iterator over the chars of a string slice.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.str.html#method.chars"
+    },
+    {
+      "id": "std::primitive::str::get",
+      "title": "str::get",
+      "receiver": "str",
+      "signature": "pub fn get<I>(&self, i: I) -> Option<&<I as SliceIndex<str>>::Output> where I: SliceIndex<str>",
+      "since": "1.20.0",
+      "excerpt": "Returns a subslice of str.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.str.html#method.get"
+    },
+    {
+      "id": "std::primitive::str::len",
+      "title": "str::len",
+      "receiver": "str",
+      "signature": "pub const fn len(&self) -> usize",
+      "since": "1.0.0",
+      "excerpt": "Returns the length of self.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.str.html#method.len"
+    },
+    {
+      "id": "std::primitive::str::parse",
+      "title": "str::parse",
+      "receiver": "str",
+      "signature": "pub fn parse<F>(&self) -> Result<F, <F as FromStr>::Err> where F: FromStr",
+      "since": "1.0.0",
+      "excerpt": "Parses this string slice into another type.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.str.html#method.parse"
+    },
+    {
+      "id": "std::primitive::str::split",
+      "title": "str::split",
+      "receiver": "str",
+      "signature": "pub fn split<P>(&self, pat: P) -> Split<'_, P> where P: Pattern",
+      "since": "1.0.0",
+      "excerpt": "Returns an iterator over substrings of this string slice, separated by characters matched by a pattern.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.str.html#method.split"
+    },
+    {
+      "id": "std::primitive::str::split_whitespace",
+      "title": "str::split_whitespace",
+      "receiver": "str",
+      "signature": "pub fn split_whitespace(&self) -> SplitWhitespace<'_>",
+      "since": "1.1.0",
+      "excerpt": "Splits a string slice by whitespace.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.str.html#method.split_whitespace"
+    },
+    {
+      "id": "std::primitive::str::trim",
+      "title": "str::trim",
+      "receiver": "str",
+      "signature": "pub fn trim(&self) -> &str",
+      "since": "1.0.0",
+      "excerpt": "Returns a string slice with leading and trailing whitespace removed.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/primitive.str.html#method.trim"
+    },
+    {
+      "id": "std::result::Result::and_then",
+      "title": "Result::and_then",
+      "receiver": "Result",
+      "signature": "pub fn and_then<U, F>(self, op: F) -> Result<U, E> where F: FnOnce(T) -> Result<U, E>",
+      "since": "1.0.0",
+      "excerpt": "Calls op if the result is Ok, otherwise returns the Err value of self.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/result/enum.Result.html#method.and_then"
+    },
+    {
+      "id": "std::result::Result::as_ref",
+      "title": "Result::as_ref",
+      "receiver": "Result",
+      "signature": "pub const fn as_ref(&self) -> Result<&T, &E>",
+      "since": "1.0.0",
+      "excerpt": "Converts from &Result<T, E> to Result<&T, &E>.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/result/enum.Result.html#method.as_ref"
+    },
+    {
+      "id": "std::result::Result::map",
+      "title": "Result::map",
+      "receiver": "Result",
+      "signature": "pub fn map<U, F>(self, op: F) -> Result<U, E> where F: FnOnce(T) -> U",
+      "since": "1.0.0",
+      "excerpt": "Maps a Result<T, E> to Result<U, E> by applying a function to a contained Ok value, leaving an Err value untouched.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/result/enum.Result.html#method.map"
+    },
+    {
+      "id": "std::result::Result::map_err",
+      "title": "Result::map_err",
+      "receiver": "Result",
+      "signature": "pub fn map_err<F, O>(self, op: O) -> Result<T, F> where O: FnOnce(E) -> F",
+      "since": "1.0.0",
+      "excerpt": "Maps a Result<T, E> to Result<T, F> by applying a function to a contained Err value, leaving an Ok value untouched.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/result/enum.Result.html#method.map_err"
+    },
+    {
+      "id": "std::string::String::into_bytes",
+      "title": "String::into_bytes",
+      "receiver": "String",
+      "signature": "pub const fn into_bytes(self) -> Vec<u8>",
+      "since": "1.0.0",
+      "excerpt": "Converts a String into a byte vector.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/string/struct.String.html#method.into_bytes"
+    },
+    {
+      "id": "std::string::String::len",
+      "title": "String::len",
+      "receiver": "String",
+      "signature": "pub const fn len(&self) -> usize",
+      "since": "1.0.0",
+      "excerpt": "Returns the length of this String, in bytes, not chars or graphemes. In other words, it might not be what a human considers the length of the string.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/string/struct.String.html#method.len"
+    },
+    {
+      "id": "std::string::String::pop",
+      "title": "String::pop",
+      "receiver": "String",
+      "signature": "pub fn pop(&mut self) -> Option<char>",
+      "since": "1.0.0",
+      "excerpt": "Removes the last character from the string buffer and returns it.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/string/struct.String.html#method.pop"
+    },
+    {
+      "id": "std::string::String::push_str",
+      "title": "String::push_str",
+      "receiver": "String",
+      "signature": "pub fn push_str(&mut self, string: &str)",
+      "since": "1.0.0",
+      "excerpt": "Appends a given string slice onto the end of this String.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/string/struct.String.html#method.push_str"
+    },
+    {
+      "id": "std::string::String::retain",
+      "title": "String::retain",
+      "receiver": "String",
+      "signature": "pub fn retain<F>(&mut self, f: F) where F: FnMut(char) -> bool",
+      "since": "1.26.0",
+      "excerpt": "Retains only the characters specified by the predicate.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/string/struct.String.html#method.retain"
+    },
+    {
+      "id": "std::sync::Arc::make_mut",
+      "title": "Arc::make_mut",
+      "receiver": "Arc",
+      "signature": "pub fn make_mut(this: &mut Arc<T, A>) -> &mut T",
+      "since": "1.4.0",
+      "excerpt": "Makes a mutable reference into the given Arc.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/sync/struct.Arc.html#method.make_mut"
+    },
+    {
+      "id": "std::sync::Arc::new",
+      "title": "Arc::new",
+      "receiver": "Arc",
+      "signature": "pub fn new(data: T) -> Arc<T>",
+      "since": "1.0.0",
+      "excerpt": "Constructs a new Arc<T>.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/sync/struct.Arc.html#method.new"
+    },
+    {
+      "id": "std::sync::Mutex::lock",
+      "title": "Mutex::lock",
+      "receiver": "Mutex",
+      "signature": "pub fn lock(&self) -> LockResult<MutexGuard<'_, T>>",
+      "since": "1.0.0",
+      "excerpt": "Acquires a mutex, blocking the current thread until it is able to do so.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/sync/struct.Mutex.html#method.lock"
+    },
+    {
+      "id": "std::sync::Mutex::try_lock",
+      "title": "Mutex::try_lock",
+      "receiver": "Mutex",
+      "signature": "pub fn try_lock(&self) -> TryLockResult<MutexGuard<'_, T>>",
+      "since": "1.0.0",
+      "excerpt": "Attempts to acquire this lock.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/sync/struct.Mutex.html#method.try_lock"
+    },
+    {
+      "id": "std::sync::OnceLock::get_or_init",
+      "title": "OnceLock::get_or_init",
+      "receiver": "OnceLock",
+      "signature": "pub fn get_or_init<F>(&self, f: F) -> &T where F: FnOnce() -> T",
+      "since": "1.70.0",
+      "excerpt": "Gets the contents of the cell, initializing it to f() if the cell was uninitialized.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/sync/struct.OnceLock.html#method.get_or_init"
+    },
+    {
+      "id": "std::sync::mpsc::channel",
+      "title": "mpsc::channel",
+      "receiver": "mpsc",
+      "signature": "pub fn channel<T>() -> (Sender<T>, Receiver<T>)",
+      "since": "1.0.0",
+      "excerpt": "Creates a new asynchronous channel, returning the sender/receiver halves.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/sync/mpsc/fn.channel.html"
+    },
+    {
+      "id": "std::thread::scope",
+      "title": "thread::scope",
+      "receiver": "thread",
+      "signature": "pub fn scope<'env, F, T>(f: F) -> T where F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T",
+      "since": "1.63.0",
+      "excerpt": "Creates a scope for spawning scoped threads.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/thread/fn.scope.html"
+    },
+    {
+      "id": "std::thread::spawn",
+      "title": "thread::spawn",
+      "receiver": "thread",
+      "signature": "pub fn spawn<F, T>(f: F) -> JoinHandle<T> where F: FnOnce() -> T + Send + 'static, T: Send + 'static",
+      "since": "1.0.0",
+      "excerpt": "Spawns a new thread, returning a JoinHandle for it.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/thread/fn.spawn.html"
+    },
+    {
+      "id": "std::vec::Vec::dedup",
+      "title": "Vec::dedup",
+      "receiver": "Vec",
+      "signature": "pub fn dedup(&mut self)",
+      "since": "1.0.0",
+      "excerpt": "Removes consecutive repeated elements in the vector according to the PartialEq trait implementation.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.dedup"
+    },
+    {
+      "id": "std::vec::Vec::drain",
+      "title": "Vec::drain",
+      "receiver": "Vec",
+      "signature": "pub fn drain<R>(&mut self, range: R) -> Drain<'_, T, A> where R: RangeBounds<usize>",
+      "since": "1.6.0",
+      "excerpt": "Removes the subslice indicated by the given range from the vector, returning a double-ended iterator over the removed subslice.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.drain"
+    },
+    {
+      "id": "std::vec::Vec::len",
+      "title": "Vec::len",
+      "receiver": "Vec",
+      "signature": "pub const fn len(&self) -> usize",
+      "since": "1.0.0",
+      "excerpt": "Returns the number of elements in the vector, also referred to as its ‘length’.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.len"
+    },
+    {
+      "id": "std::vec::Vec::pop",
+      "title": "Vec::pop",
+      "receiver": "Vec",
+      "signature": "pub fn pop(&mut self) -> Option<T>",
+      "since": "1.0.0",
+      "excerpt": "Removes the last element from a vector and returns it, or None if it is empty.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.pop"
+    },
+    {
+      "id": "std::vec::Vec::push",
+      "title": "Vec::push",
+      "receiver": "Vec",
+      "signature": "pub fn push(&mut self, value: T)",
+      "since": "1.0.0",
+      "excerpt": "Appends an element to the back of a collection.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.push"
+    },
+    {
+      "id": "std::vec::Vec::remove",
+      "title": "Vec::remove",
+      "receiver": "Vec",
+      "signature": "pub fn remove(&mut self, index: usize) -> T",
+      "since": "1.0.0",
+      "excerpt": "Removes and returns the element at position index within the vector, shifting all elements after it to the left.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.remove"
+    },
+    {
+      "id": "std::vec::Vec::retain",
+      "title": "Vec::retain",
+      "receiver": "Vec",
+      "signature": "pub fn retain<F>(&mut self, f: F) where F: FnMut(&T) -> bool",
+      "since": "1.0.0",
+      "excerpt": "Retains only the elements specified by the predicate.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.retain"
+    },
+    {
+      "id": "std::vec::Vec::split_off",
+      "title": "Vec::split_off",
+      "receiver": "Vec",
+      "signature": "pub fn split_off(&mut self, at: usize) -> Vec<T, A> where A: Clone",
+      "since": "1.4.0",
+      "excerpt": "Splits the collection into two at the given index.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.split_off"
+    },
+    {
+      "id": "std::vec::Vec::swap_remove",
+      "title": "Vec::swap_remove",
+      "receiver": "Vec",
+      "signature": "pub fn swap_remove(&mut self, index: usize) -> T",
+      "since": "1.0.0",
+      "excerpt": "Removes an element from the vector and returns it.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.swap_remove"
+    },
+    {
+      "id": "std::vec::Vec::with_capacity",
+      "title": "Vec::with_capacity",
+      "receiver": "Vec",
+      "signature": "pub fn with_capacity(capacity: usize) -> Vec<T>",
+      "since": "1.0.0",
+      "excerpt": "Constructs a new, empty Vec<T> with at least the specified capacity.",
+      "url": "https://doc.rust-lang.org/1.99.1/std/vec/struct.Vec.html#method.with_capacity"
+    }
+  ]
+}
