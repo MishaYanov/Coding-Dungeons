@@ -193,7 +193,7 @@ const notes = {
   ),
   'Iterator::filter': note(
     'Build an iterator that yields only items passing a test.',
-    'The predicate receives a reference to the next item. The adapter yields the original item when the predicate returns true. A consumer such as collect drives the work.',
+    'The predicate receives a reference to each item. Calling iter() on a vector starts with borrowed elements, so filtering that iterator leaves the vector intact. A consumer such as collect drives the work. Collecting those references gives a collection that still borrows from the original.',
     ['filter into a new collection', 'keep matching iterator items', 'skip items that fail predicate', 'filter a vector without changing the original'],
   ),
   'Iterator::collect': note(
